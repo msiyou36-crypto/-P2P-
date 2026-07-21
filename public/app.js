@@ -35,6 +35,8 @@ const fmt2 = (n) => nf2.format(n || 0);
 const fmt0 = (n) => nf0.format(n || 0);
 const pad2 = (n) => String(n).padStart(2, '0');
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+// كمية USDT شاملة العمولة (= «عبر العملات الرقمية» في Binance)
+const grossUSDT = (o) => (o.amount || 0) + (o.commission || 0);
 
 function fmtDT(ms) {
   const d = new Date(ms);
@@ -448,8 +450,8 @@ function renderTiles() {
   const completed = state.filtered.filter((o) => o.orderStatus === 'COMPLETED');
   const sells = completed.filter((o) => o.tradeType === 'SELL');
   const buys = completed.filter((o) => o.tradeType === 'BUY');
-  const sellAmt = sells.reduce((s, o) => s + o.amount, 0);
-  const buyAmt = buys.reduce((s, o) => s + o.amount, 0);
+  const sellAmt = sells.reduce((s, o) => s + grossUSDT(o), 0);
+  const buyAmt = buys.reduce((s, o) => s + grossUSDT(o), 0);
   const commission = completed.reduce((s, o) => s + (o.commission || 0), 0);
 
   const fiats = distinctFiats(completed);
@@ -972,7 +974,7 @@ function renderTable() {
     else { const ki = TX_KIND[it.kind]; tdType.append(chip(ki.ar, ki.color)); }
     tr.append(tdType);
 
-    tdText(tr, fmt2(row._amount), 'num strong');
+    tdText(tr, fmt2(isP2P ? grossUSDT(it) : row._amount), 'num strong');
     tdText(tr, isP2P ? fmt2(it.unitPrice) : '—', 'num');
     tdText(tr, isP2P ? (mixed ? fmt0(it.totalPrice) + ' ' + fiatSymOf(it) : fmt0(it.totalPrice)) : '—', 'num strong');
     tdText(tr, isP2P ? fiatSymOf(it) : (it.network || '—'));
@@ -1079,10 +1081,10 @@ function openDetails(o) {
   const fiat = fiatSymOf(o);
   wrap.append(detailRow('النوع', chip(ti.ar + ' ' + o.asset, ti.color)));
   wrap.append(detailRow('الحالة', chip(si.ar, si.color)));
-  wrap.append(detailRow('الكمية', fmt2(o.amount) + ' ' + o.asset));
+  wrap.append(detailRow('الكمية (شاملة العمولة)', fmt2(grossUSDT(o)) + ' ' + o.asset));
   if (o.commission > 0) {
     wrap.append(detailRow('الرسوم', fmt2(o.commission) + ' ' + o.asset));
-    wrap.append(detailRow('الكمية الصافية', fmt2(o.amount - o.commission) + ' ' + o.asset));
+    wrap.append(detailRow('الكمية المُحرّرة', fmt2(o.amount) + ' ' + o.asset));
   }
   wrap.append(detailRow('السعر', fmt2(o.unitPrice) + (fiat ? ' ' + fiat : '')));
   wrap.append(detailRow('المبلغ بالعملة المحلية', fmt0(o.totalPrice) + (fiat ? ' ' + fiat : '')));
@@ -1212,7 +1214,7 @@ function ledgerRows() {
     return {
       date: fmtDTsec(row._t),
       type: isP2P ? (it.tradeType === 'SELL' ? 'بيع' : 'شراء') : (it.kind === 'deposit' ? 'إيداع' : 'سحب'),
-      amount: it.amount,
+      amount: isP2P ? grossUSDT(it) : it.amount,
       price: isP2P ? it.unitPrice : '',
       total: isP2P ? it.totalPrice : '',
       curNet: isP2P ? fiatSymOf(it) : (it.network || ''),
