@@ -1,0 +1,19 @@
+# مخطّط Render لنشر «سجل حوالات P2P» بضغطة واحدة (Blueprint)
+# في Render: New + → Blueprint → اختر مستودع GitHub → Apply، ثم عبّئ المتغيرات.
+services:
+  - type: web
+    name: sijil-p2p
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: SUPABASE_URL
+        sync: false      # عنوان مشروع Supabase — تعبّئه أنت
+      - key: SUPABASE_KEY
+        sync: false      # مفتاح service_role السري من Supabase — تعبّئه أنت
+      - key: ADMIN_PASSWORD
+        sync: false      # كلمة سر المسؤول (لأول تشغيل) — تعبّئها أنت
+      - key: USER_PASSWORD
+        sync: false      # كلمة سر المستخدم — تعبّئها أنت

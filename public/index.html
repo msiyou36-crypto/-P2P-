@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>سجل حوالات P2P</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f0b90b'/%3E%3Cpath d='M9 20v-8l4 5 3-4 3 4 4-5v8' stroke='%231a1a19' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ شاشة تسجيل الدخول ============ -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-box card">
+    <div class="login-brand">
+      <svg width="46" height="46" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="7" fill="#f0b90b"/>
+        <path d="M9 20v-8l4 5 3-4 3 4 4-5v8" stroke="#1a1a19" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h1>سجل حوالات P2P</h1>
+    </div>
+
+    <!-- الإعداد الأول -->
+    <form id="setupForm" class="login-form hidden" autocomplete="off">
+      <div class="login-title">الإعداد الأول</div>
+      <p class="hint">عيّن كلمتي سر للدخول: <b>المسؤول</b> (كل الصلاحيات) و<b>المستخدم</b> (عرض ومزامنة وتصدير فقط).</p>
+      <label>كلمة سر المسؤول
+        <input type="password" name="adminPassword" dir="ltr" required>
+      </label>
+      <label>كلمة سر المستخدم
+        <input type="password" name="userPassword" dir="ltr" required>
+      </label>
+      <button type="submit" class="btn accent login-btn" id="btnSetup">حفظ والدخول</button>
+      <div class="login-error" id="setupError"></div>
+    </form>
+
+    <!-- الدخول -->
+    <form id="loginForm" class="login-form hidden" autocomplete="off">
+      <div class="seg role-seg" id="roleSeg" role="group" aria-label="الدور">
+        <button type="button" data-role="admin" class="on">مسؤول</button>
+        <button type="button" data-role="user">مستخدم</button>
+      </div>
+      <label>كلمة السر
+        <input type="password" name="password" dir="ltr" required autofocus>
+      </label>
+      <button type="submit" class="btn accent login-btn" id="btnLogin">دخول</button>
+      <div class="login-error" id="loginError"></div>
+    </form>
+  </div>
+  <div class="login-note">🔒 نظام محلي على جهازك فقط. كلمات السر تُحفظ مشفّرة محليًا.</div>
+</div>
+
+<!-- ============ التطبيق ============ -->
+<div id="app" class="hidden">
+
+<div id="appGlitter" class="app-glitter" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <svg width="38" height="38" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="7" fill="#f0b90b"/>
+      <path d="M9 20v-8l4 5 3-4 3 4 4-5v8" stroke="#1a1a19" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <h1>سجل حوالات P2P</h1>
+      <div class="sub" id="lastSync">لم تتم مزامنة بعد</div>
+    </div>
+  </div>
+  <div class="actions">
+    <span id="roleBadge" class="role-badge"></span>
+    <div class="menu-wrap">
+      <button id="btnMenu" class="btn ghost" title="القائمة" aria-haspopup="true" aria-expanded="false">☰ القائمة</button>
+      <div id="menuDropdown" class="menu-dropdown hidden" role="menu">
+        <button id="btnSync" class="menu-item" role="menuitem">⟳ مزامنة</button>
+        <button id="btnAdd" class="menu-item admin-only" role="menuitem">+ إضافة يدوية</button>
+        <button id="btnImport" class="menu-item admin-only" role="menuitem">استيراد CSV</button>
+        <button id="btnExport" class="menu-item" role="menuitem">تصدير CSV</button>
+        <div class="menu-sep admin-only"></div>
+        <button id="btnSettings" class="menu-item admin-only" role="menuitem">⚙ الإعدادات</button>
+        <button id="btnChangePass" class="menu-item admin-only" role="menuitem">🔑 تغيير كلمات السر</button>
+        <div class="menu-sep"></div>
+        <button id="btnLogout" class="menu-item danger-item" role="menuitem">↩ تسجيل الخروج</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div id="syncBar" class="syncbar hidden">
+  <div class="syncbar-row">
+    <span class="spinner" aria-hidden="true"></span>
+    <span id="syncMsg">جارٍ المزامنة…</span>
+  </div>
+  <div class="syncbar-track"><div id="syncPct" class="syncbar-fill"></div></div>
+</div>
+
+<main>
+
+  <!-- بطاقة رصيد محفظة التمويل -->
+  <section class="card wallet-card" id="walletCard" aria-label="محفظة التمويل">
+    <div class="wallet-main">
+      <div class="wallet-label">💰 رصيد محفظة التمويل (Funding)</div>
+      <div class="wallet-value"><span id="walletUsdt">—</span><span class="unit">USDT</span></div>
+      <div class="sub" id="walletSub">اضغط «⟳ تحديث الرصيد» لعرض رصيدك الحالي في محفظة التمويل.</div>
+    </div>
+    <div class="wallet-side">
+      <div class="sub" id="walletExtra"></div>
+      <button id="btnRefreshBal" class="btn small">⟳ تحديث الرصيد</button>
+      <div class="sub" id="walletUpdated"></div>
+    </div>
+  </section>
+
+  <!-- الفلاتر: تحكم في كل شيء تحتها -->
+  <section class="card filters" aria-label="الفلاتر">
+    <div class="seg" id="rangeSeg" role="group" aria-label="النطاق الزمني">
+      <button data-range="all" class="on">الكل</button>
+      <button data-range="90">90 يومًا</button>
+      <button data-range="30">30 يومًا</button>
+      <button data-range="7">7 أيام</button>
+      <button data-range="1">اليوم</button>
+    </div>
+    <select id="fType" aria-label="نوع العملية">
+      <option value="all">كل الأنواع</option>
+      <option value="SELL">بيع</option>
+      <option value="BUY">شراء</option>
+      <option value="deposit">إيداع</option>
+      <option value="withdraw">سحب</option>
+    </select>
+    <select id="fStatus" aria-label="الحالة">
+      <option value="all">كل الحالات</option>
+      <option value="COMPLETED">مكتمل</option>
+      <option value="CANCELLED">ملغى</option>
+      <option value="PENDING">قيد المعالجة</option>
+      <option value="FAILED">فاشل/مرفوض</option>
+      <option value="other">حالات أخرى</option>
+    </select>
+    <select id="fFiat" aria-label="العملة المحلية">
+      <option value="all">كل العملات</option>
+    </select>
+    <input id="fSearch" type="search" placeholder="بحث: رقم/معرّف، الطرف الآخر، إشاري، ملاحظة…" aria-label="بحث">
+  </section>
+
+  <section class="tiles" id="tiles" aria-label="ملخص الأرقام"></section>
+
+  <section class="charts">
+    <div class="card chart-card">
+      <div class="card-head">
+        <h2>حجم التداول P2P (USDT)</h2>
+        <div class="legend" aria-hidden="true">
+          <span class="lg"><i class="sw" style="background:var(--sell)"></i>بيع</span>
+          <span class="lg"><i class="sw" style="background:var(--buy)"></i>شراء</span>
+        </div>
+      </div>
+      <div id="volChart" class="chart" dir="ltr"></div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-head">
+        <h2>متوسط سعر البيع</h2>
+        <div class="sub" id="priceUnit"></div>
+      </div>
+      <div id="priceChart" class="chart" dir="ltr"></div>
+    </div>
+  </section>
+
+  <!-- الجدول الموحّد: كل العمليات -->
+  <section class="card table-card">
+    <div class="table-head">
+      <h2>العمليات</h2>
+      <div class="table-tools">
+        <label class="date-lbl">من <input type="date" id="xFrom" aria-label="من تاريخ"></label>
+        <label class="date-lbl">إلى <input type="date" id="xTo" aria-label="إلى تاريخ"></label>
+        <button id="btnExportXlsx" class="btn accent" title="تنزيل ملف Excel بالعمليات المعروضة">⬇ تصدير Excel</button>
+      </div>
+      <div class="sub" id="tableCount"></div>
+    </div>
+    <div class="table-wrap">
+      <table id="ledgerTable">
+        <thead>
+          <tr>
+            <th data-sort="_t" class="sortable">التاريخ</th>
+            <th data-sort="_type" class="sortable">النوع</th>
+            <th data-sort="_amount" class="sortable num">الكمية</th>
+            <th data-sort="_price" class="sortable num">السعر</th>
+            <th data-sort="_total" class="sortable num">المبلغ</th>
+            <th>العملة/الشبكة</th>
+            <th>الطرف الآخر</th>
+            <th data-sort="_status" class="sortable">الحالة</th>
+            <th class="col-note">الإشاري</th>
+            <th class="col-note">الملاحظة</th>
+            <th>المعرّف</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div id="emptyState" class="empty hidden">
+        <div class="empty-icon">📄</div>
+        <h3>لا توجد عمليات بعد</h3>
+        <p>اضغط <b>«⟳ مزامنة»</b> من القائمة لجلب سجلّك من المنصة (بعد إدخال مفتاح API من الإعدادات)،<br>
+          أو أضف عملية عبر <b>«+ إضافة يدوية»</b> أو <b>«استيراد CSV»</b>.</p>
+      </div>
+    </div>
+    <div class="pager" id="pager">
+      <button id="pgPrev" class="btn small">السابق</button>
+      <span id="pgInfo" class="sub"></span>
+      <button id="pgNext" class="btn small">التالي</button>
+    </div>
+  </section>
+
+</main>
+
+</div><!-- /app -->
+
+<!-- نافذة تفاصيل الطلب -->
+<div class="backdrop hidden" id="mDetails">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="تفاصيل الطلب">
+    <div class="modal-head"><h3>تفاصيل الطلب</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body" id="detailsBody"></div>
+    <div class="modal-foot">
+      <button class="btn danger admin-only" id="btnDeleteOrder">حذف الطلب</button>
+      <button class="btn" data-close>إغلاق</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة تفاصيل الحوالة -->
+<div class="backdrop hidden" id="mTransfer">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="تفاصيل الحوالة">
+    <div class="modal-head"><h3>تفاصيل الحوالة</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body" id="txDetailsBody"></div>
+    <div class="modal-foot">
+      <button class="btn" data-close>إغلاق</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة إضافة يدوية -->
+<div class="backdrop hidden" id="mAdd">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="إضافة طلب">
+    <div class="modal-head"><h3>إضافة طلب يدويًا</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body">
+      <form id="addForm" class="form-grid">
+        <label>النوع
+          <select name="tradeType"><option value="SELL">بيع</option><option value="BUY">شراء</option></select>
+        </label>
+        <label>التاريخ والوقت
+          <input type="datetime-local" name="dt" required>
+        </label>
+        <label>الكمية (USDT)
+          <input type="number" name="amount" step="any" min="0" inputmode="decimal" required placeholder="مثال: 285.15">
+        </label>
+        <label>السعر (لكل USDT)
+          <input type="number" name="unitPrice" step="any" min="0" inputmode="decimal" required placeholder="مثال: 5612.99">
+        </label>
+        <label>المبلغ بالعملة المحلية
+          <input type="number" name="totalPrice" step="any" min="0" inputmode="decimal" placeholder="يُحسب تلقائيًا">
+        </label>
+        <label>العملة المحلية
+          <select name="fiat">
+            <option value="SDG">جنيه سوداني (ج.س)</option>
+            <option value="EGP">جنيه مصري (ج.م)</option>
+          </select>
+        </label>
+        <label>الطرف الآخر
+          <input type="text" name="counterPart" placeholder="اسم المشتري/البائع">
+        </label>
+        <label>الحالة
+          <select name="orderStatus">
+            <option value="COMPLETED">مكتمل</option>
+            <option value="CANCELLED">ملغى</option>
+            <option value="IN_APPEAL">تحكيم</option>
+            <option value="TRADING">جارٍ التنفيذ</option>
+          </select>
+        </label>
+        <label>العمولة (USDT)
+          <input type="number" name="commission" step="any" min="0" inputmode="decimal" placeholder="اختياري">
+        </label>
+        <label>رقم الطلب
+          <input type="text" name="orderNumber" placeholder="اختياري — يُولَّد تلقائيًا">
+        </label>
+        <label>الإشاري
+          <input type="text" name="reference" placeholder="اختياري — علامة/مرجع خاص بك">
+        </label>
+        <label class="full">ملاحظة
+          <textarea name="note" rows="2" placeholder="اختياري"></textarea>
+        </label>
+      </form>
+    </div>
+    <div class="modal-foot">
+      <button class="btn accent" id="btnSaveAdd">حفظ الطلب</button>
+      <button class="btn" data-close>إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة الاستيراد -->
+<div class="backdrop hidden" id="mImport">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="استيراد">
+    <div class="modal-head"><h3>استيراد من ملف CSV</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body">
+      <p class="hint">يدعم ملف التصدير من هذا النظام، وملف تصدير سجل P2P من المنصة (بالإنجليزية)، وأي CSV بأعمدة مشابهة.</p>
+      <input type="file" id="csvFile" accept=".csv,text/csv">
+      <div id="importPreview" class="import-preview hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn accent hidden" id="btnConfirmImport">تأكيد الاستيراد</button>
+      <button class="btn" data-close>إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة الإعدادات -->
+<div class="backdrop hidden" id="mSettings">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="الإعدادات">
+    <div class="modal-head"><h3>الإعدادات</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body">
+      <div class="settings-note">
+        🔒 المفاتيح تُحفظ <b>محليًا على جهازك فقط</b> (مجلد data) ولا تُرسل لأي جهة غير المنصة نفسها.
+        استخدم مفتاحًا بصلاحية <b>«إتاحة القراءة» فقط</b> — لا تفعّل التداول أو السحب.
+      </div>
+      <form id="settingsForm" class="form-grid">
+        <label class="full">مفتاح API (API Key)
+          <input type="text" name="apiKey" autocomplete="off" spellcheck="false" dir="ltr">
+        </label>
+        <label class="full">المفتاح السري (Secret Key)
+          <input type="password" name="apiSecret" autocomplete="off" dir="ltr">
+        </label>
+        <label>مدى الجلب (بالأشهر)
+          <input type="number" name="months" min="1" max="36" value="12">
+        </label>
+        <label>عنوان الخادم
+          <select name="baseUrl">
+            <option value="https://api.binance.com">api.binance.com (الافتراضي)</option>
+            <option value="https://api1.binance.com">api1.binance.com</option>
+            <option value="https://api2.binance.com">api2.binance.com</option>
+            <option value="https://api3.binance.com">api3.binance.com</option>
+            <option value="https://api4.binance.com">api4.binance.com</option>
+            <option value="https://api-gcp.binance.com">api-gcp.binance.com</option>
+          </select>
+        </label>
+      </form>
+      <details class="danger-zone">
+        <summary>منطقة الخطر</summary>
+        <p class="hint">حذف البيانات المخزّنة محليًا (لا يؤثر على حسابك في المنصة — يمكنك إعادة جلبها بالمزامنة).</p>
+        <button class="btn danger" id="btnClearAll">مسح جميع الطلبات</button>
+        <button class="btn danger" id="btnClearTransfers">مسح سجل الإيداع والسحب</button>
+      </details>
+    </div>
+    <div class="modal-foot">
+      <button class="btn accent" id="btnSaveSettings">حفظ الإعدادات</button>
+      <button class="btn" data-close>إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة تغيير كلمات السر -->
+<div class="backdrop hidden" id="mChangePass">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="تغيير كلمات السر">
+    <div class="modal-head"><h3>تغيير كلمات السر</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body">
+      <p class="hint">اترك الحقل فارغًا للإبقاء على كلمة السر الحالية. (للمسؤول فقط)</p>
+      <form id="passForm" class="form-grid" autocomplete="off">
+        <label class="full">كلمة سر المسؤول الجديدة
+          <input type="password" name="adminPassword" dir="ltr" placeholder="اتركها فارغة للإبقاء عليها">
+        </label>
+        <label class="full">كلمة سر المستخدم الجديدة
+          <input type="password" name="userPassword" dir="ltr" placeholder="اتركها فارغة للإبقاء عليها">
+        </label>
+      </form>
+    </div>
+    <div class="modal-foot">
+      <button class="btn accent" id="btnSavePass">حفظ</button>
+      <button class="btn" data-close>إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة تأكيد عامة -->
+<div class="backdrop hidden" id="mConfirm">
+  <div class="modal small" role="alertdialog" aria-modal="true">
+    <div class="modal-body" id="confirmMsg"></div>
+    <div class="modal-foot">
+      <button class="btn danger" id="btnConfirmYes">نعم، متأكد</button>
+      <button class="btn" data-close>تراجع</button>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip" class="tooltip hidden" dir="rtl"></div>
+<div id="toasts" class="toasts"></div>
+
+<script src="glitter.js"></script>
+<script src="xlsx.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
