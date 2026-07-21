@@ -134,16 +134,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
 
 function normalizeOrder(raw, source) {
+  // العمولة الحقيقية لعمليات P2P = الفرق بين amount و takerAmount؛
+  // لأن حقل commission في واجهة Binance يرجع «0» غالبًا للـ P2P.
+  const amt = num(raw.amount);
+  const takerAmt = num(raw.takerAmount);
+  const feeFromDiff = (takerAmt > 0 && Math.abs(amt - takerAmt) < amt * 0.05) ? Math.abs(amt - takerAmt) : 0;
   const o = {
     orderNumber: String(raw.orderNumber || '').trim(),
     tradeType: String(raw.tradeType).toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
     asset: String(raw.asset || 'USDT').trim() || 'USDT',
     fiat: String(raw.fiat || '').trim(),
     fiatSymbol: String(raw.fiatSymbol || raw.fiat || '').trim(),
-    amount: num(raw.amount),
+    amount: amt,
+    takerAmount: takerAmt,
     totalPrice: num(raw.totalPrice),
     unitPrice: num(raw.unitPrice),
-    commission: num(raw.commission),
+    commission: Math.max(num(raw.commission), feeFromDiff),
     counterPart: String(raw.counterPartNickName || raw.counterPart || '').trim(),
     orderStatus: String(raw.orderStatus || 'COMPLETED').toUpperCase(),
     advertisementRole: String(raw.advertisementRole || ''),

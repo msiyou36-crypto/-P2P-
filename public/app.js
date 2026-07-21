@@ -18,7 +18,7 @@ const state = {
   balanceLoading: false,
   balanceError: null,
   settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', months: 12, lastSync: null },
-  filters: { range: 'all', from: null, to: null, type: 'all', status: 'all', fiat: 'all', q: '' },
+  filters: { range: '1', from: null, to: null, type: 'all', status: 'all', fiat: 'all', q: '' },
   sort: { key: '_t', dir: -1 },
   page: 1,
   detailsOrder: null,
