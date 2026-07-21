@@ -35,8 +35,12 @@ const fmt2 = (n) => nf2.format(n || 0);
 const fmt0 = (n) => nf0.format(n || 0);
 const pad2 = (n) => String(n).padStart(2, '0');
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+// رسوم P2P الثابتة من Binance (0.06 USDT). واجهة Binance البرمجية لا تُرجعها لبعض العمليات،
+// فنطبّقها على كل عملية مكتملة لا يرجع لها الـ API رسوماً حقيقية.
+const P2P_FEE = 0.06;
+const effComm = (o) => (o.commission > 0 ? o.commission : (o.orderStatus === 'COMPLETED' ? P2P_FEE : 0));
 // كمية USDT شاملة العمولة (= «عبر العملات الرقمية» في Binance)
-const grossUSDT = (o) => (o.amount || 0) + (o.commission || 0);
+const grossUSDT = (o) => (o.amount || 0) + effComm(o);
 
 function fmtDT(ms) {
   const d = new Date(ms);
@@ -452,7 +456,7 @@ function renderTiles() {
   const buys = completed.filter((o) => o.tradeType === 'BUY');
   const sellAmt = sells.reduce((s, o) => s + grossUSDT(o), 0);
   const buyAmt = buys.reduce((s, o) => s + grossUSDT(o), 0);
-  const commission = completed.reduce((s, o) => s + (o.commission || 0), 0);
+  const commission = completed.reduce((s, o) => s + effComm(o), 0);
 
   const fiats = distinctFiats(completed);
   const useFiat = state.filters.fiat !== 'all' ? state.filters.fiat : (dominantFiat(sells) || dominantFiat(completed));
@@ -1081,9 +1085,10 @@ function openDetails(o) {
   const fiat = fiatSymOf(o);
   wrap.append(detailRow('النوع', chip(ti.ar + ' ' + o.asset, ti.color)));
   wrap.append(detailRow('الحالة', chip(si.ar, si.color)));
-  wrap.append(detailRow('الكمية (شاملة العمولة)', fmt2(grossUSDT(o)) + ' ' + o.asset));
-  if (o.commission > 0) {
-    wrap.append(detailRow('الرسوم', fmt2(o.commission) + ' ' + o.asset));
+  const feeVal = effComm(o);
+  wrap.append(detailRow('الكمية (شاملة العمولة)', fmt2(o.amount + feeVal) + ' ' + o.asset));
+  if (feeVal > 0) {
+    wrap.append(detailRow('الرسوم', fmt2(feeVal) + ' ' + o.asset));
     wrap.append(detailRow('الكمية المُحرّرة', fmt2(o.amount) + ' ' + o.asset));
   }
   wrap.append(detailRow('السعر', fmt2(o.unitPrice) + (fiat ? ' ' + fiat : '')));
@@ -1220,7 +1225,7 @@ function ledgerRows() {
       curNet: isP2P ? fiatSymOf(it) : (it.network || ''),
       party: isP2P ? (it.counterPart || '') : '',
       status: isP2P ? statusInfo(it.orderStatus).ar : txStatusInfo(it.status).ar,
-      fee: isP2P ? (it.commission || 0) : (it.fee || 0),
+      fee: isP2P ? effComm(it) : (it.fee || 0),
       reference: it.reference || '',
       note: it.note || '',
       id: isP2P ? it.orderNumber : (it.txId || it.id || ''),

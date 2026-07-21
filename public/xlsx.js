@@ -169,8 +169,10 @@
       body += '<row r="' + r + '">' + cells + '</row>';
     });
 
+    const dim = 'A1:' + colLetter(columns.length || 1) + (rows.length + 1);
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<dimension ref="' + dim + '"/>' +
       '<sheetViews><sheetView rightToLeft="1" tabSelected="1" workbookViewId="0">' +
       '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
       '<selection pane="bottomLeft" activeCell="A2" sqref="A2"/>' +
