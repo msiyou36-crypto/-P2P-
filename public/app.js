@@ -210,11 +210,11 @@ function startAppGlitter() {
   if (typeof Glitter === 'undefined') return;
   const el = $('#appGlitter');
   if (!el) return;
-  // خلفية هادئة داخل التطبيق: نجوم أقل وسطوع منخفض حتى لا تشوّش على القراءة
+  // خلفية خفيفة داخل التطبيق: نجوم أقل + دقة 1x = أخف على المعالج (أسرع)
   try {
     glitterStop = Glitter.mount(el, {
-      particleCount: 240, brightness: 45, trailAmount: 80,
-      starSize: 9, speed: 3, glitterIntensity: 2,
+      particleCount: 90, brightness: 40, trailAmount: 78,
+      starSize: 9, speed: 2.5, glitterIntensity: 2, maxDpr: 1,
     });
   } catch {}
 }
@@ -346,7 +346,10 @@ function orderMatchesSearch(o, q) {
   return o.orderNumber.toLowerCase().includes(q)
     || (o.counterPart || '').toLowerCase().includes(q)
     || String(o.reference || '').toLowerCase().includes(q)
-    || String(o.note || '').toLowerCase().includes(q);
+    || String(o.note || '').toLowerCase().includes(q)
+    || String(o.amount).includes(q)
+    || String(o.totalPrice).includes(q)
+    || fmt0(o.totalPrice).replace(/,/g, '').includes(q.replace(/,/g, ''));
 }
 function txMatchesSearch(t, q) {
   return String(t.txId || '').toLowerCase().includes(q)
@@ -355,7 +358,8 @@ function txMatchesSearch(t, q) {
     || String(t.network || '').toLowerCase().includes(q)
     || String(t.id || '').toLowerCase().includes(q)
     || String(t.reference || '').toLowerCase().includes(q)
-    || String(t.note || '').toLowerCase().includes(q);
+    || String(t.note || '').toLowerCase().includes(q)
+    || String(t.amount).includes(q);
 }
 
 function applyFilters() {

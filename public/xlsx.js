@@ -89,7 +89,15 @@
     '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
     '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
     '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+    '<Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>' +
     '</Types>';
+
+  // علاقة ورقة العمل بجدولها
+  const SHEET_RELS =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>' +
+    '</Relationships>';
 
   const RELS =
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -171,7 +179,7 @@
 
     const dim = 'A1:' + colLetter(columns.length || 1) + (rows.length + 1);
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
       '<dimension ref="' + dim + '"/>' +
       '<sheetViews><sheetView rightToLeft="1" tabSelected="1" workbookViewId="0">' +
       '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
@@ -180,7 +188,26 @@
       '<sheetFormatPr defaultRowHeight="15"/>' +
       '<cols>' + cols + '</cols>' +
       '<sheetData>' + body + '</sheetData>' +
+      '<tableParts count="1"><tablePart r:id="rId1"/></tableParts>' +
       '</worksheet>';
+  }
+
+  // جدول Excel حقيقي: فلاتر منسدلة على العناوين + تنسيق جدول مخطّط
+  function buildTable(columns, rows) {
+    const dim = 'A1:' + colLetter(columns.length || 1) + (rows.length + 1);
+    const used = {};
+    const tcols = columns.map((c, i) => {
+      let name = String(c.header == null ? '' : c.header).trim() || ('عمود' + (i + 1));
+      while (used[name.toLowerCase()]) name += ' ';
+      used[name.toLowerCase()] = true;
+      return '<tableColumn id="' + (i + 1) + '" name="' + xesc(name) + '"/>';
+    }).join('');
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="P2P" displayName="P2P" ref="' + dim + '" totalsRowShown="0">' +
+      '<autoFilter ref="' + dim + '"/>' +
+      '<tableColumns count="' + columns.length + '">' + tcols + '</tableColumns>' +
+      '<tableStyleInfo name="TableStyleMedium9" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>' +
+      '</table>';
   }
 
   function build(sheetName, columns, rows) {
@@ -191,6 +218,8 @@
       { name: 'xl/_rels/workbook.xml.rels', data: ENC.encode(WB_RELS) },
       { name: 'xl/styles.xml', data: ENC.encode(STYLES) },
       { name: 'xl/worksheets/sheet1.xml', data: ENC.encode(buildSheet(columns, rows)) },
+      { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: ENC.encode(SHEET_RELS) },
+      { name: 'xl/tables/table1.xml', data: ENC.encode(buildTable(columns, rows)) },
     ];
     return zipStore(files);
   }

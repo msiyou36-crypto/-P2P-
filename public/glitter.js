@@ -37,6 +37,7 @@
     glitterIntensity: 3,
     trailAmount: 90,
     reverse: false,
+    maxDpr: 2,
   };
 
   function mount(container, options) {
@@ -100,7 +101,7 @@
     };
 
     const resize = (entry) => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, opts.maxDpr || 2);
       const cr = entry && entry.contentRect;
       const rectW = (cr && cr.width) || container.clientWidth || container.getBoundingClientRect().width;
       const rectH = (cr && cr.height) || container.clientHeight || container.getBoundingClientRect().height;
