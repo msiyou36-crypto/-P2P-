@@ -193,14 +193,22 @@ main {
 /* ============ بطاقات الأرقام ============ */
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
 }
-.tile { padding: 14px 16px; }
-.tile .t-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-.tile .t-value { font-size: 24px; font-weight: 600; line-height: 1.2; }
-.tile .t-value .unit { font-size: 13px; font-weight: 400; color: var(--ink-2); margin-inline-start: 4px; }
-.tile .t-sub { color: var(--muted); font-size: 11.5px; margin-top: 5px; }
+/* على الشاشات العريضة: كل البطاقات في صف واحد */
+@media (min-width: 1180px) {
+  .tiles {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-template-columns: none;
+  }
+}
+.tile { padding: 12px 13px; }
+.tile .t-label { color: var(--muted); font-size: 11.5px; margin-bottom: 5px; }
+.tile .t-value { font-size: 21px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
+.tile .t-value .unit { font-size: 12px; font-weight: 400; color: var(--ink-2); margin-inline-start: 4px; }
+.tile .t-sub { color: var(--muted); font-size: 11px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ============ الرسوم البيانية ============ */
 .charts {
