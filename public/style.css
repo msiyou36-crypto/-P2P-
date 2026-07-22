@@ -129,7 +129,7 @@ h3 { font-size: 15px; }
 
 /* ============ التخطيط العام ============ */
 main {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 16px 20px 48px;
   display: flex;
@@ -302,6 +302,12 @@ th.col-idx { width: 46px; text-align: center; }
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
 }
 .modal.small { max-width: 400px; }
+/* نافذة سجل الدخول: أوسع، وجدولها يملأ العرض بلا تمرير أفقي، مع تمرير رأسي عند كثرة الصفوف */
+#mLoginLog .modal { max-width: 720px; }
+#loginLogTable { min-width: 0; }
+#loginLogTable th, #loginLogTable td { padding: 12px 14px; }
+#mLoginLog .table-wrap { max-height: 62vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+#mLoginLog #loginLogTable th { background: var(--surface); }
 .modal-head {
   display: flex;
   align-items: center;
