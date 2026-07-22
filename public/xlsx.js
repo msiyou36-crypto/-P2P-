@@ -186,9 +186,8 @@
       '<sheetFormatPr defaultRowHeight="15"/>' +
       '<cols>' + cols + '</cols>' +
       '<sheetData>' + body + '</sheetData>' +
-      // فلتر تلقائي على مستوى الورقة (قوائم منسدلة على العناوين) — بلا «جدول» حقيقي
-      // حتى لا يظهر خطأ «This action won't work on multiple selections» عند نسخ صفوف/أعمدة كاملة.
-      '<autoFilter ref="' + dim + '"/>' +
+      // بلا «جدول» حقيقي وبلا فلتر تلقائي — كلاهما يسبّب خطأ
+      // «This action won't work on multiple selections» عند نسخ صف/عمود كامل.
       '</worksheet>';
   }
 
