@@ -89,15 +89,7 @@
     '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
     '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
     '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
-    '<Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>' +
     '</Types>';
-
-  // علاقة ورقة العمل بجدولها
-  const SHEET_RELS =
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>' +
-    '</Relationships>';
 
   const RELS =
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -121,21 +113,24 @@
     '<font><sz val="11"/><name val="Calibri"/></font>' +
     '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>' +
     '</fonts>' +
-    '<fills count="3">' +
+    '<fills count="4">' +
     '<fill><patternFill patternType="none"/></fill>' +
     '<fill><patternFill patternType="gray125"/></fill>' +
     '<fill><patternFill patternType="solid"><fgColor rgb="FF1A1A19"/><bgColor indexed="64"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFF2F6FC"/><bgColor indexed="64"/></patternFill></fill>' +
     '</fills>' +
     '<borders count="2">' +
     '<border><left/><right/><top/><bottom/><diagonal/></border>' +
     '<border><left style="thin"><color rgb="FFBFBFBF"/></left><right style="thin"><color rgb="FFBFBFBF"/></right><top style="thin"><color rgb="FFBFBFBF"/></top><bottom style="thin"><color rgb="FFBFBFBF"/></bottom><diagonal/></border>' +
     '</borders>' +
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-    '<cellXfs count="4">' +
+    '<cellXfs count="6">' +
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
     '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>' +
     '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>' +
     '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>' +
+    '<xf numFmtId="164" fontId="0" fillId="3" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment vertical="center"/></xf>' +
     '</cellXfs>' +
     '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
     '</styleSheet>';
@@ -161,6 +156,9 @@
 
     rows.forEach((row, ri) => {
       const r = ri + 2;
+      const striped = (ri % 2) === 1;      // تخطيط كل صف ثانٍ
+      const sText = striped ? 4 : 2;
+      const sNum = striped ? 5 : 3;
       let cells = '';
       columns.forEach((c, i) => {
         const ref = colLetter(i + 1) + r;
@@ -168,10 +166,10 @@
         if (c.type === 'number') {
           const nv = (v === '' || v == null || isNaN(v)) ? null : Number(v);
           cells += (nv == null)
-            ? '<c r="' + ref + '" s="2"/>'
-            : '<c r="' + ref + '" s="3"><v>' + nv + '</v></c>';
+            ? '<c r="' + ref + '" s="' + sText + '"/>'
+            : '<c r="' + ref + '" s="' + sNum + '"><v>' + nv + '</v></c>';
         } else {
-          cells += '<c r="' + ref + '" s="2" t="inlineStr"><is><t xml:space="preserve">' + xesc(v) + '</t></is></c>';
+          cells += '<c r="' + ref + '" s="' + sText + '" t="inlineStr"><is><t xml:space="preserve">' + xesc(v) + '</t></is></c>';
         }
       });
       body += '<row r="' + r + '">' + cells + '</row>';
@@ -188,26 +186,10 @@
       '<sheetFormatPr defaultRowHeight="15"/>' +
       '<cols>' + cols + '</cols>' +
       '<sheetData>' + body + '</sheetData>' +
-      '<tableParts count="1"><tablePart r:id="rId1"/></tableParts>' +
-      '</worksheet>';
-  }
-
-  // جدول Excel حقيقي: فلاتر منسدلة على العناوين + تنسيق جدول مخطّط
-  function buildTable(columns, rows) {
-    const dim = 'A1:' + colLetter(columns.length || 1) + (rows.length + 1);
-    const used = {};
-    const tcols = columns.map((c, i) => {
-      let name = String(c.header == null ? '' : c.header).trim() || ('عمود' + (i + 1));
-      while (used[name.toLowerCase()]) name += ' ';
-      used[name.toLowerCase()] = true;
-      return '<tableColumn id="' + (i + 1) + '" name="' + xesc(name) + '"/>';
-    }).join('');
-    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      '<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="P2P" displayName="P2P" ref="' + dim + '" totalsRowShown="0">' +
+      // فلتر تلقائي على مستوى الورقة (قوائم منسدلة على العناوين) — بلا «جدول» حقيقي
+      // حتى لا يظهر خطأ «This action won't work on multiple selections» عند نسخ صفوف/أعمدة كاملة.
       '<autoFilter ref="' + dim + '"/>' +
-      '<tableColumns count="' + columns.length + '">' + tcols + '</tableColumns>' +
-      '<tableStyleInfo name="TableStyleMedium9" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>' +
-      '</table>';
+      '</worksheet>';
   }
 
   function build(sheetName, columns, rows) {
@@ -218,8 +200,6 @@
       { name: 'xl/_rels/workbook.xml.rels', data: ENC.encode(WB_RELS) },
       { name: 'xl/styles.xml', data: ENC.encode(STYLES) },
       { name: 'xl/worksheets/sheet1.xml', data: ENC.encode(buildSheet(columns, rows)) },
-      { name: 'xl/worksheets/_rels/sheet1.xml.rels', data: ENC.encode(SHEET_RELS) },
-      { name: 'xl/tables/table1.xml', data: ENC.encode(buildTable(columns, rows)) },
     ];
     return zipStore(files);
   }
