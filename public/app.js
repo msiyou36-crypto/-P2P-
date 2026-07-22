@@ -180,6 +180,11 @@ async function loadAccount() {
 function renderAccount() {
   const el = $('#acctName');
   if (el) el.textContent = state.account.name;
+  // عنوان الترويسة وتبويب المتصفح يتبعان الحساب النشط
+  const title = 'سجل ' + state.account.name; // «سجل حوالات P2P» أو «سجل حوالات P3P»
+  const h = $('#appTitle');
+  if (h) h.textContent = title;
+  document.title = title;
   const btn = $('#btnAccount');
   if (!btn) return;
   const other = state.account.list.find((a) => a.id !== state.account.active);
@@ -240,6 +245,10 @@ async function refreshBalance() {
 /* ============================ المصادقة ============================ */
 
 const canEdit = () => state.auth.role === 'admin';
+// «مستخدم 2» يكتب في الإشاري/الملاحظة فقط (كالمستخدم العادي عدا ذلك)
+const canAnnotate = () => state.auth.role === 'admin' || state.auth.role === 'user2';
+const ROLE_NAMES = { admin: 'مسؤول', user: 'مستخدم', user2: 'مستخدم 2' };
+const ROLE_ICONS = { admin: '👑', user: '👁️', user2: '✏️' };
 
 function clearSession() {
   state.auth = { role: null, token: null };
@@ -297,11 +306,15 @@ function enterApp() {
 }
 
 function applyRole() {
-  const admin = state.auth.role === 'admin';
+  const role = state.auth.role;
+  const admin = role === 'admin';
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !admin));
   const badge = $('#roleBadge');
-  badge.textContent = admin ? '● مسؤول' : '● مستخدم';
+  const nm = ROLE_NAMES[role] || 'مستخدم';
+  const ic = ROLE_ICONS[role] || '●';
+  badge.textContent = ic + ' ' + nm;
   badge.classList.toggle('admin', admin);
+  badge.classList.toggle('annot', role === 'user2');
 }
 
 async function checkAuth() {
@@ -320,12 +333,12 @@ async function checkAuth() {
 async function doSetup(e) {
   e.preventDefault();
   const el = $('#setupForm').elements;
-  const ap = el.adminPassword.value, up = el.userPassword.value;
+  const ap = el.adminPassword.value, up = el.userPassword.value, up2 = el.user2Password.value;
   $('#setupError').textContent = '';
   try {
     const j = await api('/api/auth/setup', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adminPassword: ap, userPassword: up }),
+      body: JSON.stringify({ adminPassword: ap, userPassword: up, user2Password: up2 }),
     });
     state.auth = { token: j.token, role: j.role };
     sessionStorage.setItem('p2p_token', j.token);
@@ -965,7 +978,7 @@ function annotCell(entity, field, kind) {
   input.className = 'note-input';
   input.value = entity[field] || '';
   input.placeholder = field === 'reference' ? 'إشاري…' : 'ملاحظة…';
-  if (canEdit()) {
+  if (canAnnotate()) {
     input.title = field === 'reference' ? 'الإشاري — يُحفظ تلقائيًا' : 'الملاحظة — تُحفظ تلقائيًا';
     input.addEventListener('click', (e) => e.stopPropagation());
     input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') input.blur(); });
@@ -973,7 +986,7 @@ function annotCell(entity, field, kind) {
   } else {
     input.readOnly = true;
     input.classList.add('readonly');
-    input.title = 'التعديل للمسؤول فقط';
+    input.title = 'الكتابة للمسؤول و«مستخدم 2» فقط';
     input.addEventListener('click', (e) => e.stopPropagation());
   }
   td.append(input);
@@ -1008,7 +1021,8 @@ function renderTable() {
   const total = state.ledger.length;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   if (state.page > pages) state.page = pages;
-  const slice = state.ledger.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
+  const startIdx = (state.page - 1) * PAGE_SIZE;
+  const slice = state.ledger.slice(startIdx, state.page * PAGE_SIZE);
 
   const hasData = state.orders.length > 0 || state.transfers.length > 0;
   $('#emptyState').classList.toggle('hidden', hasData);
@@ -1020,11 +1034,12 @@ function renderTable() {
     ? `${fmt0(total)} عملية`
     : (hasData ? 'لا نتائج مطابقة للفلاتر' : '');
 
-  for (const row of slice) {
+  slice.forEach((row, i) => {
     const isP2P = row._kind === 'p2p';
     const it = row.raw;
     const tr = document.createElement('tr');
 
+    tdText(tr, fmt0(startIdx + i + 1), 'col-idx');
     tdText(tr, fmtDT(row._t));
 
     const tdType = document.createElement('td');
@@ -1053,7 +1068,7 @@ function renderTable() {
 
     tr.addEventListener('click', () => (isP2P ? openDetails(it) : openTransferDetails(it)));
     tbody.append(tr);
-  }
+  });
 
   $('#pgInfo').textContent = `صفحة ${fmt0(state.page)} من ${fmt0(pages)}`;
   $('#pgPrev').disabled = state.page <= 1;
@@ -1119,7 +1134,7 @@ function annotDetailRow(entity, field, kind, label) {
   input.className = 'detail-annot';
   input.value = entity[field] || '';
   input.placeholder = field === 'reference' ? 'علامة/مرجع خاص بك' : 'ملاحظتك على العملية';
-  if (canEdit()) {
+  if (canAnnotate()) {
     input.addEventListener('change', () => saveAnnotation(kind, entity, field, input.value, input));
   } else {
     input.readOnly = true;
@@ -1541,17 +1556,47 @@ async function saveSettings() {
 
 async function savePasswords() {
   const el = $('#passForm').elements;
-  const ap = el.adminPassword.value, up = el.userPassword.value;
-  if (!ap && !up) { closeModal('#mChangePass'); return; }
+  const ap = el.adminPassword.value, up = el.userPassword.value, up2 = el.user2Password.value;
+  // نرسل الحقول غير الفارغة فقط؛ الفارغ يعني «أبقِ كلمة السر الحالية»
+  const body = {};
+  if (ap) body.adminPassword = ap;
+  if (up) body.userPassword = up;
+  if (up2) body.user2Password = up2;
+  if (!Object.keys(body).length) { closeModal('#mChangePass'); return; }
   try {
     await api('/api/auth/password', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adminPassword: ap, userPassword: up }),
+      body: JSON.stringify(body),
     });
     $('#passForm').reset();
     closeModal('#mChangePass');
     toast('تم تحديث كلمات السر ✓');
   } catch (e) { toast(e.message, 'err'); }
+}
+
+async function openLoginLog() {
+  const tbody = $('#loginLogBody');
+  const empty = $('#loginLogEmpty');
+  tbody.textContent = '';
+  empty.classList.add('hidden');
+  openModal('#mLoginLog');
+  try {
+    const j = await api('/api/auth/log');
+    const events = j.events || [];
+    empty.classList.toggle('hidden', events.length > 0);
+    for (const ev of events) {
+      const tr = document.createElement('tr');
+      const nm = ROLE_NAMES[ev.role] || ev.role || '—';
+      const ic = ROLE_ICONS[ev.role] || '';
+      tdText(tr, (ic ? ic + ' ' : '') + nm);
+      tdText(tr, ev.time ? fmtDTsec(ev.time) : '—');
+      tdText(tr, ev.ip || '—', 'mono');
+      tbody.append(tr);
+    }
+  } catch (e) {
+    empty.classList.remove('hidden');
+    toast(e.message, 'err');
+  }
 }
 
 /* ============================ المزامنة ============================ */
@@ -1647,7 +1692,10 @@ function wireEvents() {
       $$('#roleSeg button').forEach((b) => b.classList.remove('on'));
       btn.classList.add('on');
       loginRole = btn.dataset.role;
+      const cap = $('#roleCaption');
+      if (cap) cap.textContent = ROLE_NAMES[loginRole] || '';
       $('#loginError').textContent = '';
+      try { $('#loginForm').elements.password.focus(); } catch {}
     });
   });
 
@@ -1724,6 +1772,7 @@ function wireEvents() {
   $('#btnExport').addEventListener('click', () => { closeMenu(); exportCSV(); });
   $('#btnSettings').addEventListener('click', () => { closeMenu(); openSettings(); });
   $('#btnChangePass').addEventListener('click', () => { closeMenu(); $('#passForm').reset(); openModal('#mChangePass'); });
+  $('#btnLoginLog').addEventListener('click', () => { closeMenu(); openLoginLog(); });
   $('#btnLogout').addEventListener('click', () => { closeMenu(); doLogout(); });
 
   // --- تصدير Excel (بجانب العنوان) ---

@@ -118,6 +118,22 @@ function roleOf(req) {
   return s ? s.role : null;
 }
 
+/** سجل الدخول: آخر عمليات الدخول (الدور + الوقت + IP) — يراه المسؤول فقط */
+let loginLog = [];
+const LOGIN_LOG_MAX = 300;
+function recordLogin(role, req) {
+  let ip = '';
+  try {
+    ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+      || (req.socket && req.socket.remoteAddress) || '';
+    ip = ip.replace(/^::ffff:/, '');
+  } catch {}
+  loginLog.push({ role, time: Date.now(), ip });
+  if (loginLog.length > LOGIN_LOG_MAX) loginLog = loginLog.slice(-LOGIN_LOG_MAX);
+  // حفظ غير معطِّل للاستجابة (الدخول نادر)
+  saveStore('loginlog', loginLog).catch(() => {});
+}
+
 /** بيانات حساب معيّن (مع ترحيل مفاتيح p2p القديمة غير المُلاحقة) */
 async function loadAccountData(kind) {
   let d = await loadStore(kind + '__' + config.active, null);
@@ -150,10 +166,15 @@ async function initStore() {
   if (!config.auth || typeof config.auth !== 'object') config.auth = {};
   config.auth.admin = config.auth.admin || {};
   config.auth.user = config.auth.user || {};
+  config.auth.user2 = config.auth.user2 || {};
   if (!config.auth.admin.hash && process.env.ADMIN_PASSWORD) config.auth.admin = makeCredential(process.env.ADMIN_PASSWORD);
   if (!config.auth.user.hash && process.env.USER_PASSWORD) config.auth.user = makeCredential(process.env.USER_PASSWORD);
+  if (!config.auth.user2.hash && process.env.USER2_PASSWORD) config.auth.user2 = makeCredential(process.env.USER2_PASSWORD);
 
   try { await saveStore('config', config); } catch (e) { console.error(e.message); }
+
+  const savedLog = await loadStore('loginlog', []);
+  loginLog = Array.isArray(savedLog) ? savedLog : [];
 
   orders = await loadAccountData('orders');
   transfers = await loadAccountData('transfers');
@@ -519,7 +540,11 @@ const server = http.createServer(async (req, res) => {
 
     /* ---------- المصادقة ---------- */
     if (p === '/api/auth/status' && req.method === 'GET') {
-      sendJSON(res, 200, { configured: isConfigured(), hasUser: !!(config.auth.user && config.auth.user.hash) });
+      sendJSON(res, 200, {
+        configured: isConfigured(),
+        hasUser: !!(config.auth.user && config.auth.user.hash),
+        hasUser2: !!(config.auth.user2 && config.auth.user2.hash),
+      });
       return;
     }
 
@@ -528,22 +553,30 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const ap = String(body.adminPassword || '');
       const up = String(body.userPassword || '');
+      const up2 = String(body.user2Password || '');
       if (ap.length < 4) { sendJSON(res, 400, { error: 'كلمة سر المسؤول يجب ألا تقل عن 4 خانات' }); return; }
       config.auth.admin = makeCredential(ap);
       config.auth.user = up ? makeCredential(up) : {};
+      config.auth.user2 = up2 ? makeCredential(up2) : {};
       await saveStore('config', config);
       const token = newToken('admin');
+      recordLogin('admin', req);
       sendJSON(res, 200, { ok: true, token, role: 'admin' });
       return;
     }
 
     if (p === '/api/auth/login' && req.method === 'POST') {
       const body = await readBody(req);
-      const role = body.role === 'admin' ? 'admin' : 'user';
-      const cred = role === 'admin' ? config.auth.admin : config.auth.user;
-      if (!cred || !cred.hash) { sendJSON(res, 400, { error: role === 'user' ? 'لا يوجد حساب مستخدم — ادخل كمسؤول' : 'لم يتم الإعداد بعد' }); return; }
+      const role = ['admin', 'user', 'user2'].includes(body.role) ? body.role : 'user';
+      const cred = config.auth[role];
+      if (!cred || !cred.hash) {
+        const msg = role === 'admin' ? 'لم يتم الإعداد بعد'
+          : (role === 'user2' ? 'لا يوجد حساب «مستخدم 2» — عيّنه من «تغيير كلمات السر»' : 'لا يوجد حساب مستخدم — ادخل كمسؤول');
+        sendJSON(res, 400, { error: msg }); return;
+      }
       if (!verifyPassword(String(body.password || ''), cred)) { sendJSON(res, 401, { error: 'كلمة السر غير صحيحة' }); return; }
       const token = newToken(role);
+      recordLogin(role, req);
       sendJSON(res, 200, { ok: true, token, role });
       return;
     }
@@ -565,6 +598,9 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.userPassword === 'string') {
         config.auth.user = body.userPassword ? makeCredential(body.userPassword) : {};
       }
+      if (typeof body.user2Password === 'string') {
+        config.auth.user2 = body.user2Password ? makeCredential(body.user2Password) : {};
+      }
       await saveStore('config', config);
       sendJSON(res, 200, { ok: true });
       return;
@@ -573,19 +609,31 @@ const server = http.createServer(async (req, res) => {
     /* ---------- بوابة الصلاحيات ---------- */
     const role = roleOf(req);
     const gate = (list) => list.some((x) => x[0] === req.method && x[1] === p);
+    // للمسؤول فقط
     const ADMIN_ROUTES = [
       ['POST', '/api/orders'], ['DELETE', '/api/orders'], ['POST', '/api/orders/bulk'],
-      ['POST', '/api/orders/clear'], ['POST', '/api/orders/annotate'],
-      ['POST', '/api/transfers/clear'], ['POST', '/api/transfers/annotate'],
-      ['POST', '/api/settings'],
+      ['POST', '/api/orders/clear'], ['POST', '/api/transfers/clear'],
+      ['POST', '/api/settings'], ['GET', '/api/auth/log'],
     ];
+    // للمسؤول و«مستخدم 2» (الكتابة في الإشاري/الملاحظة فقط)
+    const ANNOTATE_ROUTES = [
+      ['POST', '/api/orders/annotate'], ['POST', '/api/transfers/annotate'],
+    ];
+    // لأي مستخدم مسجّل دخوله
     const LOGIN_ROUTES = [
       ['POST', '/api/sync'], ['GET', '/api/balance'],
       ['GET', '/api/orders'], ['GET', '/api/transfers'], ['GET', '/api/settings'],
       ['GET', '/api/account'], ['POST', '/api/account'],
     ];
     if (gate(ADMIN_ROUTES) && role !== 'admin') { sendJSON(res, 403, { error: 'هذه العملية للمسؤول فقط' }); return; }
+    if (gate(ANNOTATE_ROUTES) && role !== 'admin' && role !== 'user2') { sendJSON(res, 403, { error: 'لا تملك صلاحية الكتابة في الإشاري/الملاحظة' }); return; }
     if (gate(LOGIN_ROUTES) && !role) { sendJSON(res, 401, { error: 'يلزم تسجيل الدخول' }); return; }
+
+    /* ---------- سجل الدخول (للمسؤول فقط) ---------- */
+    if (p === '/api/auth/log' && req.method === 'GET') {
+      sendJSON(res, 200, { events: loginLog.slice().reverse() });
+      return;
+    }
 
     /* ---------- الطلبات ---------- */
     if (p === '/api/orders' && req.method === 'GET') {

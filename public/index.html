@@ -23,12 +23,15 @@
     <!-- الإعداد الأول -->
     <form id="setupForm" class="login-form hidden" autocomplete="off">
       <div class="login-title">الإعداد الأول</div>
-      <p class="hint">عيّن كلمتي سر للدخول: <b>المسؤول</b> (كل الصلاحيات) و<b>المستخدم</b> (عرض ومزامنة وتصدير فقط).</p>
-      <label>كلمة سر المسؤول
+      <p class="hint">عيّن كلمات السر للدخول: <b>👑 المسؤول</b> (كل الصلاحيات)، <b>👁️ المستخدم</b> (عرض ومزامنة وتصدير فقط)، و<b>✏️ مستخدم 2</b> (كالمستخدم + الكتابة في الإشاري والملاحظة). اترك أي حقل فارغًا لتعطيل ذلك الدور.</p>
+      <label>👑 كلمة سر المسؤول
         <input type="password" name="adminPassword" dir="ltr" required>
       </label>
-      <label>كلمة سر المستخدم
-        <input type="password" name="userPassword" dir="ltr" required>
+      <label>👁️ كلمة سر المستخدم
+        <input type="password" name="userPassword" dir="ltr">
+      </label>
+      <label>✏️ كلمة سر مستخدم 2
+        <input type="password" name="user2Password" dir="ltr">
       </label>
       <button type="submit" class="btn accent login-btn" id="btnSetup">حفظ والدخول</button>
       <div class="login-error" id="setupError"></div>
@@ -37,9 +40,11 @@
     <!-- الدخول -->
     <form id="loginForm" class="login-form hidden" autocomplete="off">
       <div class="seg role-seg" id="roleSeg" role="group" aria-label="الدور">
-        <button type="button" data-role="admin" class="on">مسؤول</button>
-        <button type="button" data-role="user">مستخدم</button>
+        <button type="button" data-role="admin" class="on" title="مسؤول" aria-label="مسؤول"><span class="role-ic">👑</span></button>
+        <button type="button" data-role="user" title="مستخدم" aria-label="مستخدم"><span class="role-ic">👁️</span></button>
+        <button type="button" data-role="user2" title="مستخدم 2" aria-label="مستخدم 2"><span class="role-ic">✏️</span></button>
       </div>
+      <div class="role-caption" id="roleCaption">مسؤول</div>
       <label>كلمة السر
         <input type="password" name="password" dir="ltr" required autofocus>
       </label>
@@ -62,7 +67,7 @@
       <path d="M9 20v-8l4 5 3-4 3 4 4-5v8" stroke="#1a1a19" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
     <div>
-      <h1>سجل حوالات P2P</h1>
+      <h1 id="appTitle">سجل حوالات P2P</h1>
       <div class="sub" id="lastSync">لم تتم مزامنة بعد</div>
     </div>
   </div>
@@ -79,6 +84,7 @@
         <div class="menu-sep admin-only"></div>
         <button id="btnSettings" class="menu-item admin-only" role="menuitem">⚙ الإعدادات</button>
         <button id="btnChangePass" class="menu-item admin-only" role="menuitem">🔑 تغيير كلمات السر</button>
+        <button id="btnLoginLog" class="menu-item admin-only" role="menuitem">🕒 سجل الدخول</button>
         <div class="menu-sep"></div>
         <button id="btnLogout" class="menu-item danger-item" role="menuitem">↩ تسجيل الخروج</button>
       </div>
@@ -177,6 +183,7 @@
       <table id="ledgerTable">
         <thead>
           <tr>
+            <th class="col-idx">#</th>
             <th data-sort="_t" class="sortable">التاريخ</th>
             <th data-sort="_type" class="sortable">النوع</th>
             <th data-sort="_amount" class="sortable num">USDT</th>
@@ -359,17 +366,40 @@
     <div class="modal-body">
       <p class="hint">اترك الحقل فارغًا للإبقاء على كلمة السر الحالية. (للمسؤول فقط)</p>
       <form id="passForm" class="form-grid" autocomplete="off">
-        <label class="full">كلمة سر المسؤول الجديدة
+        <label class="full">👑 كلمة سر المسؤول الجديدة
           <input type="password" name="adminPassword" dir="ltr" placeholder="اتركها فارغة للإبقاء عليها">
         </label>
-        <label class="full">كلمة سر المستخدم الجديدة
+        <label class="full">👁️ كلمة سر المستخدم الجديدة
           <input type="password" name="userPassword" dir="ltr" placeholder="اتركها فارغة للإبقاء عليها">
+        </label>
+        <label class="full">✏️ كلمة سر مستخدم 2 الجديدة
+          <input type="password" name="user2Password" dir="ltr" placeholder="اتركها فارغة للإبقاء عليها">
         </label>
       </form>
     </div>
     <div class="modal-foot">
       <button class="btn accent" id="btnSavePass">حفظ</button>
       <button class="btn" data-close>إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة سجل الدخول (للمسؤول فقط) -->
+<div class="backdrop hidden" id="mLoginLog">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="سجل الدخول">
+    <div class="modal-head"><h3>🕒 سجل الدخول</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body">
+      <p class="hint">آخر عمليات تسجيل الدخول إلى النظام (الأحدث أولًا). يظهر للمسؤول فقط.</p>
+      <div class="table-wrap">
+        <table id="loginLogTable">
+          <thead><tr><th>الدور</th><th>التاريخ والوقت</th><th>عنوان IP</th></tr></thead>
+          <tbody id="loginLogBody"></tbody>
+        </table>
+        <div id="loginLogEmpty" class="empty hidden"><div class="empty-icon">🕒</div><p>لا توجد عمليات دخول مسجّلة بعد.</p></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>إغلاق</button>
     </div>
   </div>
 </div>
