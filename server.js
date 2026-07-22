@@ -28,12 +28,18 @@ const MAX_BODY = 8 * 1024 * 1024;
 const USE_SUPABASE = !!(process.env.SUPABASE_URL && process.env.SUPABASE_KEY);
 const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SB_KEY = process.env.SUPABASE_KEY || '';
-const KV_FILES = {
-  orders: path.join(DATA_DIR, 'orders.json'),
-  transfers: path.join(DATA_DIR, 'transfers.json'),
-  config: path.join(DATA_DIR, 'config.json'),
-};
-const DEFAULT_CONFIG = { apiKey: '', apiSecret: '', baseUrl: 'https://api.binance.com', months: 12, lastSync: null, auth: {} };
+// مسار ملف لأي مفتاح تخزين (orders__p2p, transfers__p3p, config…)
+const kvFile = (key) => path.join(DATA_DIR, String(key).replace(/[^A-Za-z0-9_-]/g, '_') + '.json');
+
+// ===== حسابان: p2p و p3p — كلٌّ بمفاتيحه وبياناته =====
+const ACCOUNTS = ['p2p', 'p3p'];
+const ACCOUNT_NAMES = { p2p: 'حوالات P2P', p3p: 'حوالات P3P' };
+function newAccount() {
+  return { apiKey: '', apiSecret: '', baseUrl: 'https://api.binance.com', months: 12, lastSync: null };
+}
+const DEFAULT_CONFIG = { active: 'p2p', accounts: { p2p: newAccount(), p3p: newAccount() }, auth: {} };
+// الحساب النشط الحالي (مفاتيحه ومداه)
+const AC = () => (config.accounts[config.active] || (config.accounts[config.active] = newAccount()));
 
 if (!USE_SUPABASE) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -61,20 +67,24 @@ async function loadStore(key, fallback) {
     try { return await sbGet(key, fallback); }
     catch (e) { console.error('تعذّر القراءة من Supabase:', e.message); return fallback; }
   }
-  try { return JSON.parse(fs.readFileSync(KV_FILES[key], 'utf8')); } catch { return fallback; }
+  try { return JSON.parse(fs.readFileSync(kvFile(key), 'utf8')); } catch { return fallback; }
 }
 async function saveStore(key, obj) {
   if (USE_SUPABASE) { await sbSet(key, obj); return; }
-  const file = KV_FILES[key];
+  const file = kvFile(key);
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 1));
   fs.renameSync(tmp, file);
 }
 
-/** الحالة في الذاكرة (تُملأ من التخزين عند الإقلاع في initStore) */
+/** الحالة في الذاكرة (تُملأ من التخزين عند الإقلاع في initStore) — للحساب النشط */
 let orders = {};       // الطلبات مفهرسة برقم الطلب
 let transfers = {};    // الإيداع/السحب مفهرسة بمعرّف فريد
 let config = Object.assign({}, DEFAULT_CONFIG);
+
+// الحفظ مفصول لكل حساب: orders__p2p / transfers__p3p …
+const saveOrders = () => saveStore('orders__' + config.active, orders);
+const saveTransfers = () => saveStore('transfers__' + config.active, transfers);
 
 /* ===================== المصادقة والصلاحيات ===================== */
 
@@ -108,26 +118,45 @@ function roleOf(req) {
   return s ? s.role : null;
 }
 
-/** تحميل البيانات من التخزين عند الإقلاع، وضبط كلمات السر من متغيرات البيئة إن لزم */
+/** بيانات حساب معيّن (مع ترحيل مفاتيح p2p القديمة غير المُلاحقة) */
+async function loadAccountData(kind) {
+  let d = await loadStore(kind + '__' + config.active, null);
+  if (d == null && config.active === 'p2p') {
+    d = await loadStore(kind, {}); // المفتاح القديم قبل نظام الحسابين
+    if (d && Object.keys(d).length) { try { await saveStore(kind + '__p2p', d); } catch {} }
+  }
+  return d || {};
+}
+
+/** تحميل الإعدادات وبيانات الحساب النشط عند الإقلاع + ترحيل + ضبط كلمات السر من البيئة */
 async function initStore() {
-  orders = await loadStore('orders', {});
-  transfers = await loadStore('transfers', {});
-  config = Object.assign({}, DEFAULT_CONFIG, await loadStore('config', {}));
+  const c = await loadStore('config', {});
+  config = Object.assign({}, DEFAULT_CONFIG, c);
+
+  // ترحيل من الحساب الواحد القديم → accounts.p2p
+  if (!config.accounts || typeof config.accounts !== 'object') config.accounts = {};
+  if (!config.accounts.p2p) {
+    config.accounts.p2p = {
+      apiKey: c.apiKey || '', apiSecret: c.apiSecret || '',
+      baseUrl: c.baseUrl || 'https://api.binance.com', months: c.months || 12, lastSync: c.lastSync || null,
+    };
+  }
+  config.accounts.p2p = Object.assign(newAccount(), config.accounts.p2p);
+  config.accounts.p3p = Object.assign(newAccount(), config.accounts.p3p || {});
+  config.active = config.active === 'p3p' ? 'p3p' : 'p2p';
+  ['apiKey', 'apiSecret', 'baseUrl', 'months', 'lastSync'].forEach((k) => delete config[k]);
+
+  // المصادقة + ضبط كلمات السر من البيئة عند أول تشغيل
   if (!config.auth || typeof config.auth !== 'object') config.auth = {};
   config.auth.admin = config.auth.admin || {};
   config.auth.user = config.auth.user || {};
+  if (!config.auth.admin.hash && process.env.ADMIN_PASSWORD) config.auth.admin = makeCredential(process.env.ADMIN_PASSWORD);
+  if (!config.auth.user.hash && process.env.USER_PASSWORD) config.auth.user = makeCredential(process.env.USER_PASSWORD);
 
-  // عند النشر: إن لم تُضبط كلمة سر بعد، خذها من متغيرات البيئة (يحمي الرابط العام من أول لحظة)
-  let changed = false;
-  if (!config.auth.admin.hash && process.env.ADMIN_PASSWORD) {
-    config.auth.admin = makeCredential(process.env.ADMIN_PASSWORD);
-    changed = true;
-  }
-  if (!config.auth.user.hash && process.env.USER_PASSWORD) {
-    config.auth.user = makeCredential(process.env.USER_PASSWORD);
-    changed = true;
-  }
-  if (changed) { try { await saveStore('config', config); } catch (e) { console.error(e.message); } }
+  try { await saveStore('config', config); } catch (e) { console.error(e.message); }
+
+  orders = await loadAccountData('orders');
+  transfers = await loadAccountData('transfers');
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -292,12 +321,12 @@ async function signedGet(base, endpoint, params, offset, method = 'GET') {
   for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
   qs.set('recvWindow', '30000');
   qs.set('timestamp', String(Date.now() + offset));
-  const signature = crypto.createHmac('sha256', config.apiSecret).update(qs.toString()).digest('hex');
+  const signature = crypto.createHmac('sha256', AC().apiSecret).update(qs.toString()).digest('hex');
   const url = base + endpoint + '?' + qs.toString() + '&signature=' + signature;
 
   let r;
   try {
-    r = await fetch(url, { method, headers: { 'X-MBX-APIKEY': config.apiKey }, signal: AbortSignal.timeout(30000) });
+    r = await fetch(url, { method, headers: { 'X-MBX-APIKEY': AC().apiKey }, signal: AbortSignal.timeout(30000) });
   } catch {
     throw userError('انقطع الاتصال أثناء الجلب — أعد المحاولة');
   }
@@ -326,15 +355,15 @@ const dayLabel = (ms) => new Date(ms).toISOString().slice(0, 10);
  * المزامنة في منتصفها (بفضل كتلة finally) فلا يضيع ما نزل.
  */
 async function* syncGenerator() {
-  if (!config.apiKey || !config.apiSecret) {
+  if (!AC().apiKey || !AC().apiSecret) {
     throw userError('لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
   }
-  const base = (config.baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
+  const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
   yield { msg: 'جارٍ الاتصال بالمنصة والتحقق من التوقيت…', pct: 1 };
   const offset = await timeOffset(base);
 
   const now = Date.now();
-  const months = Math.min(Math.max(Number(config.months) || 12, 1), 36);
+  const months = Math.min(Math.max(Number(AC().months) || 12, 1), 36);
   const minStart = now - months * 30 * 86400000;
   const p2pWindows = makeWindows(now, minStart, 29 * 86400000); // C2C: أقصى نافذة 30 يومًا
   const txWindows = makeWindows(now, minStart, 89 * 86400000);  // الإيداع/السحب: أقصى نافذة 90 يومًا
@@ -411,17 +440,17 @@ async function* syncGenerator() {
       await sleep(400);
     }
 
-    config.lastSync = Date.now();
+    AC().lastSync = Date.now();
     Object.assign(result, {
       added, updated, fetched, depAdded, wdAdded, txUpdated,
       total: Object.keys(orders).length,
       totalTx: Object.keys(transfers).length,
-      lastSync: config.lastSync,
+      lastSync: AC().lastSync,
     });
   } finally {
     // نحفظ ما جُلب حتى الآن مهما حدث (نجاح كامل أو فشل جزئي)
-    await saveStore('orders', orders);
-    await saveStore('transfers', transfers);
+    await saveOrders();
+    await saveTransfers();
     await saveStore('config', config);
   }
   yield result;
@@ -553,13 +582,14 @@ const server = http.createServer(async (req, res) => {
     const LOGIN_ROUTES = [
       ['POST', '/api/sync'], ['GET', '/api/balance'],
       ['GET', '/api/orders'], ['GET', '/api/transfers'], ['GET', '/api/settings'],
+      ['GET', '/api/account'], ['POST', '/api/account'],
     ];
     if (gate(ADMIN_ROUTES) && role !== 'admin') { sendJSON(res, 403, { error: 'هذه العملية للمسؤول فقط' }); return; }
     if (gate(LOGIN_ROUTES) && !role) { sendJSON(res, 401, { error: 'يلزم تسجيل الدخول' }); return; }
 
     /* ---------- الطلبات ---------- */
     if (p === '/api/orders' && req.method === 'GET') {
-      sendJSON(res, 200, { orders: Object.values(orders), lastSync: config.lastSync });
+      sendJSON(res, 200, { orders: Object.values(orders), lastSync: AC().lastSync });
       return;
     }
 
@@ -569,7 +599,7 @@ const server = http.createServer(async (req, res) => {
       if (!(o.amount > 0)) { sendJSON(res, 400, { error: 'الكمية مطلوبة ويجب أن تكون أكبر من صفر' }); return; }
       if (!(o.totalPrice > 0)) { sendJSON(res, 400, { error: 'المبلغ مطلوب ويجب أن يكون أكبر من صفر' }); return; }
       const r = upsertOrder(o);
-      await saveStore('orders', orders);
+      await saveOrders();
       sendJSON(res, 200, { result: r, order: o });
       return;
     }
@@ -585,7 +615,7 @@ const server = http.createServer(async (req, res) => {
         if (r === 'added') added++;
         else if (r === 'updated') updated++;
       }
-      await saveStore('orders', orders);
+      await saveOrders();
       sendJSON(res, 200, { added, updated, skipped, total: Object.keys(orders).length });
       return;
     }
@@ -594,14 +624,14 @@ const server = http.createServer(async (req, res) => {
       const id = url.searchParams.get('id') || '';
       if (!orders[id]) { sendJSON(res, 404, { error: 'الطلب غير موجود' }); return; }
       delete orders[id];
-      await saveStore('orders', orders);
+      await saveOrders();
       sendJSON(res, 200, { ok: true, total: Object.keys(orders).length });
       return;
     }
 
     if (p === '/api/orders/clear' && req.method === 'POST') {
       orders = {};
-      await saveStore('orders', orders);
+      await saveOrders();
       sendJSON(res, 200, { ok: true });
       return;
     }
@@ -614,20 +644,20 @@ const server = http.createServer(async (req, res) => {
       const o = orders[id];
       if (typeof body.note === 'string') o.note = body.note.slice(0, 2000);
       if (typeof body.reference === 'string') o.reference = body.reference.slice(0, 2000);
-      await saveStore('orders', orders);
+      await saveOrders();
       sendJSON(res, 200, { ok: true, order: o });
       return;
     }
 
     /* ---------- الإيداع والسحب ---------- */
     if (p === '/api/transfers' && req.method === 'GET') {
-      sendJSON(res, 200, { transfers: Object.values(transfers), lastSync: config.lastSync });
+      sendJSON(res, 200, { transfers: Object.values(transfers), lastSync: AC().lastSync });
       return;
     }
 
     if (p === '/api/transfers/clear' && req.method === 'POST') {
       transfers = {};
-      await saveStore('transfers', transfers);
+      await saveTransfers();
       sendJSON(res, 200, { ok: true });
       return;
     }
@@ -640,45 +670,73 @@ const server = http.createServer(async (req, res) => {
       const t = transfers[id];
       if (typeof body.note === 'string') t.note = body.note.slice(0, 2000);
       if (typeof body.reference === 'string') t.reference = body.reference.slice(0, 2000);
-      await saveStore('transfers', transfers);
+      await saveTransfers();
       sendJSON(res, 200, { ok: true, transfer: t });
       return;
     }
 
     /* ---------- رصيد محفظة التمويل (جلب مباشر) ---------- */
     if (p === '/api/balance' && req.method === 'GET') {
-      if (!config.apiKey || !config.apiSecret) {
+      if (!AC().apiKey || !AC().apiSecret) {
         sendJSON(res, 400, { error: 'أدخل مفتاح API من الإعدادات أولًا لعرض الرصيد' });
         return;
       }
-      const base = (config.baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
+      const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
       const offset = await timeOffset(base);
       const assets = await signedGet(base, '/sapi/v1/asset/get-funding-asset', { needBtcValuation: 'true' }, offset, 'POST');
       sendJSON(res, 200, { assets: Array.isArray(assets) ? assets : [], updatedAt: Date.now() });
       return;
     }
 
+    /* ---------- الحسابات (P2P / P3P) ---------- */
+    if (p === '/api/account' && req.method === 'GET') {
+      sendJSON(res, 200, {
+        active: config.active,
+        accounts: ACCOUNTS.map((id) => ({
+          id, name: ACCOUNT_NAMES[id],
+          hasKey: !!(config.accounts[id] && config.accounts[id].apiKey && config.accounts[id].apiSecret),
+          lastSync: config.accounts[id] ? config.accounts[id].lastSync : null,
+        })),
+      });
+      return;
+    }
+
+    if (p === '/api/account' && req.method === 'POST') {
+      const body = await readBody(req);
+      const target = ACCOUNTS.includes(body.active) ? body.active : 'p2p';
+      if (target !== config.active) {
+        await saveOrders();       // احفظ بيانات الحساب الحالي احتياطًا
+        await saveTransfers();
+        config.active = target;
+        await saveStore('config', config);
+        orders = await loadAccountData('orders');
+        transfers = await loadAccountData('transfers');
+      }
+      sendJSON(res, 200, { ok: true, active: config.active, name: ACCOUNT_NAMES[config.active] });
+      return;
+    }
+
     /* ---------- الإعدادات ---------- */
     if (p === '/api/settings' && req.method === 'GET') {
-      const k = config.apiKey || '';
+      const k = AC().apiKey || '';
       sendJSON(res, 200, {
         apiKeyMasked: k ? k.slice(0, 4) + '…' + k.slice(-4) : '',
-        hasSecret: !!config.apiSecret,
-        baseUrl: config.baseUrl,
-        months: config.months,
-        lastSync: config.lastSync,
+        hasSecret: !!AC().apiSecret,
+        baseUrl: AC().baseUrl,
+        months: AC().months,
+        lastSync: AC().lastSync,
       });
       return;
     }
 
     if (p === '/api/settings' && req.method === 'POST') {
       const body = await readBody(req);
-      if (typeof body.apiKey === 'string' && body.apiKey.trim()) config.apiKey = body.apiKey.trim();
-      if (typeof body.apiSecret === 'string' && body.apiSecret.trim()) config.apiSecret = body.apiSecret.trim();
+      if (typeof body.apiKey === 'string' && body.apiKey.trim()) AC().apiKey = body.apiKey.trim();
+      if (typeof body.apiSecret === 'string' && body.apiSecret.trim()) AC().apiSecret = body.apiSecret.trim();
       if (typeof body.baseUrl === 'string' && /^https:\/\/[\w.-]+$/.test(body.baseUrl.trim().replace(/\/+$/, ''))) {
-        config.baseUrl = body.baseUrl.trim().replace(/\/+$/, '');
+        AC().baseUrl = body.baseUrl.trim().replace(/\/+$/, '');
       }
-      if (body.months != null) config.months = Math.min(Math.max(Number(body.months) || 12, 1), 36);
+      if (body.months != null) AC().months = Math.min(Math.max(Number(body.months) || 12, 1), 36);
       await saveStore('config', config);
       sendJSON(res, 200, { ok: true });
       return;

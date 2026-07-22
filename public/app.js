@@ -18,6 +18,8 @@ const state = {
   balanceLoading: false,
   balanceError: null,
   settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', months: 12, lastSync: null },
+  account: { active: 'p2p', name: 'حوالات P2P', list: [] },
+  switchingAccount: false,
   filters: { range: '1', from: null, to: null, type: 'all', status: 'all', fiat: 'all', q: '' },
   sort: { key: '_t', dir: -1 },
   page: 1,
@@ -167,7 +169,55 @@ async function loadTransfers() {
 async function loadSettings() {
   state.settings = await api('/api/settings');
 }
-const loadAll = () => Promise.all([loadOrders(), loadTransfers(), loadSettings()]);
+async function loadAccount() {
+  const j = await api('/api/account');
+  state.account.active = j.active;
+  state.account.list = j.accounts || [];
+  const cur = state.account.list.find((a) => a.id === j.active);
+  state.account.name = cur ? cur.name : (j.active === 'p3p' ? 'حوالات P3P' : 'حوالات P2P');
+  renderAccount();
+}
+function renderAccount() {
+  const el = $('#acctName');
+  if (el) el.textContent = state.account.name;
+  const btn = $('#btnAccount');
+  if (!btn) return;
+  const other = state.account.list.find((a) => a.id !== state.account.active);
+  btn.title = other ? ('التبديل إلى: ' + other.name + ' — لكل حساب مفتاح API وبياناته الخاصة') : 'تبديل الحساب';
+}
+const loadAll = () => Promise.all([loadAccount(), loadOrders(), loadTransfers(), loadSettings()]);
+
+// التبديل بين الحسابين (P2P / P3P): يحفظ الخادم بيانات الحساب الحالي ويحمّل الآخر
+async function switchAccount() {
+  if (state.switchingAccount || state.syncing) return;
+  const other = state.account.list.find((a) => a.id !== state.account.active);
+  const target = other ? other.id : (state.account.active === 'p2p' ? 'p3p' : 'p2p');
+  state.switchingAccount = true;
+  const btn = $('#btnAccount');
+  if (btn) btn.disabled = true;
+  try {
+    const j = await api('/api/account', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: target }),
+    });
+    state.account.active = j.active;
+    state.account.name = j.name;
+    // أعِد تحميل بيانات الحساب الجديد بالكامل
+    state.balance = null; state.balanceError = null;
+    await loadAll();
+    state.page = 1;
+    renderAll();
+    renderBalance();
+    if (state.settings.hasSecret && state.settings.apiKeyMasked) refreshBalance();
+    toast('تم التبديل إلى: ' + j.name, 'ok');
+  } catch (e) {
+    toast(e.message || 'تعذّر تبديل الحساب', 'err');
+  } finally {
+    state.switchingAccount = false;
+    if (btn) btn.disabled = false;
+    renderAccount();
+  }
+}
 
 async function refreshBalance() {
   if (state.balanceLoading) return;
@@ -1457,6 +1507,8 @@ function renderBalance() {
 
 async function openSettings() {
   try { await loadSettings(); } catch {}
+  const ttl = $('#mSettings .modal-head h3');
+  if (ttl) ttl.textContent = 'الإعدادات — ' + state.account.name;
   const form = $('#settingsForm');
   form.reset();
   form.elements.apiKey.value = '';
@@ -1659,6 +1711,7 @@ function wireEvents() {
   document.addEventListener('click', closeMenu);
 
   $('#btnSync').addEventListener('click', () => { closeMenu(); runSync(); });
+  $('#btnAccount').addEventListener('click', () => { closeMenu(); switchAccount(); });
   $('#btnAdd').addEventListener('click', () => { closeMenu(); openAdd(); });
   $('#btnImport').addEventListener('click', () => {
     closeMenu();

@@ -77,6 +77,9 @@ h3 { font-size: 15px; }
 .btn.accent { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
 .btn.accent:hover { filter: brightness(1.06); }
 .btn.ghost { background: transparent; }
+.acct-btn { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.acct-btn:hover { background: rgba(240, 185, 11, 0.12); }
+.acct-btn #acctName { font-weight: 700; }
 .btn.danger { background: transparent; color: var(--critical); border-color: var(--critical); }
 .btn.danger:hover { background: rgba(208, 59, 59, 0.12); }
 .btn.small { padding: 5px 12px; font-size: 13px; }

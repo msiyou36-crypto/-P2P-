@@ -69,6 +69,7 @@
   <div class="actions">
     <span id="roleBadge" class="role-badge"></span>
     <button id="btnSync" class="btn accent" title="جلب أحدث الطلبات من المنصة">⟳ مزامنة</button>
+    <button id="btnAccount" class="btn ghost acct-btn" title="تبديل الحساب — لكل حساب مفتاح API وبياناته الخاصة">🔀 <span id="acctName">حوالات P2P</span></button>
     <div class="menu-wrap">
       <button id="btnMenu" class="btn ghost" title="القائمة" aria-haspopup="true" aria-expanded="false">☰ القائمة</button>
       <div id="menuDropdown" class="menu-dropdown hidden" role="menu">
@@ -109,7 +110,29 @@
     </div>
   </section>
 
-  <!-- الفلاتر: تحكم في كل شيء تحتها -->
+  <section class="tiles" id="tiles" aria-label="ملخص الأرقام"></section>
+
+  <section class="charts">
+    <div class="card chart-card">
+      <div class="card-head">
+        <h2>حجم التداول P2P (USDT)</h2>
+        <div class="legend" aria-hidden="true">
+          <span class="lg"><i class="sw" style="background:var(--sell)"></i>بيع</span>
+          <span class="lg"><i class="sw" style="background:var(--buy)"></i>شراء</span>
+        </div>
+      </div>
+      <div id="volChart" class="chart" dir="ltr"></div>
+    </div>
+    <div class="card chart-card">
+      <div class="card-head">
+        <h2>متوسط سعر البيع</h2>
+        <div class="sub" id="priceUnit"></div>
+      </div>
+      <div id="priceChart" class="chart" dir="ltr"></div>
+    </div>
+  </section>
+
+  <!-- الفلاتر: تحكم في الجدول والأرقام أعلاه -->
   <section class="card filters" aria-label="الفلاتر">
     <div class="seg" id="rangeSeg" role="group" aria-label="النطاق الزمني">
       <button data-range="all">الكل</button>
@@ -137,28 +160,6 @@
       <option value="all">كل العملات</option>
     </select>
     <input id="fSearch" type="search" placeholder="بحث: القيمة، المعرّف، الإشاري، الطرف الآخر، ملاحظة…" aria-label="بحث">
-  </section>
-
-  <section class="tiles" id="tiles" aria-label="ملخص الأرقام"></section>
-
-  <section class="charts">
-    <div class="card chart-card">
-      <div class="card-head">
-        <h2>حجم التداول P2P (USDT)</h2>
-        <div class="legend" aria-hidden="true">
-          <span class="lg"><i class="sw" style="background:var(--sell)"></i>بيع</span>
-          <span class="lg"><i class="sw" style="background:var(--buy)"></i>شراء</span>
-        </div>
-      </div>
-      <div id="volChart" class="chart" dir="ltr"></div>
-    </div>
-    <div class="card chart-card">
-      <div class="card-head">
-        <h2>متوسط سعر البيع</h2>
-        <div class="sub" id="priceUnit"></div>
-      </div>
-      <div id="priceChart" class="chart" dir="ltr"></div>
-    </div>
   </section>
 
   <!-- الجدول الموحّد: كل العمليات -->
