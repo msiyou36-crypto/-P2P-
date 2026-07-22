@@ -179,10 +179,7 @@
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
       '<dimension ref="' + dim + '"/>' +
-      '<sheetViews><sheetView rightToLeft="1" tabSelected="1" workbookViewId="0">' +
-      '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
-      '<selection pane="bottomLeft" activeCell="A2" sqref="A2"/>' +
-      '</sheetView></sheetViews>' +
+      '<sheetViews><sheetView rightToLeft="1" tabSelected="1" workbookViewId="0"/></sheetViews>' +
       '<sheetFormatPr defaultRowHeight="15"/>' +
       '<cols>' + cols + '</cols>' +
       '<sheetData>' + body + '</sheetData>' +
