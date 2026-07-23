@@ -89,6 +89,7 @@
     '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
     '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
     '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+    '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>' +
     '</Types>';
 
   const RELS =
@@ -102,6 +103,7 @@
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
     '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
     '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+    '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>' +
     '</Relationships>';
 
   // الأنماط: خط عادي، وخط عريض أبيض للعناوين، تعبئة داكنة للعنوان، حدود رفيعة، تنسيق أرقام بفواصل الآلاف
@@ -139,20 +141,50 @@
     const name = xesc(String(sheetName || 'Sheet1').replace(/[\[\]\:\*\?\/\\]/g, ' ').slice(0, 31)) || 'Sheet1';
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      // «bookViews» ضروري: الورقة تشير إلى workbookViewId="0"، وبدون تعريف عرض
+      // للمصنّف هنا يحدث خطأ «multiple selections» عند نسخ عمود كامل ولصقه.
+      '<bookViews><workbookView/></bookViews>' +
       '<sheets><sheet name="' + name + '" sheetId="1" r:id="rId1"/></sheets>' +
+      '<calcPr calcId="0"/>' +
       '</workbook>';
   }
 
-  function buildSheet(columns, rows) {
+  // جدول النصوص المشتركة (sharedStrings): نُخزّن كل نص مرّة واحدة ونشير إليه برقم.
+  // هذه هي الطريقة القياسية في Excel (نفس ما يفعله عند حفظ الملف).
+  // ملاحظة: هذا وحده لا يحل خطأ «multiple selections» — الحل الفعلي هو «bookViews»
+  // في workbook.xml أعلاه. أُبقيَت هذه الطريقة لأنها الأقرب لملفات Excel الأصلية.
+  function makeSST() {
+    const list = [];
+    const map = new Map();
+    function add(v) {
+      const s = xesc(v);
+      let idx = map.get(s);
+      if (idx === undefined) { idx = list.length; map.set(s, idx); list.push(s); }
+      return idx;
+    }
+    function xml() {
+      return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="' +
+        list.length + '" uniqueCount="' + list.length + '">' +
+        list.map((s) => '<si><t xml:space="preserve">' + s + '</t></si>').join('') +
+        '</sst>';
+    }
+    return { add, xml };
+  }
+
+  function buildSheet(columns, rows, sst) {
     const cols = columns.map((c, i) =>
       '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + (c.width || 14) + '" customWidth="1"/>'
     ).join('');
 
+    const nCols = columns.length || 1;
+    const spans = '1:' + nCols;
+
     let header = '';
     columns.forEach((c, i) => {
-      header += '<c r="' + colLetter(i + 1) + '1" s="1" t="inlineStr"><is><t xml:space="preserve">' + xesc(c.header) + '</t></is></c>';
+      header += '<c r="' + colLetter(i + 1) + '1" s="1" t="s"><v>' + sst.add(c.header) + '</v></c>';
     });
-    let body = '<row r="1" ht="20" customHeight="1">' + header + '</row>';
+    let body = '<row r="1" spans="' + spans + '" ht="20" customHeight="1">' + header + '</row>';
 
     rows.forEach((row, ri) => {
       const r = ri + 2;
@@ -169,13 +201,13 @@
             ? '<c r="' + ref + '" s="' + sText + '"/>'
             : '<c r="' + ref + '" s="' + sNum + '"><v>' + nv + '</v></c>';
         } else {
-          cells += '<c r="' + ref + '" s="' + sText + '" t="inlineStr"><is><t xml:space="preserve">' + xesc(v) + '</t></is></c>';
+          cells += '<c r="' + ref + '" s="' + sText + '" t="s"><v>' + sst.add(v) + '</v></c>';
         }
       });
-      body += '<row r="' + r + '">' + cells + '</row>';
+      body += '<row r="' + r + '" spans="' + spans + '">' + cells + '</row>';
     });
 
-    const dim = 'A1:' + colLetter(columns.length || 1) + (rows.length + 1);
+    const dim = 'A1:' + colLetter(nCols) + (rows.length + 1);
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
       '<dimension ref="' + dim + '"/>' +
@@ -183,19 +215,23 @@
       '<sheetFormatPr defaultRowHeight="15"/>' +
       '<cols>' + cols + '</cols>' +
       '<sheetData>' + body + '</sheetData>' +
-      // بلا «جدول» حقيقي وبلا فلتر تلقائي — كلاهما يسبّب خطأ
-      // «This action won't work on multiple selections» عند نسخ صف/عمود كامل.
+      // بلا «جدول» حقيقي وبلا فلتر تلقائي (كلاهما يسبّب خطأ «multiple selections»).
+      // السبب الجذري الحقيقي للخطأ كان غياب «bookViews» في workbook.xml — أُصلح هناك.
+      '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>' +
       '</worksheet>';
   }
 
   function build(sheetName, columns, rows) {
+    const sst = makeSST();
+    const sheetXml = buildSheet(columns, rows, sst); // يملأ جدول النصوص أثناء البناء
     const files = [
       { name: '[Content_Types].xml', data: ENC.encode(CONTENT_TYPES) },
       { name: '_rels/.rels', data: ENC.encode(RELS) },
       { name: 'xl/workbook.xml', data: ENC.encode(workbookXml(sheetName)) },
       { name: 'xl/_rels/workbook.xml.rels', data: ENC.encode(WB_RELS) },
       { name: 'xl/styles.xml', data: ENC.encode(STYLES) },
-      { name: 'xl/worksheets/sheet1.xml', data: ENC.encode(buildSheet(columns, rows)) },
+      { name: 'xl/sharedStrings.xml', data: ENC.encode(sst.xml()) },
+      { name: 'xl/worksheets/sheet1.xml', data: ENC.encode(sheetXml) },
     ];
     return zipStore(files);
   }
