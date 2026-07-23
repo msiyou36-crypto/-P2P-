@@ -80,7 +80,10 @@ const isCancelled = (s) => s === 'CANCELLED' || s === 'CANCELLED_BY_SYSTEM';
 const TX_KIND = {
   deposit: { ar: 'إيداع', color: 'var(--good)' },
   withdraw: { ar: 'سحب', color: 'var(--critical)' },
+  'pay-out': { ar: 'إرسال Pay', color: 'var(--critical)' },
+  'pay-in': { ar: 'استلام Pay', color: 'var(--good)' },
 };
+const isPayKind = (k) => k === 'pay-out' || k === 'pay-in';
 const TX_STATUS = {
   COMPLETED: { ar: 'مكتمل', color: 'var(--good)' },
   PENDING: { ar: 'قيد المعالجة', color: 'var(--warn)' },
@@ -416,6 +419,7 @@ function orderMatchesSearch(o, q) {
 }
 function txMatchesSearch(t, q) {
   return String(t.txId || '').toLowerCase().includes(q)
+    || String(t.counterPart || '').toLowerCase().includes(q)
     || String(t.address || '').toLowerCase().includes(q)
     || String(t.coin || '').toLowerCase().includes(q)
     || String(t.network || '').toLowerCase().includes(q)
@@ -430,7 +434,7 @@ function applyFilters() {
   const [from, to] = rangeBounds();
   const q = f.q.trim().toLowerCase();
   const typeIsP2P = f.type === 'SELL' || f.type === 'BUY';
-  const typeIsTx = f.type === 'deposit' || f.type === 'withdraw';
+  const typeIsTx = f.type === 'deposit' || f.type === 'withdraw' || f.type === 'pay';
   const statusIsTx = f.status === 'PENDING' || f.status === 'FAILED';
   const statusIsOther = f.status === 'other';
 
@@ -448,7 +452,10 @@ function applyFilters() {
     if (t.time < from || t.time > to) return false;
     if (typeIsP2P || statusIsOther) return false;
     if (f.fiat !== 'all') return false; // الحوالات بالـ USDT — لا تندرج تحت عملة محلية بعينها
-    if (typeIsTx && t.kind !== f.type) return false;
+    if (typeIsTx) {
+      if (f.type === 'pay') { if (!isPayKind(t.kind)) return false; }
+      else if (t.kind !== f.type) return false;
+    }
     if (!statusMatchTx(t.status, f.status)) return false;
     if (q && !txMatchesSearch(t, q)) return false;
     return true;
@@ -874,7 +881,7 @@ function makeTxBuckets(list) {
     const b = map.get(keyOf(t.time));
     if (!b) continue;
     if (t.kind === 'deposit') b.dep += t.amount;
-    else b.wd += t.amount;
+    else if (t.kind === 'withdraw') b.wd += t.amount;
   }
   return { unit, buckets: Array.from(map.values()) };
 }
@@ -1044,14 +1051,14 @@ function renderTable() {
 
     const tdType = document.createElement('td');
     if (isP2P) { const ti = TYPE_INFO[it.tradeType]; tdType.append(chip(ti.ar, ti.color)); }
-    else { const ki = TX_KIND[it.kind]; tdType.append(chip(ki.ar, ki.color)); }
+    else { const ki = TX_KIND[it.kind] || { ar: it.kind, color: 'var(--muted)' }; tdType.append(chip(ki.ar, ki.color)); }
     tr.append(tdType);
 
     tdText(tr, fmt2(isP2P ? grossUSDT(it) : row._amount), 'num strong');
     tdText(tr, isP2P ? fmt2(it.unitPrice) : '—', 'num');
     tdText(tr, isP2P ? (mixed ? fmt0(it.totalPrice) + ' ' + fiatSymOf(it) : fmt0(it.totalPrice)) : '—', 'num strong');
-    tdText(tr, isP2P ? fiatSymOf(it) : (it.network || '—'));
-    tdText(tr, isP2P ? (it.counterPart || '—') : '—');
+    tdText(tr, isP2P ? fiatSymOf(it) : (it.network || it.coin || '—'));
+    tdText(tr, it.counterPart || '—');
 
     const tdSt = document.createElement('td');
     const si = isP2P ? statusInfo(it.orderStatus) : txStatusInfo(it.status);
@@ -1185,17 +1192,19 @@ function openTransferDetails(t) {
   wrap.className = 'detail-rows';
   const ki = TX_KIND[t.kind] || { ar: t.kind, color: 'var(--muted)' };
   const si = txStatusInfo(t.status);
+  const isPay = isPayKind(t.kind);
   wrap.append(detailRow('النوع', chip(ki.ar + ' ' + (t.coin || ''), ki.color)));
   wrap.append(detailRow('الحالة', chip(si.ar, si.color)));
   wrap.append(detailRow('الكمية', fmt2(t.amount) + ' ' + (t.coin || '')));
+  if (t.counterPart) wrap.append(detailRow(t.kind === 'pay-in' ? 'من' : 'إلى', t.counterPart));
+  if (isPay && t.orderType) wrap.append(detailRow('نوع Pay', t.orderType));
   if (t.kind === 'withdraw') {
     wrap.append(detailRow('رسوم الشبكة', fmt2(t.fee) + ' ' + (t.coin || '')));
     wrap.append(detailRow('الإجمالي المخصوم', fmt2(t.amount + (t.fee || 0)) + ' ' + (t.coin || '')));
   }
-  wrap.append(detailRow('الشبكة', t.network || '—'));
-  if (t.walletType != null && WALLET_AR[t.walletType]) {
-    wrap.append(detailRow('المحفظة', WALLET_AR[t.walletType]));
-  }
+  if (t.network) wrap.append(detailRow('الشبكة', t.network));
+  const walletLabel = isPay ? (t.walletName || '') : (t.walletType != null ? WALLET_AR[t.walletType] : '');
+  if (walletLabel) wrap.append(detailRow('المحفظة', walletLabel));
   if (t.address) {
     const addr = document.createElement('span');
     addr.className = 'mono';
@@ -1287,12 +1296,12 @@ function ledgerRows() {
     const it = row.raw, isP2P = row._kind === 'p2p';
     return {
       date: fmtDTsec(row._t),
-      type: isP2P ? (it.tradeType === 'SELL' ? 'بيع' : 'شراء') : (it.kind === 'deposit' ? 'إيداع' : 'سحب'),
+      type: isP2P ? (it.tradeType === 'SELL' ? 'بيع' : 'شراء') : ((TX_KIND[it.kind] && TX_KIND[it.kind].ar) || it.kind),
       amount: isP2P ? grossUSDT(it) : it.amount,
       price: isP2P ? it.unitPrice : '',
       total: isP2P ? it.totalPrice : '',
-      curNet: isP2P ? fiatSymOf(it) : (it.network || ''),
-      party: isP2P ? (it.counterPart || '') : '',
+      curNet: isP2P ? fiatSymOf(it) : (it.network || it.coin || ''),
+      party: it.counterPart || '',
       status: isP2P ? statusInfo(it.orderStatus).ar : txStatusInfo(it.status).ar,
       fee: isP2P ? effComm(it) : (it.fee || 0),
       reference: it.reference || '',
@@ -1641,7 +1650,7 @@ async function runSync() {
         if (ev.error) { sawError = ev.error; }
         else if (ev.done) {
           $('#syncPct').style.width = '100%';
-          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0);
+          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0);
           toast(`اكتملت المزامنة ✓ — ${fmt0(ev.added)} طلب و ${fmt0(newTx)} حوالة (جديدة)`);
         } else {
           if (ev.msg) $('#syncMsg').textContent = ev.msg;

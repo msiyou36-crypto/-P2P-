@@ -304,6 +304,50 @@ function normalizeTransfer(raw, kind) {
   };
 }
 
+/* ===================== عمليات Binance Pay (إرسال/استلام) ===================== */
+
+// نوع المحفظة في Binance Pay: 1 تمويل، 2 فوري، 3 ورقية، 4/6 بطاقة، 5 Earn
+// (ترقيم مختلف عن الإيداع/السحب، لذا نحفظ الاسم جاهزًا)
+const PAY_WALLET_AR = {
+  1: 'محفظة التمويل (Funding)', 2: 'الحساب الفوري (Spot)', 3: 'محفظة العملة الورقية (Fiat)',
+  4: 'بطاقة الدفع', 5: 'محفظة Earn', 6: 'بطاقة الدفع',
+};
+
+/** توحيد عملية Binance Pay في نفس شكل الحوالة.
+ *  المبلغ الموجب = استلام (دخل)، والسالب = إرسال (مصروف). */
+function normalizePay(raw) {
+  const amt = num(raw.amount);
+  const isOut = amt < 0;
+  const payer = raw.payerInfo || {};
+  const receiver = raw.receiverInfo || {};
+  // الطرف الآخر: عند الإرسال هو المستلِم، وعند الاستلام هو المُرسِل
+  const other = isOut ? receiver : payer;
+  const otherName = String(other.name || other.binanceId || other.accountId || '').trim();
+  const tid = String(raw.transactionId || '').trim();
+  const wt = Number(raw.walletType);
+  return {
+    id: 'PAY' + (tid || (raw.transactionTime || '') + '' + raw.amount),
+    kind: isOut ? 'pay-out' : 'pay-in',
+    coin: String(raw.currency || 'USDT').trim() || 'USDT',
+    network: '',
+    amount: Math.abs(amt),
+    fee: 0,
+    status: 'COMPLETED', // النقطة تُرجع العمليات المكتملة فقط
+    statusCode: null,
+    address: '',
+    txId: tid,
+    counterPart: otherName,
+    orderType: String(raw.orderType || '').trim(),
+    time: Number(raw.transactionTime) || Date.now(),
+    completeTime: Number(raw.transactionTime) || 0,
+    walletType: Number.isFinite(wt) ? wt : null,
+    walletName: PAY_WALLET_AR[wt] || '',
+    note: '',
+    reference: '',
+    source: 'binance',
+  };
+}
+
 /** إدراج/تحديث حوالة. يُرجع 'added' أو 'updated' أو 'same' */
 function upsertTransfer(t) {
   if (!t.id || t.id === 'D' || t.id === 'W') return 'same';
@@ -390,9 +434,9 @@ async function* syncGenerator() {
   const txWindows = makeWindows(now, minStart, 89 * 86400000);  // الإيداع/السحب: أقصى نافذة 90 يومًا
 
   let added = 0, updated = 0, fetched = 0;
-  let depAdded = 0, wdAdded = 0, txUpdated = 0;
+  let depAdded = 0, wdAdded = 0, payAdded = 0, txUpdated = 0;
   let step = 0;
-  const totalSteps = p2pWindows.length * 2 + txWindows.length * 2;
+  const totalSteps = p2pWindows.length * 2 + txWindows.length * 3;
   const prog = (msg) => { step++; return { msg, pct: Math.min(1 + Math.round((step / totalSteps) * 96), 97) }; };
 
   const result = { done: true };
@@ -461,9 +505,31 @@ async function* syncGenerator() {
       await sleep(400);
     }
 
+    /* ---- عمليات Binance Pay (إرسال/استلام) ----
+       نقطة /sapi/v1/pay/transactions: الحد الأقصى للفترة 90 يومًا، وأقصى 100 سجل
+       لكل طلب دون ترقيم صفحات، ووزنها على حساب المستخدم (UID) 3000 وهو ضمن الحد.
+       نغلّفها بـ try/catch حتى لا يوقف فشلُها (صلاحية/منطقة) بقيةَ المزامنة. */
+    try {
+      for (const [s, e] of txWindows) {
+        yield prog(`جلب عمليات Binance Pay: ${dayLabel(s)} ← ${dayLabel(e)}`);
+        const j = await signedGet(base, '/sapi/v1/pay/transactions',
+          { startTime: s, endTime: e, limit: 100 }, offset);
+        const rows = Array.isArray(j.data) ? j.data : [];
+        for (const raw of rows) {
+          const r = upsertTransfer(normalizePay(raw));
+          if (r === 'added') payAdded++;
+          else if (r === 'updated') txUpdated++;
+        }
+        await sleep(400);
+      }
+    } catch (err) {
+      // فشل غير قاتل — نُبلّغ المستخدم ونكمل بما جُلب
+      yield { msg: 'تعذّر جلب عمليات Binance Pay (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
+    }
+
     AC().lastSync = Date.now();
     Object.assign(result, {
-      added, updated, fetched, depAdded, wdAdded, txUpdated,
+      added, updated, fetched, depAdded, wdAdded, payAdded, txUpdated,
       total: Object.keys(orders).length,
       totalTx: Object.keys(transfers).length,
       lastSync: AC().lastSync,
