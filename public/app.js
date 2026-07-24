@@ -45,7 +45,7 @@ const effComm = (o) => (o.commission > 0 ? o.commission : (o.orderStatus === 'CO
 const grossUSDT = (o) => (o.amount || 0) + effComm(o);
 
 /* ================== الرصيد التراكمي المتبقي ==================
-   عمود «المتبقي» يعمل كَكشف حساب: يعرض رصيد USDT بعد كل عملية. */
+   عمود «الباقي من USDT» يعمل كَكشف حساب: يعرض الرصيد بعد كل عملية. */
 
 /** رصيد USDT الحالي في محفظة التمويل، أو null إن لم يُجلب بعد */
 function currentUsdtBalance() {
@@ -1365,7 +1365,7 @@ function ledgerRows() {
 
 function exportCSV() {
   if (!state.ledger.length) { toast('لا توجد عمليات ضمن الفلاتر الحالية للتصدير', 'err'); return; }
-  const headers = ['التاريخ', 'النوع', 'الكمية USDT', 'السعر', 'المبلغ', 'العملة/الشبكة', 'USDT الباقي', 'الطرف الآخر', 'الحالة', 'العمولة/الرسوم', 'الإشاري', 'الملاحظة', 'المعرّف'];
+  const headers = ['التاريخ', 'النوع', 'الكمية USDT', 'السعر', 'المبلغ', 'العملة/الشبكة', 'الباقي من USDT', 'الطرف الآخر', 'الحالة', 'العمولة/الرسوم', 'الإشاري', 'الملاحظة', 'المعرّف'];
   const lines = [headers.join(',')];
   for (const r of ledgerRows()) {
     lines.push([
@@ -1392,7 +1392,7 @@ function exportXlsx() {
     { header: 'السعر', width: 12, type: 'number' },
     { header: 'المبلغ', width: 16, type: 'number' },
     { header: 'العملة/الشبكة', width: 12, type: 'text' },
-    { header: 'USDT الباقي', width: 14, type: 'number' },
+    { header: 'الباقي من USDT', width: 16, type: 'number' },
     { header: 'الطرف الآخر', width: 16, type: 'text' },
     { header: 'الحالة', width: 12, type: 'text' },
     { header: 'العمولة/الرسوم', width: 12, type: 'number' },
