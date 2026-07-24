@@ -44,6 +44,51 @@ const effComm = (o) => (o.commission > 0 ? o.commission : (o.orderStatus === 'CO
 // كمية USDT شاملة العمولة (= «عبر العملات الرقمية» في Binance)
 const grossUSDT = (o) => (o.amount || 0) + effComm(o);
 
+/* ================== الرصيد التراكمي المتبقي ==================
+   عمود «المتبقي» يعمل كَكشف حساب: يعرض رصيد USDT بعد كل عملية. */
+
+/** رصيد USDT الحالي في محفظة التمويل، أو null إن لم يُجلب بعد */
+function currentUsdtBalance() {
+  const assets = (state.balance && state.balance.assets) || null;
+  if (!assets) return null;
+  const u = assets.find((a) => String(a.asset).toUpperCase() === 'USDT');
+  if (!u) return null;
+  return num(u.free) + num(u.locked) + num(u.freeze) + num(u.withdrawing);
+}
+
+const balKey = (item, isP2P) => (isP2P ? 'o:' + item.orderNumber : 't:' + item.id);
+
+/** خريطة «الرصيد بعد العملية» لكل عملية.
+ *  تُحسب على كل العمليات المكتملة بالـ USDT (وليس المفلترة فقط) بترتيب زمني
+ *  تصاعدي، ثم تُزاح كلها بحيث يساوي أحدثُ صفٍّ رصيدَ المحفظة الحالي — فيكون
+ *  الرقم رصيدًا حقيقيًا لا مجرّد تجميع من الصفر. */
+function computeBalanceMap() {
+  const evts = [];
+  for (const o of state.orders) {
+    if (o.orderStatus !== 'COMPLETED') continue;
+    const v = grossUSDT(o); // نفس الرقم المعروض في عمود USDT
+    evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v });
+  }
+  for (const t of state.transfers) {
+    if (t.status !== 'COMPLETED') continue;
+    if (String(t.coin || '').toUpperCase() !== 'USDT') continue; // الرصيد بالـ USDT فقط
+    const isOut = t.kind === 'withdraw' || t.kind === 'pay-out';
+    const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
+    evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v });
+  }
+  const cur = currentUsdtBalance();
+  // بدون رصيد المحفظة لا يوجد ما نُثبّت عليه، وأي رقم سيكون مضلّلًا
+  // (سالبًا غالبًا لمن يبيع أكثر مما يشتري) — فنعرض «—» بدل رقم خاطئ.
+  if (cur == null || !evts.length) return new Map();
+  evts.sort((a, b) => a.t - b.t);
+  const map = new Map();
+  let run = 0;
+  for (const e of evts) { run += e.d; map.set(e.k, run); }
+  const off = cur - run; // تثبيت آخر صف على الرصيد الفعلي
+  for (const [k, v] of map) map.set(k, v + off);
+  return map;
+}
+
 function fmtDT(ms) {
   const d = new Date(ms);
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -242,6 +287,9 @@ async function refreshBalance() {
     state.balanceLoading = false;
     if (btn) btn.disabled = false;
     renderBalance();
+    // الرصيد المتبقي مثبّت على رصيد المحفظة، فنعيد بناء الجدول بعد وصوله
+    state.balMap = computeBalanceMap();
+    renderTable();
   }
 }
 
@@ -1055,6 +1103,8 @@ function renderTable() {
     tr.append(tdType);
 
     tdText(tr, fmt2(isP2P ? grossUSDT(it) : row._amount), 'num strong');
+    const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
+    tdText(tr, bal == null ? '—' : fmt2(bal), 'num');
     tdText(tr, isP2P ? fmt2(it.unitPrice) : '—', 'num');
     tdText(tr, isP2P ? (mixed ? fmt0(it.totalPrice) + ' ' + fiatSymOf(it) : fmt0(it.totalPrice)) : '—', 'num strong');
     tdText(tr, isP2P ? fiatSymOf(it) : (it.network || it.coin || '—'));
@@ -1093,6 +1143,7 @@ function renderTable() {
 
 function renderAll() {
   applyFilters();
+  state.balMap = computeBalanceMap();
   renderTiles();
   renderVolChart();
   renderPriceChart();
@@ -1298,6 +1349,7 @@ function ledgerRows() {
       date: fmtDTsec(row._t),
       type: isP2P ? (it.tradeType === 'SELL' ? 'بيع' : 'شراء') : ((TX_KIND[it.kind] && TX_KIND[it.kind].ar) || it.kind),
       amount: isP2P ? grossUSDT(it) : it.amount,
+      balance: (() => { const b = state.balMap && state.balMap.get(balKey(it, isP2P)); return b == null ? '' : b; })(),
       price: isP2P ? it.unitPrice : '',
       total: isP2P ? it.totalPrice : '',
       curNet: isP2P ? fiatSymOf(it) : (it.network || it.coin || ''),
@@ -1313,11 +1365,11 @@ function ledgerRows() {
 
 function exportCSV() {
   if (!state.ledger.length) { toast('لا توجد عمليات ضمن الفلاتر الحالية للتصدير', 'err'); return; }
-  const headers = ['التاريخ', 'النوع', 'الكمية USDT', 'السعر', 'المبلغ', 'العملة/الشبكة', 'الطرف الآخر', 'الحالة', 'العمولة/الرسوم', 'الإشاري', 'الملاحظة', 'المعرّف'];
+  const headers = ['التاريخ', 'النوع', 'الكمية USDT', 'المتبقي USDT', 'السعر', 'المبلغ', 'العملة/الشبكة', 'الطرف الآخر', 'الحالة', 'العمولة/الرسوم', 'الإشاري', 'الملاحظة', 'المعرّف'];
   const lines = [headers.join(',')];
   for (const r of ledgerRows()) {
     lines.push([
-      csvCell(r.date), r.type, r.amount, r.price, r.total, csvCell(r.curNet),
+      csvCell(r.date), r.type, r.amount, r.balance, r.price, r.total, csvCell(r.curNet),
       csvCell(r.party), csvCell(r.status), r.fee, csvCell(r.reference), csvCell(r.note), csvCell(r.id),
     ].join(','));
   }
@@ -1337,6 +1389,7 @@ function exportXlsx() {
     { header: 'التاريخ', width: 19, type: 'text' },
     { header: 'النوع', width: 8, type: 'text' },
     { header: 'الكمية (USDT)', width: 13, type: 'number' },
+    { header: 'المتبقي (USDT)', width: 14, type: 'number' },
     { header: 'السعر', width: 12, type: 'number' },
     { header: 'المبلغ', width: 16, type: 'number' },
     { header: 'العملة/الشبكة', width: 12, type: 'text' },
@@ -1347,7 +1400,7 @@ function exportXlsx() {
     { header: 'الملاحظة', width: 22, type: 'text' },
     { header: 'المعرّف / TxID', width: 28, type: 'text' },
   ];
-  const rows = ledgerRows().map((r) => [r.date, r.type, r.amount, r.price, r.total, r.curNet, r.party, r.status, r.fee, r.reference, r.note, r.id]);
+  const rows = ledgerRows().map((r) => [r.date, r.type, r.amount, r.balance, r.price, r.total, r.curNet, r.party, r.status, r.fee, r.reference, r.note, r.id]);
   const d = new Date();
   XLSXMini.download(`سجل-العمليات-${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}.xlsx`, 'العمليات', columns, rows);
   toast(`تم تصدير ${fmt0(state.ledger.length)} عملية إلى Excel ✓`);
