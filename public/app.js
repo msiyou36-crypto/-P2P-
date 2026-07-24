@@ -1107,7 +1107,7 @@ function renderTable() {
     tdText(tr, isP2P ? (mixed ? fmt0(it.totalPrice) + ' ' + fiatSymOf(it) : fmt0(it.totalPrice)) : '—', 'num strong');
     tdText(tr, isP2P ? fiatSymOf(it) : (it.network || it.coin || '—'));
     const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
-    tdText(tr, bal == null ? '—' : fmt2(bal), 'num');
+    tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
     tdText(tr, it.counterPart || '—');
 
     const tdSt = document.createElement('td');
@@ -1365,7 +1365,7 @@ function ledgerRows() {
 
 function exportCSV() {
   if (!state.ledger.length) { toast('لا توجد عمليات ضمن الفلاتر الحالية للتصدير', 'err'); return; }
-  const headers = ['التاريخ', 'النوع', 'الكمية USDT', 'السعر', 'المبلغ', 'العملة/الشبكة', 'المتبقي USDT', 'الطرف الآخر', 'الحالة', 'العمولة/الرسوم', 'الإشاري', 'الملاحظة', 'المعرّف'];
+  const headers = ['التاريخ', 'النوع', 'الكمية USDT', 'السعر', 'المبلغ', 'العملة/الشبكة', 'USDT الباقي', 'الطرف الآخر', 'الحالة', 'العمولة/الرسوم', 'الإشاري', 'الملاحظة', 'المعرّف'];
   const lines = [headers.join(',')];
   for (const r of ledgerRows()) {
     lines.push([
@@ -1392,7 +1392,7 @@ function exportXlsx() {
     { header: 'السعر', width: 12, type: 'number' },
     { header: 'المبلغ', width: 16, type: 'number' },
     { header: 'العملة/الشبكة', width: 12, type: 'text' },
-    { header: 'المتبقي (USDT)', width: 14, type: 'number' },
+    { header: 'USDT الباقي', width: 14, type: 'number' },
     { header: 'الطرف الآخر', width: 16, type: 'text' },
     { header: 'الحالة', width: 12, type: 'text' },
     { header: 'العمولة/الرسوم', width: 12, type: 'number' },
