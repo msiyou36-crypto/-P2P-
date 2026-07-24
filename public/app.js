@@ -1103,11 +1103,11 @@ function renderTable() {
     tr.append(tdType);
 
     tdText(tr, fmt2(isP2P ? grossUSDT(it) : row._amount), 'num strong');
-    const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
-    tdText(tr, bal == null ? '—' : fmt2(bal), 'num');
     tdText(tr, isP2P ? fmt2(it.unitPrice) : '—', 'num');
     tdText(tr, isP2P ? (mixed ? fmt0(it.totalPrice) + ' ' + fiatSymOf(it) : fmt0(it.totalPrice)) : '—', 'num strong');
     tdText(tr, isP2P ? fiatSymOf(it) : (it.network || it.coin || '—'));
+    const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
+    tdText(tr, bal == null ? '—' : fmt2(bal), 'num');
     tdText(tr, it.counterPart || '—');
 
     const tdSt = document.createElement('td');
@@ -1365,11 +1365,11 @@ function ledgerRows() {
 
 function exportCSV() {
   if (!state.ledger.length) { toast('لا توجد عمليات ضمن الفلاتر الحالية للتصدير', 'err'); return; }
-  const headers = ['التاريخ', 'النوع', 'الكمية USDT', 'المتبقي USDT', 'السعر', 'المبلغ', 'العملة/الشبكة', 'الطرف الآخر', 'الحالة', 'العمولة/الرسوم', 'الإشاري', 'الملاحظة', 'المعرّف'];
+  const headers = ['التاريخ', 'النوع', 'الكمية USDT', 'السعر', 'المبلغ', 'العملة/الشبكة', 'المتبقي USDT', 'الطرف الآخر', 'الحالة', 'العمولة/الرسوم', 'الإشاري', 'الملاحظة', 'المعرّف'];
   const lines = [headers.join(',')];
   for (const r of ledgerRows()) {
     lines.push([
-      csvCell(r.date), r.type, r.amount, r.balance, r.price, r.total, csvCell(r.curNet),
+      csvCell(r.date), r.type, r.amount, r.price, r.total, csvCell(r.curNet), r.balance,
       csvCell(r.party), csvCell(r.status), r.fee, csvCell(r.reference), csvCell(r.note), csvCell(r.id),
     ].join(','));
   }
@@ -1389,10 +1389,10 @@ function exportXlsx() {
     { header: 'التاريخ', width: 19, type: 'text' },
     { header: 'النوع', width: 8, type: 'text' },
     { header: 'الكمية (USDT)', width: 13, type: 'number' },
-    { header: 'المتبقي (USDT)', width: 14, type: 'number' },
     { header: 'السعر', width: 12, type: 'number' },
     { header: 'المبلغ', width: 16, type: 'number' },
     { header: 'العملة/الشبكة', width: 12, type: 'text' },
+    { header: 'المتبقي (USDT)', width: 14, type: 'number' },
     { header: 'الطرف الآخر', width: 16, type: 'text' },
     { header: 'الحالة', width: 12, type: 'text' },
     { header: 'العمولة/الرسوم', width: 12, type: 'number' },
@@ -1400,7 +1400,7 @@ function exportXlsx() {
     { header: 'الملاحظة', width: 22, type: 'text' },
     { header: 'المعرّف / TxID', width: 28, type: 'text' },
   ];
-  const rows = ledgerRows().map((r) => [r.date, r.type, r.amount, r.balance, r.price, r.total, r.curNet, r.party, r.status, r.fee, r.reference, r.note, r.id]);
+  const rows = ledgerRows().map((r) => [r.date, r.type, r.amount, r.price, r.total, r.curNet, r.balance, r.party, r.status, r.fee, r.reference, r.note, r.id]);
   const d = new Date();
   XLSXMini.download(`سجل-العمليات-${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}.xlsx`, 'العمليات', columns, rows);
   toast(`تم تصدير ${fmt0(state.ledger.length)} عملية إلى Excel ✓`);
