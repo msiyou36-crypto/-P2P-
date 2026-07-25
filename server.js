@@ -35,7 +35,7 @@ const kvFile = (key) => path.join(DATA_DIR, String(key).replace(/[^A-Za-z0-9_-]/
 const ACCOUNTS = ['p2p', 'p3p'];
 const ACCOUNT_NAMES = { p2p: 'حوالات P2P', p3p: 'حوالات P3P' };
 function newAccount() {
-  return { apiKey: '', apiSecret: '', baseUrl: 'https://api.binance.com', months: 12, lastSync: null };
+  return { apiKey: '', apiSecret: '', baseUrl: 'https://api.binance.com', rangeHours: 720, lastSync: null };
 }
 const DEFAULT_CONFIG = { active: 'p2p', accounts: { p2p: newAccount(), p3p: newAccount() }, auth: {} };
 // الحساب النشط الحالي (مفاتيحه ومداه)
@@ -159,6 +159,11 @@ async function initStore() {
   }
   config.accounts.p2p = Object.assign(newAccount(), config.accounts.p2p);
   config.accounts.p3p = Object.assign(newAccount(), config.accounts.p3p || {});
+  // ترحيل مدى الجلب: من «months» القديمة (بالأشهر) → «rangeHours» (بالساعات)
+  for (const id of ACCOUNTS) {
+    const a = config.accounts[id];
+    if (a && a.months != null) { a.rangeHours = Math.round(Number(a.months) * 720) || 720; delete a.months; }
+  }
   config.active = config.active === 'p3p' ? 'p3p' : 'p2p';
   ['apiKey', 'apiSecret', 'baseUrl', 'months', 'lastSync'].forEach((k) => delete config[k]);
 
@@ -431,8 +436,8 @@ async function* syncGenerator() {
   const offset = await timeOffset(base);
 
   const now = Date.now();
-  const months = Math.min(Math.max(Number(AC().months) || 12, 1), 36);
-  const minStart = now - months * 30 * 86400000;
+  const rangeHours = Math.min(Math.max(Number(AC().rangeHours) || 720, 1), 26280); // من ساعة إلى 3 سنوات
+  const minStart = now - rangeHours * 3600000;
   const p2pWindows = makeWindows(now, minStart, 29 * 86400000); // C2C: أقصى نافذة 30 يومًا
   const txWindows = makeWindows(now, minStart, 89 * 86400000);  // الإيداع/السحب: أقصى نافذة 90 يومًا
 
@@ -842,7 +847,7 @@ const server = http.createServer(async (req, res) => {
         apiKeyMasked: k ? k.slice(0, 4) + '…' + k.slice(-4) : '',
         hasSecret: !!AC().apiSecret,
         baseUrl: AC().baseUrl,
-        months: AC().months,
+        rangeHours: AC().rangeHours,
         lastSync: AC().lastSync,
       });
       return;
@@ -855,7 +860,7 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.baseUrl === 'string' && /^https:\/\/[\w.-]+$/.test(body.baseUrl.trim().replace(/\/+$/, ''))) {
         AC().baseUrl = body.baseUrl.trim().replace(/\/+$/, '');
       }
-      if (body.months != null) AC().months = Math.min(Math.max(Number(body.months) || 12, 1), 36);
+      if (body.rangeHours != null) AC().rangeHours = Math.min(Math.max(Number(body.rangeHours) || 720, 1), 26280);
       await saveStore('config', config);
       sendJSON(res, 200, { ok: true });
       return;

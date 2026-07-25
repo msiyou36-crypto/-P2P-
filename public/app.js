@@ -17,7 +17,7 @@ const state = {
   balance: null,
   balanceLoading: false,
   balanceError: null,
-  settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', months: 12, lastSync: null },
+  settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', rangeHours: 720, lastSync: null },
   account: { active: 'p2p', name: 'حوالات P2P', list: [] },
   switchingAccount: false,
   filters: { range: '1', from: null, to: null, type: 'all', status: 'all', fiat: 'all', q: '' },
@@ -1595,7 +1595,7 @@ async function openSettings() {
   form.elements.apiSecret.placeholder = state.settings.hasSecret
     ? '•••••••• (محفوظ — اتركه فارغًا للإبقاء عليه)'
     : 'ألصق المفتاح السري هنا';
-  form.elements.months.value = state.settings.months || 12;
+  form.elements.rangeHours.value = String(state.settings.rangeHours || 720);
   form.elements.baseUrl.value = state.settings.baseUrl || 'https://api.binance.com';
   openModal('#mSettings');
 }
@@ -1607,7 +1607,7 @@ async function saveSettings() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         apiKey: el.apiKey.value.trim(), apiSecret: el.apiSecret.value.trim(),
-        months: Number(el.months.value) || 12, baseUrl: el.baseUrl.value,
+        rangeHours: Number(el.rangeHours.value) || 720, baseUrl: el.baseUrl.value,
       }),
     });
     await loadSettings();

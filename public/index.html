@@ -79,7 +79,7 @@
   </div>
   <div class="actions">
     <span id="roleBadge" class="role-badge"></span>
-    <button id="btnSync" class="btn accent" title="جلب أحدث الطلبات من المنصة">⟳ مزامنة</button>
+    <button id="btnSync" class="btn accent admin-only" title="جلب أحدث الطلبات من المنصة">⟳ مزامنة</button>
     <button id="btnAccount" class="btn ghost acct-btn" title="تبديل الحساب — لكل حساب مفتاح API وبياناته الخاصة">🔀 <span id="acctName">حوالات P2P</span></button>
     <div class="menu-wrap">
       <button id="btnMenu" class="btn ghost" title="القائمة" aria-haspopup="true" aria-expanded="false">☰ القائمة</button>
@@ -339,8 +339,15 @@
         <label class="full">المفتاح السري (Secret Key)
           <input type="password" name="apiSecret" autocomplete="off" dir="ltr">
         </label>
-        <label>مدى الجلب (بالأشهر)
-          <input type="number" name="months" min="1" max="36" value="12">
+        <label>مدى الجلب
+          <select name="rangeHours">
+            <option value="1">آخر ساعة</option>
+            <option value="24">آخر يوم</option>
+            <option value="168">آخر أسبوع</option>
+            <option value="720" selected>آخر شهر</option>
+            <option value="2160">آخر 3 أشهر</option>
+            <option value="8760">آخر سنة</option>
+          </select>
         </label>
         <label>عنوان الخادم
           <select name="baseUrl">
