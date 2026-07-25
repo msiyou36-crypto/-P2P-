@@ -376,6 +376,9 @@ async function timeOffset(base) {
   if (r.status === 451 || r.status === 403) {
     throw userError('الوصول إلى المنصة محجوب من هذه المنطقة (HTTP ' + r.status + ') — جرّب VPN أو غيّر عنوان الخادم من الإعدادات');
   }
+  if (r.status === 429 || r.status === 418) {
+    throw userError('المنصة حظرت الطلبات مؤقتًا بسبب كثرتها (HTTP ' + r.status + ') — أوقف المزامنة وانتظر ٣٠ دقيقة على الأقل قبل إعادة المحاولة، ولا تكرّر الضغط فالتكرار يُطيل الحظر');
+  }
   if (!r.ok) throw userError('استجابة غير متوقعة من المنصة (HTTP ' + r.status + ')');
   const j = await r.json();
   return Number(j.serverTime) - Date.now();
@@ -404,7 +407,7 @@ async function signedGet(base, endpoint, params, offset, method = 'GET') {
     if (code === -2014 || code === -2015) throw userError('المنصة رفضت مفتاح API — تأكّد من صحة المفتاح ومن تفعيل صلاحية «إتاحة القراءة»');
     if (code === -1022) throw userError('التوقيع غير صحيح — تأكّد من المفتاح السري (Secret Key)');
     if (code === -1021) throw userError('فرق توقيت بين جهازك والمنصة — أعد المحاولة، وإن تكرر اضبط ساعة الجهاز');
-    if (r.status === 429 || r.status === 418) throw userError('تم تجاوز حد الطلبات مؤقتًا — انتظر دقيقة ثم أعد المحاولة');
+    if (r.status === 429 || r.status === 418) throw userError('المنصة حظرت الطلبات مؤقتًا بسبب كثرتها (HTTP ' + r.status + ') — أوقف المزامنة وانتظر ٣٠ دقيقة على الأقل، ولا تكرّر الضغط فالتكرار يُطيل الحظر');
     if (r.status === 451 || r.status === 403) throw userError('الوصول محجوب من هذه المنطقة — جرّب VPN أو غيّر عنوان الخادم من الإعدادات');
     throw userError('خطأ من المنصة: ' + (j && (j.msg || j.message) ? (j.msg || j.message) : 'HTTP ' + r.status));
   }
@@ -520,7 +523,7 @@ async function* syncGenerator() {
           if (r === 'added') payAdded++;
           else if (r === 'updated') txUpdated++;
         }
-        await sleep(400);
+        await sleep(1000);
       }
     } catch (err) {
       // فشل غير قاتل — نُبلّغ المستخدم ونكمل بما جُلب
