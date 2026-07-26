@@ -35,6 +35,9 @@ const nf2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 });
 const nf0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const fmt2 = (n) => nf2.format(n || 0);
 const fmt0 = (n) => nf0.format(n || 0);
+// السعر (سعر الصرف): رقمان فقط بعد الفاصلة — بعكس الكميات التي تعرض حتى 8
+const nfp = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+const fmt2p = (n) => nfp.format(n || 0);
 const pad2 = (n) => String(n).padStart(2, '0');
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
 // رسوم P2P الثابتة من Binance (0.06 USDT). واجهة Binance البرمجية لا تُرجعها لبعض العمليات،
@@ -603,7 +606,7 @@ function renderTiles() {
     { label: 'مبيعات', value: fmt2(sellAmt), unit: 'USDT', sub: `${fmt0(sells.length)} طلب مكتمل` },
     { label: 'مشتريات', value: fmt2(buyAmt), unit: 'USDT', sub: `${fmt0(buys.length)} طلب مكتمل` },
     { label: 'مقبوضات البيع', value: fmt0(sellFiat), unit: sym, sub: multi ? `بعملة ${sym} · اختر العملة للتفصيل` : 'الطلبات المكتملة' },
-    { label: 'متوسط سعر البيع', value: avgPrice ? fmt2(avgPrice) : '—', unit: avgPrice ? `${sym}/USDT` : '', sub: multi ? `بعملة ${sym}` : 'مرجّح بالكمية' },
+    { label: 'متوسط سعر البيع', value: avgPrice ? fmt2p(avgPrice) : '—', unit: avgPrice ? `${sym}/USDT` : '', sub: multi ? `بعملة ${sym}` : 'مرجّح بالكمية' },
     { label: 'إجمالي الإيداع', value: fmt2(depSum), unit: 'USDT', sub: `${fmt0(dep.length)} عملية مكتملة` },
     { label: 'إجمالي السحب', value: fmt2(wdSum), unit: 'USDT', sub: `${fmt0(wd.length)} عملية مكتملة` },
     { label: 'العمولات', value: fmt2(commission), unit: 'USDT', sub: 'رسوم المنصة' },
@@ -867,7 +870,7 @@ function renderPriceChart() {
   const lx = Math.min(X(last.i), pad.l + pw - 4);
   const ly = Math.max(Y(last.price) - 10, pad.t + 10);
   const endTxt = svgEl('text', { x: lx, y: ly, class: 'end-label', 'text-anchor': 'end' });
-  endTxt.textContent = fmt2(last.price);
+  endTxt.textContent = fmt2p(last.price);
   svg.append(endTxt);
   const hoverLine = svgEl('line', { y1: pad.t, y2: pad.t + ph, x1: -9, x2: -9, class: 'hover-line' });
   svg.append(hoverLine);
@@ -883,7 +886,7 @@ function renderPriceChart() {
     }
     hoverLine.setAttribute('x1', X(nearest.i));
     hoverLine.setAttribute('x2', X(nearest.i));
-    showTooltip(evt, nearest.title, [{ color: 'var(--sell)', value: fmt2(nearest.price), name: fiat + '/USDT' }]);
+    showTooltip(evt, nearest.title, [{ color: 'var(--sell)', value: fmt2p(nearest.price), name: fiat + '/USDT' }]);
   });
   hit.addEventListener('pointerleave', () => {
     hoverLine.setAttribute('x1', -9);
@@ -1107,7 +1110,7 @@ function renderTable() {
     tr.append(tdType);
 
     tdText(tr, fmt2(isP2P ? grossUSDT(it) : row._amount), 'num strong');
-    tdText(tr, isP2P ? fmt2(it.unitPrice) : '—', 'num');
+    tdText(tr, isP2P ? fmt2p(it.unitPrice) : '—', 'num');
     tdText(tr, isP2P ? (mixed ? fmt0(it.totalPrice) + ' ' + fiatSymOf(it) : fmt0(it.totalPrice)) : '—', 'num strong');
     tdText(tr, isP2P ? fiatSymOf(it) : (it.network || it.coin || '—'));
     const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
@@ -1222,7 +1225,7 @@ function openDetails(o) {
     wrap.append(detailRow('الرسوم', fmt2(feeVal) + ' ' + o.asset));
     wrap.append(detailRow('الكمية المُحرّرة', fmt2(o.amount) + ' ' + o.asset));
   }
-  wrap.append(detailRow('السعر', fmt2(o.unitPrice) + (fiat ? ' ' + fiat : '')));
+  wrap.append(detailRow('السعر', fmt2p(o.unitPrice) + (fiat ? ' ' + fiat : '')));
   wrap.append(detailRow('المبلغ بالعملة المحلية', fmt0(o.totalPrice) + (fiat ? ' ' + fiat : '')));
   wrap.append(detailRow('الطرف الآخر', o.counterPart || '—'));
   if (o.advertisementRole) {
