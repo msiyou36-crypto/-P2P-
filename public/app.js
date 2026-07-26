@@ -31,7 +31,7 @@ const PAGE_SIZE = 50;
 
 /* ============================ تنسيق ============================ */
 
-const nf2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+const nf2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 });
 const nf0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const fmt2 = (n) => nf2.format(n || 0);
 const fmt0 = (n) => nf0.format(n || 0);
