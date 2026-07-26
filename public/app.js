@@ -72,7 +72,7 @@ function computeBalanceMap() {
   for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
     if (String(t.coin || '').toUpperCase() !== 'USDT') continue; // الرصيد بالـ USDT فقط
-    const isOut = t.kind === 'withdraw' || t.kind === 'pay-out';
+    const isOut = t.kind === 'withdraw' || t.kind === 'pay-out' || t.kind === 'convert-out';
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
     evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v });
   }
@@ -127,8 +127,11 @@ const TX_KIND = {
   withdraw: { ar: 'سحب', color: 'var(--critical)' },
   'pay-out': { ar: 'إرسال Pay', color: 'var(--critical)' },
   'pay-in': { ar: 'استلام Pay', color: 'var(--good)' },
+  'convert-out': { ar: 'تحويل (USDT→)', color: 'var(--critical)' },
+  'convert-in': { ar: 'تحويل (→USDT)', color: 'var(--good)' },
 };
 const isPayKind = (k) => k === 'pay-out' || k === 'pay-in';
+const isConvertKind = (k) => k === 'convert-out' || k === 'convert-in';
 const TX_STATUS = {
   COMPLETED: { ar: 'مكتمل', color: 'var(--good)' },
   PENDING: { ar: 'قيد المعالجة', color: 'var(--warn)' },
@@ -482,7 +485,7 @@ function applyFilters() {
   const [from, to] = rangeBounds();
   const q = f.q.trim().toLowerCase();
   const typeIsP2P = f.type === 'SELL' || f.type === 'BUY';
-  const typeIsTx = f.type === 'deposit' || f.type === 'withdraw' || f.type === 'pay';
+  const typeIsTx = f.type === 'deposit' || f.type === 'withdraw' || f.type === 'pay' || f.type === 'convert';
   const statusIsTx = f.status === 'PENDING' || f.status === 'FAILED';
   const statusIsOther = f.status === 'other';
 
@@ -502,6 +505,7 @@ function applyFilters() {
     if (f.fiat !== 'all') return false; // الحوالات بالـ USDT — لا تندرج تحت عملة محلية بعينها
     if (typeIsTx) {
       if (f.type === 'pay') { if (!isPayKind(t.kind)) return false; }
+      else if (f.type === 'convert') { if (!isConvertKind(t.kind)) return false; }
       else if (t.kind !== f.type) return false;
     }
     if (!statusMatchTx(t.status, f.status)) return false;
@@ -1244,9 +1248,16 @@ function openTransferDetails(t) {
   const ki = TX_KIND[t.kind] || { ar: t.kind, color: 'var(--muted)' };
   const si = txStatusInfo(t.status);
   const isPay = isPayKind(t.kind);
+  const isConvert = isConvertKind(t.kind);
   wrap.append(detailRow('النوع', chip(ki.ar + ' ' + (t.coin || ''), ki.color)));
   wrap.append(detailRow('الحالة', chip(si.ar, si.color)));
-  wrap.append(detailRow('الكمية', fmt2(t.amount) + ' ' + (t.coin || '')));
+  if (isConvert && t.fromAsset && t.toAsset) {
+    wrap.append(detailRow('حوّلت من', fmt2(t.fromAmount) + ' ' + t.fromAsset));
+    wrap.append(detailRow('إلى', fmt2(t.toAmount) + ' ' + t.toAsset));
+    wrap.append(detailRow('قيمة USDT', fmt2(t.amount) + ' USDT'));
+  } else {
+    wrap.append(detailRow('الكمية', fmt2(t.amount) + ' ' + (t.coin || '')));
+  }
   if (t.counterPart) wrap.append(detailRow(t.kind === 'pay-in' ? 'من' : 'إلى', t.counterPart));
   if (isPay && t.orderType) wrap.append(detailRow('نوع Pay', t.orderType));
   if (t.kind === 'withdraw') {
@@ -1703,7 +1714,7 @@ async function runSync() {
         if (ev.error) { sawError = ev.error; }
         else if (ev.done) {
           $('#syncPct').style.width = '100%';
-          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0);
+          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0);
           toast(`اكتملت المزامنة ✓ — ${fmt0(ev.added)} طلب و ${fmt0(newTx)} حوالة (جديدة)`);
         } else {
           if (ev.msg) $('#syncMsg').textContent = ev.msg;

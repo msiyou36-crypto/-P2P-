@@ -353,6 +353,44 @@ function normalizePay(raw) {
   };
 }
 
+/* ===================== عمليات التحويل (Convert) ===================== */
+
+/** توحيد عملية تحويل عملة (مثل USDT → TRX) في شكل الحوالة.
+ *  نتتبّع جانب الـ USDT: إن كان USDT مصدرًا فهو مصروف (convert-out)،
+ *  وإن كان وجهةً فهو دخل (convert-in). المبلغ المحفوظ هو قيمة الـ USDT. */
+function normalizeConvert(raw) {
+  const from = String(raw.fromAsset || '').trim().toUpperCase();
+  const to = String(raw.toAsset || '').trim().toUpperCase();
+  const fromAmt = num(raw.fromAmount);
+  const toAmt = num(raw.toAmount);
+  const usdtIsFrom = from === 'USDT';
+  const usdtIsTo = to === 'USDT';
+  const t = Number(raw.createTime) || Date.now();
+  const other = usdtIsFrom ? to : from; // العملة المقابلة للـ USDT (تظهر في عمود الشبكة)
+  return {
+    id: 'CVT' + String(raw.orderId || raw.quoteId || (t + '' + fromAmt)),
+    kind: usdtIsTo ? 'convert-in' : 'convert-out',
+    coin: (usdtIsFrom || usdtIsTo) ? 'USDT' : from,
+    network: (usdtIsFrom || usdtIsTo) ? other : to,
+    amount: usdtIsTo ? toAmt : fromAmt, // قيمة الـ USDT (أو المصدر إن لم يكن أيّهما USDT)
+    fee: 0,
+    status: String(raw.orderStatus || '') === 'SUCCESS' ? 'COMPLETED' : 'PENDING',
+    statusCode: null,
+    address: '',
+    txId: String(raw.orderId || ''),
+    counterPart: '',
+    fromAsset: from,
+    fromAmount: fromAmt,
+    toAsset: to,
+    toAmount: toAmt,
+    time: t,
+    completeTime: t,
+    note: '',
+    reference: '',
+    source: 'binance',
+  };
+}
+
 /** إدراج/تحديث حوالة. يُرجع 'added' أو 'updated' أو 'same' */
 function upsertTransfer(t) {
   if (!t.id || t.id === 'D' || t.id === 'W') return 'same';
@@ -440,11 +478,12 @@ async function* syncGenerator() {
   const minStart = now - rangeHours * 3600000;
   const p2pWindows = makeWindows(now, minStart, 29 * 86400000); // C2C: أقصى نافذة 30 يومًا
   const txWindows = makeWindows(now, minStart, 89 * 86400000);  // الإيداع/السحب: أقصى نافذة 90 يومًا
+  const convertWindows = makeWindows(now, minStart, 29 * 86400000); // Convert: أقصى نافذة 30 يومًا
 
   let added = 0, updated = 0, fetched = 0;
-  let depAdded = 0, wdAdded = 0, payAdded = 0, txUpdated = 0;
+  let depAdded = 0, wdAdded = 0, payAdded = 0, cvtAdded = 0, txUpdated = 0;
   let step = 0;
-  const totalSteps = p2pWindows.length * 2 + txWindows.length * 3;
+  const totalSteps = p2pWindows.length * 2 + txWindows.length * 3 + convertWindows.length;
   const prog = (msg) => { step++; return { msg, pct: Math.min(1 + Math.round((step / totalSteps) * 96), 97) }; };
 
   const result = { done: true };
@@ -535,9 +574,30 @@ async function* syncGenerator() {
       yield { msg: 'تعذّر جلب عمليات Binance Pay (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
     }
 
+    /* ---- سجل التحويل (Convert: مثل USDT → TRX) ----
+       نقطة /sapi/v1/convert/tradeFlow: أقصى نافذة 30 يومًا، حتى 1000 سجل،
+       ووزنها على حساب المستخدم (UID) ضمن الحد. نغلّفها بـ try/catch حتى
+       لا يوقف فشلُها بقيةَ المزامنة. */
+    try {
+      for (const [s, e] of convertWindows) {
+        yield prog(`جلب سجل التحويل (Convert): ${dayLabel(s)} ← ${dayLabel(e)}`);
+        const j = await signedGet(base, '/sapi/v1/convert/tradeFlow',
+          { startTime: s, endTime: e, limit: 1000 }, offset);
+        const rows = Array.isArray(j.list) ? j.list : [];
+        for (const raw of rows) {
+          const r = upsertTransfer(normalizeConvert(raw));
+          if (r === 'added') cvtAdded++;
+          else if (r === 'updated') txUpdated++;
+        }
+        await sleep(1000);
+      }
+    } catch (err) {
+      yield { msg: 'تعذّر جلب سجل التحويل Convert (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
+    }
+
     AC().lastSync = Date.now();
     Object.assign(result, {
-      added, updated, fetched, depAdded, wdAdded, payAdded, txUpdated,
+      added, updated, fetched, depAdded, wdAdded, payAdded, cvtAdded, txUpdated,
       total: Object.keys(orders).length,
       totalTx: Object.keys(transfers).length,
       lastSync: AC().lastSync,
