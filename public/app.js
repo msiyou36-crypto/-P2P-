@@ -189,6 +189,19 @@ function distinctFiats(list) {
 }
 const symForCode = (code) => (FIAT_INFO[code] && FIAT_INFO[code].sym) || code;
 
+// عملة Pay المُدخلة يدويًا في عمود «العملة/الشبكة»
+function payFiatCode(t) {
+  const lbl = String(t.networkLabelOverride || '').trim();
+  if (!lbl) return '';
+  if (FIAT_INFO[lbl.toUpperCase()]) return lbl.toUpperCase();
+  return SYM_TO_CODE[lbl] || '';
+}
+// عملية Pay إرسال تُعامَل كبيع: أُدخل لها مبلغ محلي وعملة محلية معروفة
+function isPaySale(t) {
+  return t.kind === 'pay-out' && t.status === 'COMPLETED'
+    && t.totalPriceOverride != null && !!payFiatCode(t);
+}
+
 function chip(text, color) {
   const span = document.createElement('span');
   span.className = 'chip';
@@ -586,18 +599,27 @@ function renderTiles() {
   const completed = state.filtered.filter((o) => o.orderStatus === 'COMPLETED');
   const sells = completed.filter((o) => o.tradeType === 'SELL');
   const buys = completed.filter((o) => o.tradeType === 'BUY');
-  const sellAmt = sells.reduce((s, o) => s + grossUSDT(o), 0);
+  // عمليات Pay إرسال التي أُدخل لها مبلغ محلي تُعامَل كمبيعات
+  const paySales = state.filteredTx.filter(isPaySale);
+  const sellAmt = sells.reduce((s, o) => s + grossUSDT(o), 0) + paySales.reduce((s, t) => s + (t.amount || 0), 0);
   const buyAmt = buys.reduce((s, o) => s + grossUSDT(o), 0);
   const commission = completed.reduce((s, o) => s + effComm(o), 0);
 
-  const fiats = distinctFiats(completed);
-  const useFiat = state.filters.fiat !== 'all' ? state.filters.fiat : (dominantFiat(sells) || dominantFiat(completed));
+  // العملات المتاحة تشمل عملات Pay اليدوية أيضًا
+  const fiats = Array.from(new Set([...distinctFiats(completed), ...paySales.map(payFiatCode).filter(Boolean)]));
+  const useFiat = state.filters.fiat !== 'all'
+    ? state.filters.fiat
+    : (dominantFiat(sells) || (paySales[0] && payFiatCode(paySales[0])) || dominantFiat(completed));
   const fiatSells = sells.filter((o) => fiatCode(o) === useFiat);
-  const sellFiat = fiatSells.reduce((s, o) => s + effTotalPrice(o), 0);
-  const fiatSellAmt = fiatSells.reduce((s, o) => s + o.amount, 0);
+  const payFiatSales = paySales.filter((t) => payFiatCode(t) === useFiat);
+  const sellFiat = fiatSells.reduce((s, o) => s + effTotalPrice(o), 0)
+    + payFiatSales.reduce((s, t) => s + effTotalPrice(t), 0);
+  const fiatSellAmt = fiatSells.reduce((s, o) => s + o.amount, 0)
+    + payFiatSales.reduce((s, t) => s + (t.amount || 0), 0);
   const avgPrice = fiatSellAmt > 0 ? sellFiat / fiatSellAmt : 0;
   const sym = symForCode(useFiat) || 'العملة';
   const multi = state.filters.fiat === 'all' && fiats.length > 1;
+  const sellCount = sells.length + payFiatSales.length;
 
   const dep = state.filteredTx.filter((t) => t.kind === 'deposit' && t.status === 'COMPLETED' && t.coin === 'USDT');
   const wd = state.filteredTx.filter((t) => t.kind === 'withdraw' && t.status === 'COMPLETED' && t.coin === 'USDT');
@@ -606,9 +628,9 @@ function renderTiles() {
   const nOps = state.filtered.length + state.filteredTx.length;
 
   const tiles = [
-    { label: 'مبيعات', value: fmt2(sellAmt), unit: 'USDT', sub: `${fmt0(sells.length)} طلب مكتمل` },
+    { label: 'مبيعات', value: fmt2(sellAmt), unit: 'USDT', sub: `${fmt0(sells.length)} P2P${paySales.length ? ' · ' + fmt0(paySales.length) + ' Pay' : ''}` },
     { label: 'مشتريات', value: fmt2(buyAmt), unit: 'USDT', sub: `${fmt0(buys.length)} طلب مكتمل` },
-    { label: 'مقبوضات البيع', value: fmt0(sellFiat), unit: sym, sub: multi ? `بعملة ${sym} · اختر العملة للتفصيل` : 'الطلبات المكتملة' },
+    { label: 'مقبوضات البيع', value: fmt0(sellFiat), unit: sym, sub: multi ? `بعملة ${sym} · اختر العملة للتفصيل` : `${fmt0(sellCount)} عملية بيع` },
     { label: 'متوسط سعر البيع', value: avgPrice ? fmt2p(avgPrice) : '—', unit: avgPrice ? `${sym}/USDT` : '', sub: multi ? `بعملة ${sym}` : 'مرجّح بالكمية' },
     { label: 'إجمالي الإيداع', value: fmt2(depSum), unit: 'USDT', sub: `${fmt0(dep.length)} عملية مكتملة` },
     { label: 'إجمالي السحب', value: fmt2(wdSum), unit: 'USDT', sub: `${fmt0(wd.length)} عملية مكتملة` },
