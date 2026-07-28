@@ -409,6 +409,28 @@ td.col-note { padding: 6px 8px; }
 .note-input.readonly::placeholder { opacity: 0.3; }
 .detail-annot.readonly { background: transparent; color: var(--ink-2); }
 
+/* خانة تعديل السعر/المبلغ داخل الجدول */
+td.editable { padding: 4px 6px; }
+.num-input {
+  width: 100%;
+  min-width: 74px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  direction: ltr;
+  padding: 5px 7px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.num-input:hover { border-color: var(--border); background: var(--surface-2); }
+.num-input:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); }
+.num-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
+.num-input.is-edited, td.editable.is-edited { color: var(--accent); }
+.num-input.is-edited { border-color: rgba(240, 185, 11, 0.35); }
+
 /* ============ شاشة تسجيل الدخول ============ */
 .login-screen {
   position: fixed;

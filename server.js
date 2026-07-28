@@ -223,9 +223,11 @@ function normalizeOrder(raw, source) {
 function upsertOrder(o) {
   const prev = orders[o.orderNumber];
   if (!prev) { orders[o.orderNumber] = o; return 'added'; }
-  // بيانات المنصة أوثق من الإدخال اليدوي، مع الحفاظ على الملاحظة والإشاري (إدخال المستخدم)
+  // بيانات المنصة أوثق من الإدخال اليدوي، مع الحفاظ على الملاحظة والإشاري وتعديلات السعر/المبلغ (إدخال المستخدم)
   if (prev.note && !o.note) o.note = prev.note;
   if (prev.reference && !o.reference) o.reference = prev.reference;
+  if (prev.unitPriceOverride != null) o.unitPriceOverride = prev.unitPriceOverride;
+  if (prev.totalPriceOverride != null) o.totalPriceOverride = prev.totalPriceOverride;
   if (prev.source === 'binance' && o.source === 'manual') return 'same';
   const changed = JSON.stringify(prev) !== JSON.stringify(o);
   orders[o.orderNumber] = o;
@@ -828,6 +830,17 @@ const server = http.createServer(async (req, res) => {
       const o = orders[id];
       if (typeof body.note === 'string') o.note = body.note.slice(0, 2000);
       if (typeof body.reference === 'string') o.reference = body.reference.slice(0, 2000);
+      // تعديل يدوي للسعر/المبلغ يبقى بعد المزامنة ('' يعني إلغاء التعديل والرجوع لقيمة المنصة)
+      if ('unitPrice' in body) {
+        const s = String(body.unitPrice).trim();
+        if (s === '') delete o.unitPriceOverride;
+        else { const v = Number(s); if (Number.isFinite(v) && v >= 0) o.unitPriceOverride = v; }
+      }
+      if ('totalPrice' in body) {
+        const s = String(body.totalPrice).trim();
+        if (s === '') delete o.totalPriceOverride;
+        else { const v = Number(s); if (Number.isFinite(v) && v >= 0) o.totalPriceOverride = v; }
+      }
       await saveOrders();
       sendJSON(res, 200, { ok: true, order: o });
       return;

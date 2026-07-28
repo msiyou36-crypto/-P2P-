@@ -46,6 +46,9 @@ const P2P_FEE = 0.06;
 const effComm = (o) => (o.commission > 0 ? o.commission : (o.orderStatus === 'COMPLETED' ? P2P_FEE : 0));
 // كمية USDT شاملة العمولة (= «عبر العملات الرقمية» في Binance)
 const grossUSDT = (o) => (o.amount || 0) + effComm(o);
+// السعر والمبلغ الفعّالان: يُفضّل تعديل المستخدم اليدوي إن وُجد، وإلا قيمة المنصة
+const effUnitPrice = (o) => (o.unitPriceOverride != null ? o.unitPriceOverride : (o.unitPrice || 0));
+const effTotalPrice = (o) => (o.totalPriceOverride != null ? o.totalPriceOverride : (o.totalPrice || 0));
 
 /* ================== الرصيد التراكمي المتبقي ==================
    عمود «الباقي من USDT» يعمل كَكشف حساب: يعرض الرصيد بعد كل عملية. */
@@ -523,7 +526,7 @@ function ledgerRow(item, kind) {
   if (kind === 'transfer') {
     return { _kind: 'transfer', raw: item, _t: item.time, _type: item.kind, _amount: item.amount, _price: null, _total: null, _status: item.status };
   }
-  return { _kind: 'p2p', raw: item, _t: item.createTime, _type: item.tradeType, _amount: item.amount, _price: item.unitPrice, _total: item.totalPrice, _status: item.orderStatus };
+  return { _kind: 'p2p', raw: item, _t: item.createTime, _type: item.tradeType, _amount: item.amount, _price: effUnitPrice(item), _total: effTotalPrice(item), _status: item.orderStatus };
 }
 function buildLedger() {
   const rows = [];
@@ -590,7 +593,7 @@ function renderTiles() {
   const fiats = distinctFiats(completed);
   const useFiat = state.filters.fiat !== 'all' ? state.filters.fiat : (dominantFiat(sells) || dominantFiat(completed));
   const fiatSells = sells.filter((o) => fiatCode(o) === useFiat);
-  const sellFiat = fiatSells.reduce((s, o) => s + o.totalPrice, 0);
+  const sellFiat = fiatSells.reduce((s, o) => s + effTotalPrice(o), 0);
   const fiatSellAmt = fiatSells.reduce((s, o) => s + o.amount, 0);
   const avgPrice = fiatSellAmt > 0 ? sellFiat / fiatSellAmt : 0;
   const sym = symForCode(useFiat) || 'العملة';
@@ -1068,6 +1071,57 @@ async function saveAnnotation(kind, entity, field, value, inputEl) {
   } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
 }
 
+// خانة قابلة للتعديل للسعر/المبلغ (P2P فقط) — التعديل للمسؤول فقط ويبقى بعد المزامنة
+function priceCell(order, field, display) {
+  const td = document.createElement('td');
+  td.className = 'num strong editable';
+  const overKey = field === 'unitPrice' ? 'unitPriceOverride' : 'totalPriceOverride';
+  const edited = order[overKey] != null;
+  if (state.auth.role !== 'admin') {
+    td.textContent = display;
+    if (edited) td.classList.add('is-edited');
+    return td;
+  }
+  const cur = field === 'unitPrice' ? effUnitPrice(order) : effTotalPrice(order);
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'decimal';
+  input.className = 'num-input';
+  input.value = cur ? String(cur) : '';
+  input.title = 'اضغط للتعديل — يُحفظ تلقائيًا ويبقى بعد المزامنة';
+  if (edited) input.classList.add('is-edited');
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') input.blur(); });
+  input.addEventListener('change', () => savePriceEdit(order, field, input));
+  td.append(input);
+  return td;
+}
+
+async function savePriceEdit(order, field, inputEl) {
+  const overKey = field === 'unitPrice' ? 'unitPriceOverride' : 'totalPriceOverride';
+  const raw = String(inputEl.value || '').trim().replace(/,/g, '');
+  const body = { id: order.orderNumber };
+  if (raw === '') {
+    body[field] = '';
+    delete order[overKey];
+  } else {
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v < 0) { toast('قيمة غير صالحة', 'err'); return; }
+    body[field] = v;
+    order[overKey] = v;
+  }
+  try {
+    await api('/api/orders/annotate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (inputEl) { inputEl.classList.add('saved'); setTimeout(() => inputEl.classList.remove('saved'), 900); }
+    inputEl.classList.toggle('is-edited', order[overKey] != null);
+    renderTiles();
+    renderPriceChart();
+  } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
+}
+
 function tdText(tr, text, cls) {
   const td = document.createElement('td');
   if (cls) td.className = cls;
@@ -1110,8 +1164,10 @@ function renderTable() {
     tr.append(tdType);
 
     tdText(tr, fmt2(isP2P ? grossUSDT(it) : row._amount), 'num strong');
-    tdText(tr, isP2P ? fmt2p(it.unitPrice) : '—', 'num');
-    tdText(tr, isP2P ? (mixed ? fmt0(it.totalPrice) + ' ' + fiatSymOf(it) : fmt0(it.totalPrice)) : '—', 'num strong');
+    if (isP2P) tr.append(priceCell(it, 'unitPrice', fmt2p(effUnitPrice(it))));
+    else tdText(tr, '—', 'num');
+    if (isP2P) tr.append(priceCell(it, 'totalPrice', mixed ? fmt0(effTotalPrice(it)) + ' ' + fiatSymOf(it) : fmt0(effTotalPrice(it))));
+    else tdText(tr, '—', 'num strong');
     tdText(tr, isP2P ? fiatSymOf(it) : (it.network || it.coin || '—'));
     const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
     tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
@@ -1225,8 +1281,8 @@ function openDetails(o) {
     wrap.append(detailRow('الرسوم', fmt2(feeVal) + ' ' + o.asset));
     wrap.append(detailRow('الكمية المُحرّرة', fmt2(o.amount) + ' ' + o.asset));
   }
-  wrap.append(detailRow('السعر', fmt2p(o.unitPrice) + (fiat ? ' ' + fiat : '')));
-  wrap.append(detailRow('المبلغ بالعملة المحلية', fmt0(o.totalPrice) + (fiat ? ' ' + fiat : '')));
+  wrap.append(detailRow('السعر', fmt2p(effUnitPrice(o)) + (fiat ? ' ' + fiat : '')));
+  wrap.append(detailRow('المبلغ بالعملة المحلية', fmt0(effTotalPrice(o)) + (fiat ? ' ' + fiat : '')));
   wrap.append(detailRow('الطرف الآخر', o.counterPart || '—'));
   if (o.advertisementRole) {
     wrap.append(detailRow('دورك في الطلب', o.advertisementRole === 'MAKER' ? 'معلن (Maker)' : 'منفّذ (Taker)'));
@@ -1364,8 +1420,8 @@ function ledgerRows() {
       type: isP2P ? (it.tradeType === 'SELL' ? 'بيع' : 'شراء') : ((TX_KIND[it.kind] && TX_KIND[it.kind].ar) || it.kind),
       amount: isP2P ? grossUSDT(it) : it.amount,
       balance: (() => { const b = state.balMap && state.balMap.get(balKey(it, isP2P)); return b == null ? '' : b; })(),
-      price: isP2P ? it.unitPrice : '',
-      total: isP2P ? it.totalPrice : '',
+      price: isP2P ? effUnitPrice(it) : '',
+      total: isP2P ? effTotalPrice(it) : '',
       curNet: isP2P ? fiatSymOf(it) : (it.network || it.coin || ''),
       party: it.counterPart || '',
       status: isP2P ? statusInfo(it.orderStatus).ar : txStatusInfo(it.status).ar,
