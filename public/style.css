@@ -430,6 +430,22 @@ td.editable { padding: 4px 6px; }
 .num-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
 .num-input.is-edited, td.editable.is-edited { color: var(--accent); }
 .num-input.is-edited { border-color: rgba(240, 185, 11, 0.35); }
+.label-input {
+  width: 100%;
+  min-width: 60px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ink);
+  font: inherit;
+  text-align: center;
+  padding: 5px 7px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.label-input:hover { border-color: var(--border); background: var(--surface-2); }
+.label-input:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); }
+.label-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
+.label-input.is-edited { color: var(--accent); border-color: rgba(240, 185, 11, 0.35); }
 
 /* ============ شاشة تسجيل الدخول ============ */
 .login-screen {

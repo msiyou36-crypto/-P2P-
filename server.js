@@ -228,6 +228,7 @@ function upsertOrder(o) {
   if (prev.reference && !o.reference) o.reference = prev.reference;
   if (prev.unitPriceOverride != null) o.unitPriceOverride = prev.unitPriceOverride;
   if (prev.totalPriceOverride != null) o.totalPriceOverride = prev.totalPriceOverride;
+  if (prev.networkLabelOverride != null) o.networkLabelOverride = prev.networkLabelOverride;
   if (prev.source === 'binance' && o.source === 'manual') return 'same';
   const changed = JSON.stringify(prev) !== JSON.stringify(o);
   orders[o.orderNumber] = o;
@@ -404,6 +405,7 @@ function upsertTransfer(t) {
   if (prev.reference && !t.reference) t.reference = prev.reference;
   if (prev.unitPriceOverride != null) t.unitPriceOverride = prev.unitPriceOverride;
   if (prev.totalPriceOverride != null) t.totalPriceOverride = prev.totalPriceOverride;
+  if (prev.networkLabelOverride != null) t.networkLabelOverride = prev.networkLabelOverride;
   const changed = JSON.stringify(prev) !== JSON.stringify(t);
   transfers[t.id] = t;
   return changed ? 'updated' : 'same';
@@ -843,6 +845,11 @@ const server = http.createServer(async (req, res) => {
         if (s === '') delete o.totalPriceOverride;
         else { const v = Number(s); if (Number.isFinite(v) && v >= 0) o.totalPriceOverride = v; }
       }
+      if ('networkLabel' in body) {
+        const s = String(body.networkLabel).trim();
+        if (s === '') delete o.networkLabelOverride;
+        else o.networkLabelOverride = s.slice(0, 40);
+      }
       await saveOrders();
       sendJSON(res, 200, { ok: true, order: o });
       return;
@@ -878,6 +885,11 @@ const server = http.createServer(async (req, res) => {
         const s = String(body.totalPrice).trim();
         if (s === '') delete t.totalPriceOverride;
         else { const v = Number(s); if (Number.isFinite(v) && v >= 0) t.totalPriceOverride = v; }
+      }
+      if ('networkLabel' in body) {
+        const s = String(body.networkLabel).trim();
+        if (s === '') delete t.networkLabelOverride;
+        else t.networkLabelOverride = s.slice(0, 40);
       }
       await saveTransfers();
       sendJSON(res, 200, { ok: true, transfer: t });

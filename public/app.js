@@ -1098,6 +1098,52 @@ function priceCell(entity, field, display, kind) {
   return td;
 }
 
+// خانة قابلة للتعديل لتسمية «العملة/الشبكة» — للمسؤول فقط وتبقى بعد المزامنة
+function labelCell(entity, kind, display) {
+  const td = document.createElement('td');
+  td.className = 'editable';
+  const edited = entity.networkLabelOverride != null;
+  if (state.auth.role !== 'admin') {
+    td.textContent = edited ? entity.networkLabelOverride : display;
+    if (edited) td.classList.add('is-edited');
+    return td;
+  }
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'label-input';
+  input.value = edited ? entity.networkLabelOverride : display;
+  input.placeholder = '—';
+  input.title = 'اضغط للتعديل — يُحفظ تلقائيًا ويبقى بعد المزامنة';
+  if (edited) input.classList.add('is-edited');
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') input.blur(); });
+  input.addEventListener('change', () => saveLabelEdit(entity, input, kind, display));
+  td.append(input);
+  return td;
+}
+
+async function saveLabelEdit(entity, inputEl, kind, defaultDisplay) {
+  const isTransfer = kind === 'transfer';
+  const val = String(inputEl.value || '').trim();
+  const body = { id: isTransfer ? entity.id : entity.orderNumber };
+  // إن ساوت القيمة الافتراضية أو كانت فارغة نلغي التجاوز
+  if (val === '' || val === defaultDisplay) {
+    body.networkLabel = '';
+    delete entity.networkLabelOverride;
+  } else {
+    body.networkLabel = val;
+    entity.networkLabelOverride = val;
+  }
+  try {
+    await api(isTransfer ? '/api/transfers/annotate' : '/api/orders/annotate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (inputEl) { inputEl.classList.add('saved'); setTimeout(() => inputEl.classList.remove('saved'), 900); }
+    inputEl.classList.toggle('is-edited', entity.networkLabelOverride != null);
+  } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
+}
+
 async function savePriceEdit(entity, field, inputEl, kind) {
   const overKey = field === 'unitPrice' ? 'unitPriceOverride' : 'totalPriceOverride';
   const raw = String(inputEl.value || '').trim().replace(/,/g, '');
@@ -1173,7 +1219,7 @@ function renderTable() {
       tr.append(priceCell(it, 'unitPrice', it.unitPriceOverride != null ? fmt2p(it.unitPriceOverride) : '—', 'transfer'));
       tr.append(priceCell(it, 'totalPrice', it.totalPriceOverride != null ? fmt0(it.totalPriceOverride) : '—', 'transfer'));
     }
-    tdText(tr, isP2P ? fiatSymOf(it) : (it.network || it.coin || '—'));
+    tr.append(labelCell(it, isP2P ? 'order' : 'transfer', isP2P ? fiatSymOf(it) : (it.network || it.coin || '—')));
     const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
     tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
     tdText(tr, it.counterPart || '—');
@@ -1427,7 +1473,7 @@ function ledgerRows() {
       balance: (() => { const b = state.balMap && state.balMap.get(balKey(it, isP2P)); return b == null ? '' : b; })(),
       price: isP2P ? effUnitPrice(it) : (it.unitPriceOverride != null ? it.unitPriceOverride : ''),
       total: isP2P ? effTotalPrice(it) : (it.totalPriceOverride != null ? it.totalPriceOverride : ''),
-      curNet: isP2P ? fiatSymOf(it) : (it.network || it.coin || ''),
+      curNet: it.networkLabelOverride != null ? it.networkLabelOverride : (isP2P ? fiatSymOf(it) : (it.network || it.coin || '')),
       party: it.counterPart || '',
       status: isP2P ? statusInfo(it.orderStatus).ar : txStatusInfo(it.status).ar,
       fee: isP2P ? effComm(it) : (it.fee || 0),
