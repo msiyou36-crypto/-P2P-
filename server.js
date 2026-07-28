@@ -399,9 +399,11 @@ function upsertTransfer(t) {
   const has = Object.prototype.hasOwnProperty.call(transfers, t.id);
   const prev = has ? transfers[t.id] : null;
   if (!prev) { transfers[t.id] = t; return 'added'; }
-  // الحفاظ على إدخال المستخدم (الملاحظة والإشاري) عند إعادة المزامنة
+  // الحفاظ على إدخال المستخدم (الملاحظة والإشاري وتعديلات السعر/المبلغ) عند إعادة المزامنة
   if (prev.note && !t.note) t.note = prev.note;
   if (prev.reference && !t.reference) t.reference = prev.reference;
+  if (prev.unitPriceOverride != null) t.unitPriceOverride = prev.unitPriceOverride;
+  if (prev.totalPriceOverride != null) t.totalPriceOverride = prev.totalPriceOverride;
   const changed = JSON.stringify(prev) !== JSON.stringify(t);
   transfers[t.id] = t;
   return changed ? 'updated' : 'same';
@@ -867,6 +869,16 @@ const server = http.createServer(async (req, res) => {
       const t = transfers[id];
       if (typeof body.note === 'string') t.note = body.note.slice(0, 2000);
       if (typeof body.reference === 'string') t.reference = body.reference.slice(0, 2000);
+      if ('unitPrice' in body) {
+        const s = String(body.unitPrice).trim();
+        if (s === '') delete t.unitPriceOverride;
+        else { const v = Number(s); if (Number.isFinite(v) && v >= 0) t.unitPriceOverride = v; }
+      }
+      if ('totalPrice' in body) {
+        const s = String(body.totalPrice).trim();
+        if (s === '') delete t.totalPriceOverride;
+        else { const v = Number(s); if (Number.isFinite(v) && v >= 0) t.totalPriceOverride = v; }
+      }
       await saveTransfers();
       sendJSON(res, 200, { ok: true, transfer: t });
       return;
