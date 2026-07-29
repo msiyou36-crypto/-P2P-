@@ -40,10 +40,9 @@ const nfp = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const fmt2p = (n) => nfp.format(n || 0);
 const pad2 = (n) => String(n).padStart(2, '0');
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
-// رسوم P2P الثابتة من Binance (0.06 USDT). واجهة Binance البرمجية لا تُرجعها لبعض العمليات،
-// فنطبّقها على كل عملية مكتملة لا يرجع لها الـ API رسوماً حقيقية.
-const P2P_FEE = 0.06;
-const effComm = (o) => (o.commission > 0 ? o.commission : (o.orderStatus === 'COMPLETED' ? P2P_FEE : 0));
+// العمولة الفعلية = ما تُرجعه المنصة فقط (الخادم يحسبها من فرق amount/takerAmount).
+// لا نفترض عمولة ثابتة: كثير من حسابات P2P بلا عمولة، فالافتراض يُظهر رقمًا وهميًا.
+const effComm = (o) => (o.commission > 0 ? o.commission : 0);
 // كمية USDT شاملة العمولة (= «عبر العملات الرقمية» في Binance)
 const grossUSDT = (o) => (o.amount || 0) + effComm(o);
 // السعر والمبلغ الفعّالان: يُفضّل تعديل المستخدم اليدوي إن وُجد، وإلا قيمة المنصة
