@@ -409,6 +409,40 @@ td.col-note { padding: 6px 8px; }
 .note-input.readonly::placeholder { opacity: 0.3; }
 .detail-annot.readonly { background: transparent; color: var(--ink-2); }
 
+/* شاشة الصيانة (إيقاف العمل) */
+.maint-screen {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(1200px 600px at 50% -10%, rgba(240, 185, 11, 0.08), transparent), var(--page);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 400;
+}
+.maint-box {
+  width: 100%;
+  max-width: 440px;
+  padding: 32px 26px;
+  text-align: center;
+  background: rgba(26, 26, 25, 0.82);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.maint-icon { font-size: 46px; }
+.maint-box h2 { font-size: 20px; }
+.maint-msg { color: var(--ink-2); font-size: 15px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.maint-link { text-decoration: none; }
+.maint-link, .maint-box .btn { min-width: 180px; }
+
+/* صف مفتاح التبديل داخل النماذج */
+.switch-row { flex-direction: row; align-items: center; gap: 10px; cursor: pointer; }
+.switch-row input { width: 18px; height: 18px; accent-color: var(--accent); }
+
 /* خانة تعديل السعر/المبلغ داخل الجدول */
 td.editable { padding: 4px 6px; }
 .num-input {

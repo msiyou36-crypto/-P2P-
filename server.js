@@ -37,7 +37,7 @@ const ACCOUNT_NAMES = { p2p: 'حوالات P2P', p3p: 'حوالات P3P' };
 function newAccount() {
   return { apiKey: '', apiSecret: '', baseUrl: 'https://api.binance.com', rangeHours: 720, lastSync: null };
 }
-const DEFAULT_CONFIG = { active: 'p2p', accounts: { p2p: newAccount(), p3p: newAccount() }, auth: {} };
+const DEFAULT_CONFIG = { active: 'p2p', accounts: { p2p: newAccount(), p3p: newAccount() }, auth: {}, maintenance: { on: false, message: '', link: '' } };
 // الحساب النشط الحالي (مفاتيحه ومداه)
 const AC = () => (config.accounts[config.active] || (config.accounts[config.active] = newAccount()));
 
@@ -168,6 +168,7 @@ async function initStore() {
   ['apiKey', 'apiSecret', 'baseUrl', 'months', 'lastSync'].forEach((k) => delete config[k]);
 
   // المصادقة + ضبط كلمات السر من البيئة عند أول تشغيل
+  if (!config.maintenance || typeof config.maintenance !== 'object') config.maintenance = { on: false, message: '', link: '' };
   if (!config.auth || typeof config.auth !== 'object') config.auth = {};
   config.auth.admin = config.auth.admin || {};
   config.auth.user = config.auth.user || {};
@@ -680,6 +681,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    /* ---------- حالة الصيانة (عامة للقراءة) ---------- */
+    if (p === '/api/maintenance' && req.method === 'GET') {
+      const m = config.maintenance || { on: false, message: '', link: '' };
+      sendJSON(res, 200, { on: !!m.on, message: m.message || '', link: m.link || '' });
+      return;
+    }
+
     /* ---------- المصادقة ---------- */
     if (p === '/api/auth/status' && req.method === 'GET') {
       sendJSON(res, 200, {
@@ -756,6 +764,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/orders'], ['DELETE', '/api/orders'], ['POST', '/api/orders/bulk'],
       ['POST', '/api/orders/clear'], ['POST', '/api/transfers/clear'],
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
+      ['POST', '/api/maintenance'],
     ];
     // للمسؤول و«مستخدم 2» (الكتابة في الإشاري/الملاحظة فقط)
     const ANNOTATE_ROUTES = [
@@ -770,6 +779,18 @@ const server = http.createServer(async (req, res) => {
     if (gate(ADMIN_ROUTES) && role !== 'admin') { sendJSON(res, 403, { error: 'هذه العملية للمسؤول فقط' }); return; }
     if (gate(ANNOTATE_ROUTES) && role !== 'admin' && role !== 'user2') { sendJSON(res, 403, { error: 'لا تملك صلاحية الكتابة في الإشاري/الملاحظة' }); return; }
     if (gate(LOGIN_ROUTES) && !role) { sendJSON(res, 401, { error: 'يلزم تسجيل الدخول' }); return; }
+
+    /* ---------- ضبط وضع الصيانة (للمسؤول فقط) ---------- */
+    if (p === '/api/maintenance' && req.method === 'POST') {
+      const body = await readBody(req);
+      config.maintenance = config.maintenance || { on: false, message: '', link: '' };
+      if (typeof body.on === 'boolean') config.maintenance.on = body.on;
+      if (typeof body.message === 'string') config.maintenance.message = body.message.slice(0, 2000);
+      if (typeof body.link === 'string') config.maintenance.link = body.link.slice(0, 1000);
+      await saveStore('config', config);
+      sendJSON(res, 200, { ok: true, maintenance: config.maintenance });
+      return;
+    }
 
     /* ---------- سجل الدخول (للمسؤول فقط) ---------- */
     if (p === '/api/auth/log' && req.method === 'GET') {

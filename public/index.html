@@ -91,6 +91,7 @@
         <button id="btnSettings" class="menu-item admin-only" role="menuitem">⚙ الإعدادات</button>
         <button id="btnChangePass" class="menu-item admin-only" role="menuitem">🔑 تغيير كلمات السر</button>
         <button id="btnLoginLog" class="menu-item admin-only" role="menuitem">🕒 سجل الدخول</button>
+        <button id="btnMaintenance" class="menu-item admin-only" role="menuitem">⛔ إيقاف العمل (صيانة)</button>
         <div class="menu-sep"></div>
         <button id="btnLogout" class="menu-item danger-item" role="menuitem">↩ تسجيل الخروج</button>
       </div>
@@ -417,6 +418,43 @@
     <div class="modal-foot">
       <button class="btn" data-close>إغلاق</button>
     </div>
+  </div>
+</div>
+
+<!-- نافذة ضبط وضع الصيانة (للمسؤول فقط) -->
+<div class="backdrop hidden" id="mMaintenance">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="إيقاف العمل">
+    <div class="modal-head"><h3>⛔ إيقاف العمل (صيانة)</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body">
+      <p class="hint">عند التفعيل، يُقفَل النظام أمام المستخدمين وتظهر لهم الملاحظة والرابط أدناه. المسؤول يبقى قادرًا على الدخول. (للمسؤول فقط)</p>
+      <form id="maintForm" class="form-grid" autocomplete="off">
+        <label class="full switch-row">
+          <input type="checkbox" name="on" id="maintOn">
+          <span>تفعيل وضع الصيانة (إيقاف العمل)</span>
+        </label>
+        <label class="full">📝 ملاحظة تظهر للمستخدمين
+          <textarea name="message" id="maintMsg" rows="3" placeholder="مثال: النظام تحت الصيانة مؤقتًا، للتواصل اضغط الرابط."></textarea>
+        </label>
+        <label class="full">🔗 الرابط (يظهر كزر للمستخدمين)
+          <input type="text" name="link" id="maintLink" dir="ltr" placeholder="https://...">
+        </label>
+      </form>
+    </div>
+    <div class="modal-foot">
+      <button class="btn accent" id="btnSaveMaint">حفظ</button>
+      <button class="btn" data-close>إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- شاشة الصيانة (تظهر للمستخدمين عند إيقاف العمل) -->
+<div id="maintenanceScreen" class="maint-screen hidden">
+  <div class="maint-box">
+    <div class="maint-icon">⛔</div>
+    <h2>النظام تحت الصيانة</h2>
+    <p id="maintScreenMsg" class="maint-msg"></p>
+    <a id="maintScreenLink" class="btn accent maint-link hidden" target="_blank" rel="noopener noreferrer">🔗 فتح الرابط</a>
+    <button id="maintLogout" class="btn ghost">↩ تسجيل الخروج</button>
   </div>
 </div>
 

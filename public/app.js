@@ -368,7 +368,8 @@ function handleUnauthorized() {
   showLogin(true);
 }
 
-function enterApp() {
+async function enterApp() {
+  if (await checkMaintenanceGate()) return; // النظام مقفول أمام المستخدم (صيانة)
   $('#loginScreen').classList.add('hidden');
   $('#app').classList.remove('hidden');
   startAppGlitter();
@@ -397,7 +398,7 @@ async function checkAuth() {
   const role = sessionStorage.getItem('p2p_role');
   if (token && role) {
     state.auth = { token, role };
-    try { await loadAll(); enterApp(); return; }
+    try { await loadAll(); await enterApp(); return; }
     catch { clearSession(); }
   }
   showLogin(!!status.configured);
@@ -417,7 +418,7 @@ async function doSetup(e) {
     sessionStorage.setItem('p2p_token', j.token);
     sessionStorage.setItem('p2p_role', j.role);
     await loadAll();
-    enterApp();
+    await enterApp();
   } catch (err) { $('#setupError').textContent = err.message; }
 }
 
@@ -436,7 +437,7 @@ async function doLogin(e) {
     sessionStorage.setItem('p2p_role', j.role);
     $('#loginForm').elements.password.value = '';
     await loadAll();
-    enterApp();
+    await enterApp();
   } catch (err) { $('#loginError').textContent = err.message; }
 }
 
@@ -444,6 +445,55 @@ async function doLogout() {
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   clearSession();
   location.reload();
+}
+
+/* ============================ وضع الصيانة ============================ */
+
+// يفحص حالة الصيانة؛ يُرجع true إن كان النظام مقفولًا أمام هذا المستخدم (فيُوقف دخول التطبيق)
+async function checkMaintenanceGate() {
+  let m;
+  try { m = await api('/api/maintenance'); } catch { return false; }
+  if (m && m.on && state.auth.role !== 'admin') {
+    showMaintenanceScreen(m);
+    return true;
+  }
+  $('#maintenanceScreen').classList.add('hidden');
+  return false;
+}
+
+function showMaintenanceScreen(m) {
+  $('#loginScreen').classList.add('hidden');
+  $('#app').classList.add('hidden');
+  $('#maintScreenMsg').textContent = m.message || 'النظام متوقف مؤقتًا للصيانة. حاول لاحقًا.';
+  const a = $('#maintScreenLink');
+  const link = String(m.link || '').trim();
+  if (/^https?:\/\//i.test(link)) { a.href = link; a.classList.remove('hidden'); }
+  else { a.removeAttribute('href'); a.classList.add('hidden'); }
+  $('#maintenanceScreen').classList.remove('hidden');
+}
+
+async function openMaintenance() {
+  try {
+    const m = await api('/api/maintenance');
+    $('#maintOn').checked = !!m.on;
+    $('#maintMsg').value = m.message || '';
+    $('#maintLink').value = m.link || '';
+  } catch (e) { toast('تعذّر جلب حالة الصيانة: ' + e.message, 'err'); return; }
+  openModal('#mMaintenance');
+}
+
+async function saveMaintenance() {
+  const on = $('#maintOn').checked;
+  const message = $('#maintMsg').value.trim();
+  const link = $('#maintLink').value.trim();
+  try {
+    await api('/api/maintenance', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on, message, link }),
+    });
+    closeModal('#mMaintenance');
+    toast(on ? 'تم تفعيل وضع الصيانة ⛔ — النظام مقفول أمام المستخدمين' : 'تم إيقاف وضع الصيانة ✓ — النظام يعمل');
+  } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
 }
 
 /* ============================ الفلترة ============================ */
@@ -1996,6 +2046,9 @@ function wireEvents() {
 
   $('#btnSync').addEventListener('click', () => { closeMenu(); runSync(); });
   applySyncCooldown();
+  $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
+  $('#btnSaveMaint').addEventListener('click', saveMaintenance);
+  $('#maintLogout').addEventListener('click', doLogout);
   $('#btnAccount').addEventListener('click', () => { closeMenu(); switchAccount(); });
   $('#btnAdd').addEventListener('click', () => { closeMenu(); openAdd(); });
   $('#btnImport').addEventListener('click', () => {
