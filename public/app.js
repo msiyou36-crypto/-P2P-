@@ -1806,8 +1806,37 @@ async function openLoginLog() {
 
 /* ============================ المزامنة ============================ */
 
+/* منع تكرار الضغط على المزامنة بعد الحظر (يُطيل الحظر) — قفل ٣٠ دقيقة يبقى بعد إعادة تحميل الصفحة */
+const SYNC_COOLDOWN_KEY = 'p2pSyncCooldownUntil';
+let _cooldownTimer = null;
+const syncCooldownUntil = () => Number(localStorage.getItem(SYNC_COOLDOWN_KEY) || 0);
+function setSyncCooldown(ms) {
+  localStorage.setItem(SYNC_COOLDOWN_KEY, String(Date.now() + ms));
+  applySyncCooldown();
+}
+function applySyncCooldown() {
+  const btn = $('#btnSync');
+  if (!btn || state.syncing) return;
+  const rem = syncCooldownUntil() - Date.now();
+  if (rem > 0) {
+    btn.disabled = true;
+    btn.title = `المنصة حظرت الطلبات مؤقتًا — انتظر ${Math.ceil(rem / 60000)} دقيقة قبل إعادة المزامنة`;
+    if (_cooldownTimer) clearTimeout(_cooldownTimer);
+    _cooldownTimer = setTimeout(applySyncCooldown, Math.min(rem, 30000));
+  } else {
+    btn.disabled = false;
+    btn.title = 'مزامنة';
+    if (_cooldownTimer) { clearTimeout(_cooldownTimer); _cooldownTimer = null; }
+  }
+}
+
 async function runSync() {
   if (state.syncing) return;
+  const rem = syncCooldownUntil() - Date.now();
+  if (rem > 0) {
+    toast(`المنصة حظرت الطلبات مؤقتًا — انتظر ${Math.ceil(rem / 60000)} دقيقة قبل إعادة المحاولة، فتكرار الضغط يُطيل الحظر`, 'err');
+    return;
+  }
   try { await loadSettings(); } catch {}
   if (!state.settings.hasSecret || !state.settings.apiKeyMasked) {
     toast('لم يُدخل مفتاح API بعد — على المسؤول إدخاله من الإعدادات', 'err');
@@ -1860,9 +1889,11 @@ async function runSync() {
     refreshBalance();
   } catch (e) {
     toast(e.message, 'err');
+    // بعد أي حظر من المنصة: أقفل زر المزامنة ٣٠ دقيقة لمنع تصعيد الحظر
+    if (/HTTP 4(18|29)|حظر/.test(e.message || '')) setSyncCooldown(30 * 60000);
   } finally {
     state.syncing = false;
-    $('#btnSync').disabled = false;
+    applySyncCooldown();
     setTimeout(() => $('#syncBar').classList.add('hidden'), 800);
   }
 }
@@ -1964,6 +1995,7 @@ function wireEvents() {
   document.addEventListener('click', closeMenu);
 
   $('#btnSync').addEventListener('click', () => { closeMenu(); runSync(); });
+  applySyncCooldown();
   $('#btnAccount').addEventListener('click', () => { closeMenu(); switchAccount(); });
   $('#btnAdd').addEventListener('click', () => { closeMenu(); openAdd(); });
   $('#btnImport').addEventListener('click', () => {
