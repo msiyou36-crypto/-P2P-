@@ -489,6 +489,8 @@ async function openMaintenance() {
     $('#maintOn').checked = !!m.on;
     $('#maintMsg').value = m.message || '';
     $('#maintLink').value = m.link || '';
+    // الإيقاف يخصّ هذا السستم وحده — نُبيّن نطاقه حتى لا يلتبس بالسستم الثاني
+    $('#maintSystem').textContent = m.system || location.host;
   } catch (e) { toast('تعذّر جلب حالة الصيانة: ' + e.message, 'err'); return; }
   openModal('#mMaintenance');
 }

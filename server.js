@@ -86,20 +86,25 @@ let config = Object.assign({}, DEFAULT_CONFIG);
 const saveOrders = () => saveStore('orders__' + config.active, orders);
 const saveTransfers = () => saveStore('transfers__' + config.active, transfers);
 
-/* ===== وضع الصيانة: مفتاح تخزين مستقل =====
+/* ===== وضع الصيانة: مفتاح تخزين مستقل لكل سستم (نطاق) =====
  * لا يُخزَّن داخل config، لأن config يُقرأ مرّة واحدة عند الإقلاع ويُكتب كاملًا عند كل حفظ؛
  * فلو عملت نسخة ثانية من الخادم (سستم ثاني) على نفس القاعدة، تكتب نسختها القديمة فوق الصيانة وتُلغيها.
- * القراءة هنا دائمًا من القاعدة مباشرة، والكتابة على هذا المفتاح فقط.
+ * والمفتاح مربوط بنطاق السستم، حتى يمكن إيقاف سستم وترك الثاني شغّالًا رغم اشتراكهما في القاعدة.
+ * القراءة دائمًا من القاعدة مباشرة، والكتابة على هذا المفتاح فقط.
  */
 const MAINT_DEFAULT = { on: false, message: '', link: '' };
-async function loadMaintenance() {
+// اسم السستم = النطاق الذي وصل عليه الطلب (p2p-1-3zpk.onrender.com …)
+const systemOf = (req) => String((req && req.headers && req.headers.host) || 'local').toLowerCase();
+const maintKey = (req) => 'maintenance__' + systemOf(req).replace(/[^a-z0-9]+/g, '_');
+async function loadMaintenance(req) {
+  const system = systemOf(req);
   try {
-    const m = await loadStore('maintenance', null);
+    const m = await loadStore(maintKey(req), null);
     if (m && typeof m === 'object') {
-      return { on: !!m.on, message: String(m.message || ''), link: String(m.link || '') };
+      return { on: !!m.on, message: String(m.message || ''), link: String(m.link || ''), system };
     }
   } catch (e) { console.error('maintenance read: ' + e.message); }
-  return Object.assign({}, MAINT_DEFAULT);
+  return Object.assign({}, MAINT_DEFAULT, { system });
 }
 
 /* ===================== المصادقة والصلاحيات ===================== */
@@ -183,12 +188,8 @@ async function initStore() {
   config.active = config.active === 'p3p' ? 'p3p' : 'p2p';
   ['apiKey', 'apiSecret', 'baseUrl', 'months', 'lastSync'].forEach((k) => delete config[k]);
 
-  // ترحيل وضع الصيانة من config → مفتاح مستقل (مرة واحدة)، ثم حذفه من config نهائيًا
-  if (config.maintenance && typeof config.maintenance === 'object') {
-    const old = await loadStore('maintenance', null);
-    if (!old) { try { await saveStore('maintenance', config.maintenance); } catch {} }
-    delete config.maintenance;
-  }
+  // وضع الصيانة انتقل لمفاتيح مستقلة لكل سستم — يُحذف من config نهائيًا
+  delete config.maintenance;
 
   // المصادقة + ضبط كلمات السر من البيئة عند أول تشغيل
   if (!config.auth || typeof config.auth !== 'object') config.auth = {};
@@ -706,7 +707,7 @@ const server = http.createServer(async (req, res) => {
     /* ---------- حالة الصيانة (عامة للقراءة) ---------- */
     if (p === '/api/maintenance' && req.method === 'GET') {
       // تُقرأ من القاعدة في كل مرة، فأي تغيير من أي نسخة من الخادم يظهر فورًا
-      sendJSON(res, 200, await loadMaintenance());
+      sendJSON(res, 200, await loadMaintenance(req));
       return;
     }
 
@@ -805,11 +806,12 @@ const server = http.createServer(async (req, res) => {
     /* ---------- ضبط وضع الصيانة (للمسؤول فقط) ---------- */
     if (p === '/api/maintenance' && req.method === 'POST') {
       const body = await readBody(req);
-      const m = await loadMaintenance();
+      const m = await loadMaintenance(req);
       if (typeof body.on === 'boolean') m.on = body.on;
       if (typeof body.message === 'string') m.message = body.message.slice(0, 2000);
       if (typeof body.link === 'string') m.link = body.link.slice(0, 1000);
-      await saveStore('maintenance', m);
+      // يُوقف هذا السستم فقط (النطاق الحالي)، والسستم الثاني يبقى شغّالًا
+      await saveStore(maintKey(req), m);
       sendJSON(res, 200, { ok: true, maintenance: m });
       return;
     }
