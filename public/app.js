@@ -369,6 +369,7 @@ function handleUnauthorized() {
 
 async function enterApp() {
   if (await checkMaintenanceGate()) return; // النظام مقفول أمام المستخدم (صيانة)
+  startMaintenanceWatch();
   $('#loginScreen').classList.add('hidden');
   $('#app').classList.remove('hidden');
   startAppGlitter();
@@ -458,6 +459,17 @@ async function checkMaintenanceGate() {
   }
   $('#maintenanceScreen').classList.add('hidden');
   return false;
+}
+
+// متابعة دورية: لو فعّل المسؤول الصيانة والمستخدم داخل النظام أصلًا، يُقفل عليه ويظهر الرابط
+let _maintTimer = null;
+function startMaintenanceWatch() {
+  if (_maintTimer || state.auth.role === 'admin') return;
+  _maintTimer = setInterval(async () => {
+    let m;
+    try { m = await api('/api/maintenance'); } catch { return; }
+    if (m && m.on) { clearInterval(_maintTimer); _maintTimer = null; showMaintenanceScreen(m); }
+  }, 60000);
 }
 
 function showMaintenanceScreen(m) {

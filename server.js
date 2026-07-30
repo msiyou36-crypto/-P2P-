@@ -37,7 +37,7 @@ const ACCOUNT_NAMES = { p2p: 'حوالات P2P', p3p: 'حوالات P3P' };
 function newAccount() {
   return { apiKey: '', apiSecret: '', baseUrl: 'https://api.binance.com', rangeHours: 720, lastSync: null };
 }
-const DEFAULT_CONFIG = { active: 'p2p', accounts: { p2p: newAccount(), p3p: newAccount() }, auth: {}, maintenance: { on: false, message: '', link: '' } };
+const DEFAULT_CONFIG = { active: 'p2p', accounts: { p2p: newAccount(), p3p: newAccount() }, auth: {} };
 // الحساب النشط الحالي (مفاتيحه ومداه)
 const AC = () => (config.accounts[config.active] || (config.accounts[config.active] = newAccount()));
 
@@ -85,6 +85,22 @@ let config = Object.assign({}, DEFAULT_CONFIG);
 // الحفظ مفصول لكل حساب: orders__p2p / transfers__p3p …
 const saveOrders = () => saveStore('orders__' + config.active, orders);
 const saveTransfers = () => saveStore('transfers__' + config.active, transfers);
+
+/* ===== وضع الصيانة: مفتاح تخزين مستقل =====
+ * لا يُخزَّن داخل config، لأن config يُقرأ مرّة واحدة عند الإقلاع ويُكتب كاملًا عند كل حفظ؛
+ * فلو عملت نسخة ثانية من الخادم (سستم ثاني) على نفس القاعدة، تكتب نسختها القديمة فوق الصيانة وتُلغيها.
+ * القراءة هنا دائمًا من القاعدة مباشرة، والكتابة على هذا المفتاح فقط.
+ */
+const MAINT_DEFAULT = { on: false, message: '', link: '' };
+async function loadMaintenance() {
+  try {
+    const m = await loadStore('maintenance', null);
+    if (m && typeof m === 'object') {
+      return { on: !!m.on, message: String(m.message || ''), link: String(m.link || '') };
+    }
+  } catch (e) { console.error('maintenance read: ' + e.message); }
+  return Object.assign({}, MAINT_DEFAULT);
+}
 
 /* ===================== المصادقة والصلاحيات ===================== */
 
@@ -167,8 +183,14 @@ async function initStore() {
   config.active = config.active === 'p3p' ? 'p3p' : 'p2p';
   ['apiKey', 'apiSecret', 'baseUrl', 'months', 'lastSync'].forEach((k) => delete config[k]);
 
+  // ترحيل وضع الصيانة من config → مفتاح مستقل (مرة واحدة)، ثم حذفه من config نهائيًا
+  if (config.maintenance && typeof config.maintenance === 'object') {
+    const old = await loadStore('maintenance', null);
+    if (!old) { try { await saveStore('maintenance', config.maintenance); } catch {} }
+    delete config.maintenance;
+  }
+
   // المصادقة + ضبط كلمات السر من البيئة عند أول تشغيل
-  if (!config.maintenance || typeof config.maintenance !== 'object') config.maintenance = { on: false, message: '', link: '' };
   if (!config.auth || typeof config.auth !== 'object') config.auth = {};
   config.auth.admin = config.auth.admin || {};
   config.auth.user = config.auth.user || {};
@@ -683,8 +705,8 @@ const server = http.createServer(async (req, res) => {
 
     /* ---------- حالة الصيانة (عامة للقراءة) ---------- */
     if (p === '/api/maintenance' && req.method === 'GET') {
-      const m = config.maintenance || { on: false, message: '', link: '' };
-      sendJSON(res, 200, { on: !!m.on, message: m.message || '', link: m.link || '' });
+      // تُقرأ من القاعدة في كل مرة، فأي تغيير من أي نسخة من الخادم يظهر فورًا
+      sendJSON(res, 200, await loadMaintenance());
       return;
     }
 
@@ -783,12 +805,12 @@ const server = http.createServer(async (req, res) => {
     /* ---------- ضبط وضع الصيانة (للمسؤول فقط) ---------- */
     if (p === '/api/maintenance' && req.method === 'POST') {
       const body = await readBody(req);
-      config.maintenance = config.maintenance || { on: false, message: '', link: '' };
-      if (typeof body.on === 'boolean') config.maintenance.on = body.on;
-      if (typeof body.message === 'string') config.maintenance.message = body.message.slice(0, 2000);
-      if (typeof body.link === 'string') config.maintenance.link = body.link.slice(0, 1000);
-      await saveStore('config', config);
-      sendJSON(res, 200, { ok: true, maintenance: config.maintenance });
+      const m = await loadMaintenance();
+      if (typeof body.on === 'boolean') m.on = body.on;
+      if (typeof body.message === 'string') m.message = body.message.slice(0, 2000);
+      if (typeof body.link === 'string') m.link = body.link.slice(0, 1000);
+      await saveStore('maintenance', m);
+      sendJSON(res, 200, { ok: true, maintenance: m });
       return;
     }
 
