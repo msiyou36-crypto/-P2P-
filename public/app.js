@@ -67,18 +67,6 @@ const balKey = (item, isP2P) => (isP2P ? 'o:' + item.orderNumber : 't:' + item.i
  *  تُحسب على كل العمليات المكتملة بالـ USDT (وليس المفلترة فقط) بترتيب زمني
  *  تصاعدي، ثم تُزاح كلها بحيث يساوي أحدثُ صفٍّ رصيدَ المحفظة الحالي — فيكون
  *  الرقم رصيدًا حقيقيًا لا مجرّد تجميع من الصفر. */
-const OUT_KINDS = new Set(['withdraw', 'pay-out', 'convert-out', 'internal-out']);
-
-/** هل هذه الحوالة تمسّ محفظة التمويل (التي تعمل بها P2P)؟
- *  الإيداع من الشبكة ينزل في الحساب الفوري غالبًا، فلا يغيّر رصيد التمويل. */
-function touchesFunding(t) {
-  const w = Number(t.walletType);
-  if (!Number.isFinite(w)) return true; // غير معروف — نحسبه بدل أن نُهمله
-  // ترقيم Binance Pay مختلف: 1 تمويل، 2 فوري
-  if (isPayKind(t.kind)) return w !== 2;
-  return w !== 0; // الإيداع/السحب: 0 = الحساب الفوري
-}
-
 function computeBalanceMap() {
   const evts = [];
   for (const o of state.orders) {
@@ -89,8 +77,7 @@ function computeBalanceMap() {
   for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
     if (String(t.coin || '').toUpperCase() !== 'USDT') continue; // الرصيد بالـ USDT فقط
-    if (!touchesFunding(t)) continue;
-    const isOut = OUT_KINDS.has(t.kind);
+    const isOut = t.kind === 'withdraw' || t.kind === 'pay-out' || t.kind === 'convert-out';
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
     evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v });
   }
@@ -103,8 +90,7 @@ function computeBalanceMap() {
   let run = 0;
   for (const e of evts) { run += e.d; map.set(e.k, run); }
   const off = cur - run; // تثبيت آخر صف على الرصيد الفعلي
-  // رصيد سالب = ينقصنا حركة لم تُجلب؛ الرقم غير موثوق فنعرض «—» بدل رقم خاطئ
-  for (const [k, v] of map) { const b = v + off; map.set(k, b < 0 ? null : b); }
+  for (const [k, v] of map) map.set(k, v + off);
   return map;
 }
 
@@ -148,12 +134,9 @@ const TX_KIND = {
   'pay-in': { ar: 'استلام Pay', color: 'var(--good)' },
   'convert-out': { ar: 'تحويل (USDT→)', color: 'var(--critical)' },
   'convert-in': { ar: 'تحويل (→USDT)', color: 'var(--good)' },
-  'internal-in': { ar: 'وارد من الفوري', color: 'var(--good)' },
-  'internal-out': { ar: 'صادر للفوري', color: 'var(--critical)' },
 };
 const isPayKind = (k) => k === 'pay-out' || k === 'pay-in';
 const isConvertKind = (k) => k === 'convert-out' || k === 'convert-in';
-const isInternalKind = (k) => k === 'internal-out' || k === 'internal-in';
 const TX_STATUS = {
   COMPLETED: { ar: 'مكتمل', color: 'var(--good)' },
   PENDING: { ar: 'قيد المعالجة', color: 'var(--warn)' },
@@ -584,7 +567,7 @@ function applyFilters() {
   const [from, to] = rangeBounds();
   const q = f.q.trim().toLowerCase();
   const typeIsP2P = f.type === 'SELL' || f.type === 'BUY';
-  const typeIsTx = f.type === 'deposit' || f.type === 'withdraw' || f.type === 'pay' || f.type === 'convert' || f.type === 'internal';
+  const typeIsTx = f.type === 'deposit' || f.type === 'withdraw' || f.type === 'pay' || f.type === 'convert';
   const statusIsTx = f.status === 'PENDING' || f.status === 'FAILED';
   const statusIsOther = f.status === 'other';
 
@@ -605,7 +588,6 @@ function applyFilters() {
     if (typeIsTx) {
       if (f.type === 'pay') { if (!isPayKind(t.kind)) return false; }
       else if (f.type === 'convert') { if (!isConvertKind(t.kind)) return false; }
-      else if (f.type === 'internal') { if (!isInternalKind(t.kind)) return false; }
       else if (t.kind !== f.type) return false;
     }
     if (!statusMatchTx(t.status, f.status)) return false;
@@ -1956,7 +1938,7 @@ async function runSync() {
         if (ev.error) { sawError = ev.error; }
         else if (ev.done) {
           $('#syncPct').style.width = '100%';
-          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0) + (ev.intAdded || 0);
+          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0);
           toast(`اكتملت المزامنة ✓ — ${fmt0(ev.added)} طلب و ${fmt0(newTx)} حوالة (جديدة)`);
         } else {
           if (ev.msg) $('#syncMsg').textContent = ev.msg;
