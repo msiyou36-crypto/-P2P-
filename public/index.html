@@ -162,6 +162,7 @@
       <option value="withdraw">سحب</option>
       <option value="pay">Binance Pay</option>
       <option value="convert">تحويل عملة</option>
+      <option value="internal">تحويل بين المحافظ</option>
     </select>
     <select id="fStatus" aria-label="الحالة">
       <option value="all">كل الحالات</option>
@@ -199,7 +200,7 @@
             <th data-sort="_price" class="sortable num">السعر</th>
             <th data-sort="_total" class="sortable num">المبلغ</th>
             <th>العملة/الشبكة</th>
-            <th class="num col-bal" title="الباقي من USDT بعد كل عملية — مثبّت على رصيد محفظة التمويل الحالي. يظهر «—» للعمليات الملغاة وغير USDT، أو إذا لم يُجلب الرصيد بعد.">الباقي من USDT</th>
+            <th class="num col-bal" title="رصيد محفظة التمويل من USDT بعد كل عملية — مثبّت على الرصيد الحالي، محسوبًا من P2P والإيداع/السحب وPay والتحويل بين المحافظ. يظهر «—» للعمليات الملغاة وغير USDT، أو إذا لم يُجلب الرصيد، أو إذا نقصت حركة فصار الرقم غير موثوق.">الباقي من USDT</th>
             <th>الطرف الآخر</th>
             <th data-sort="_status" class="sortable">الحالة</th>
             <th class="col-note">الإشاري</th>
