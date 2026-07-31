@@ -162,7 +162,16 @@ async function loadAccountData(kind) {
     d = await loadStore(kind, {}); // المفتاح القديم قبل نظام الحسابين
     if (d && Object.keys(d).length) { try { await saveStore(kind + '__p2p', d); } catch {} }
   }
-  return d || {};
+  d = d || {};
+  // تنظيف: صفوف التحويل الداخلي بين المحافظ جُلبت في تجربة أُلغيت، فتُحذف من السجل
+  if (kind === 'transfers') {
+    const stale = Object.keys(d).filter((id) => String(d[id] && d[id].kind || '').startsWith('internal-'));
+    if (stale.length) {
+      for (const id of stale) delete d[id];
+      try { await saveStore('transfers__' + config.active, d); } catch {}
+    }
+  }
+  return d;
 }
 
 /** تحميل الإعدادات وبيانات الحساب النشط عند الإقلاع + ترحيل + ضبط كلمات السر من البيئة */
