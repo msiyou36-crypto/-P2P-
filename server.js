@@ -82,9 +82,29 @@ let orders = {};       // الطلبات مفهرسة برقم الطلب
 let transfers = {};    // الإيداع/السحب مفهرسة بمعرّف فريد
 let config = Object.assign({}, DEFAULT_CONFIG);
 
+/* ===== الحفظ مع دمج (سستمان على قاعدة واحدة) =====
+ * كل نسخة من الخادم تحمل السجل في ذاكرتها منذ الإقلاع وتكتبه كاملًا عند الحفظ؛
+ * فالنسخة ذات الذاكرة الأقدم كانت تمحو ما جلبته النسخة الأخرى — «عمليات تختفي»
+ * (نفس علّة وضع الصيانة سابقًا). قبل كل حفظ نقرأ المخزَّن وندمج ما ليس في
+ * ذاكرتنا، ثم نكتب. الحذف والمسح يمرّان بلا دمج وإلا عاد المحذوف من المخزَّن.
+ */
+async function mergeFromStore(key, mem) {
+  try {
+    const stored = await loadStore(key, null);
+    if (stored && typeof stored === 'object') {
+      for (const [id, v] of Object.entries(stored)) if (!(id in mem)) mem[id] = v;
+    }
+  } catch (e) { console.error('merge ' + key + ': ' + e.message); }
+}
 // الحفظ مفصول لكل حساب: orders__p2p / transfers__p3p …
-const saveOrders = () => saveStore('orders__' + config.active, orders);
-const saveTransfers = () => saveStore('transfers__' + config.active, transfers);
+async function saveOrders(opts) {
+  if (!opts || opts.merge !== false) await mergeFromStore('orders__' + config.active, orders);
+  await saveStore('orders__' + config.active, orders);
+}
+async function saveTransfers(opts) {
+  if (!opts || opts.merge !== false) await mergeFromStore('transfers__' + config.active, transfers);
+  await saveStore('transfers__' + config.active, transfers);
+}
 
 /* ===== وضع الصيانة: مفتاح تخزين مستقل لكل سستم (نطاق) =====
  * لا يُخزَّن داخل config، لأن config يُقرأ مرّة واحدة عند الإقلاع ويُكتب كاملًا عند كل حفظ؛
@@ -501,6 +521,9 @@ async function* syncGenerator() {
   }
   const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
   yield { msg: 'جارٍ الاتصال بالمنصة والتحقق من التوقيت…', pct: 1 };
+  // دمج ما كتبه السستم الآخر (على نفس القاعدة) قبل الجلب، حتى لا نمحوه عند الحفظ
+  await mergeFromStore('orders__' + config.active, orders);
+  await mergeFromStore('transfers__' + config.active, transfers);
   const offset = await timeOffset(base);
 
   const now = Date.now();
@@ -859,14 +882,14 @@ const server = http.createServer(async (req, res) => {
       const id = url.searchParams.get('id') || '';
       if (!orders[id]) { sendJSON(res, 404, { error: 'الطلب غير موجود' }); return; }
       delete orders[id];
-      await saveOrders();
+      await saveOrders({ merge: false }); // بلا دمج حتى لا يعود المحذوف من المخزَّن
       sendJSON(res, 200, { ok: true, total: Object.keys(orders).length });
       return;
     }
 
     if (p === '/api/orders/clear' && req.method === 'POST') {
       orders = {};
-      await saveOrders();
+      await saveOrders({ merge: false }); // مسحٌ مقصود — بلا دمج
       sendJSON(res, 200, { ok: true });
       return;
     }
@@ -908,7 +931,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/transfers/clear' && req.method === 'POST') {
       transfers = {};
-      await saveTransfers();
+      await saveTransfers({ merge: false }); // مسحٌ مقصود — بلا دمج
       sendJSON(res, 200, { ok: true });
       return;
     }
