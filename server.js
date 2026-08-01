@@ -162,16 +162,7 @@ async function loadAccountData(kind) {
     d = await loadStore(kind, {}); // المفتاح القديم قبل نظام الحسابين
     if (d && Object.keys(d).length) { try { await saveStore(kind + '__p2p', d); } catch {} }
   }
-  d = d || {};
-  // تنظيف: صفوف التحويل الداخلي بين المحافظ جُلبت في تجربة أُلغيت، فتُحذف من السجل
-  if (kind === 'transfers') {
-    const stale = Object.keys(d).filter((id) => String(d[id] && d[id].kind || '').startsWith('internal-'));
-    if (stale.length) {
-      for (const id of stale) delete d[id];
-      try { await saveStore('transfers__' + config.active, d); } catch {}
-    }
-  }
-  return d;
+  return d || {};
 }
 
 /** تحميل الإعدادات وبيانات الحساب النشط عند الإقلاع + ترحيل + ضبط كلمات السر من البيئة */
@@ -427,6 +418,34 @@ function normalizeConvert(raw) {
   };
 }
 
+/* ============ التحويل الداخلي بين المحافظ (Spot ↔ Funding) ============
+ * لا يظهر في الجدول (ليس عملية تخصّ المستخدم)، لكنه يُغيّر رصيد محفظة التمويل
+ * التي تعمل بها P2P — وبدونه يصير عمود «الباقي من USDT» غلطًا متراكمًا وقد يظهر سالبًا.
+ */
+const INTERNAL_TYPES = ['MAIN_FUNDING', 'FUNDING_MAIN']; // فوري←تمويل ، تمويل←فوري
+function normalizeInternal(raw) {
+  const toFunding = String(raw.type || '').toUpperCase() === 'MAIN_FUNDING';
+  return {
+    id: 'TRF' + String(raw.tranId || ((raw.timestamp || '') + '' + (raw.amount || ''))),
+    kind: toFunding ? 'internal-in' : 'internal-out',
+    coin: String(raw.asset || 'USDT').trim() || 'USDT',
+    network: '',
+    amount: num(raw.amount),
+    fee: 0,
+    status: String(raw.status || '').toUpperCase() === 'CONFIRMED' ? 'COMPLETED' : 'PENDING',
+    statusCode: null,
+    address: '',
+    txId: String(raw.tranId || ''),
+    counterPart: '',
+    time: Number(raw.timestamp) || Date.now(),
+    completeTime: Number(raw.timestamp) || 0,
+    walletType: 1, // الطرف الذي نتتبّعه هو محفظة التمويل
+    note: '',
+    reference: '',
+    source: 'binance',
+  };
+}
+
 /** إدراج/تحديث حوالة. يُرجع 'added' أو 'updated' أو 'same' */
 function upsertTransfer(t) {
   if (!t.id || t.id === 'D' || t.id === 'W') return 'same';
@@ -520,9 +539,9 @@ async function* syncGenerator() {
   const convertWindows = makeWindows(now, minStart, 29 * 86400000); // Convert: أقصى نافذة 30 يومًا
 
   let added = 0, updated = 0, fetched = 0;
-  let depAdded = 0, wdAdded = 0, payAdded = 0, cvtAdded = 0, txUpdated = 0;
+  let depAdded = 0, wdAdded = 0, payAdded = 0, cvtAdded = 0, intAdded = 0, txUpdated = 0;
   let step = 0;
-  const totalSteps = p2pWindows.length * 2 + txWindows.length * 3 + convertWindows.length;
+  const totalSteps = p2pWindows.length * 2 + txWindows.length * (3 + INTERNAL_TYPES.length) + convertWindows.length;
   const prog = (msg) => { step++; return { msg, pct: Math.min(1 + Math.round((step / totalSteps) * 96), 97) }; };
 
   const result = { done: true };
@@ -591,6 +610,36 @@ async function* syncGenerator() {
       await sleep(400);
     }
 
+    /* ---- التحويل الداخلي بين الحساب الفوري ومحفظة التمويل ----
+       نقطة /sapi/v1/asset/transfer: تحتاج «type» في كل طلب، والترقيم بـ current/size.
+       لا تظهر في الجدول؛ الغرض منها تصحيح «الباقي من USDT» فقط.
+       مغلّفة بـ try/catch حتى لا يوقف فشلُها بقيةَ المزامنة. */
+    try {
+      for (const type of INTERNAL_TYPES) {
+        const label = type === 'MAIN_FUNDING' ? 'فوري ← تمويل' : 'تمويل ← فوري';
+        for (const [s, e] of txWindows) {
+          yield prog(`جلب التحويل الداخلي (${label}): ${dayLabel(s)} ← ${dayLabel(e)}`);
+          let current = 1;
+          for (;;) {
+            const j = await signedGet(base, '/sapi/v1/asset/transfer',
+              { type, startTime: s, endTime: e, current, size: 100 }, offset);
+            const rows = Array.isArray(j.rows) ? j.rows : [];
+            for (const raw of rows) {
+              const r = upsertTransfer(normalizeInternal(raw));
+              if (r === 'added') intAdded++;
+              else if (r === 'updated') txUpdated++;
+            }
+            if (rows.length < 100 || current >= 60) break;
+            current++;
+            await sleep(300);
+          }
+          await sleep(400);
+        }
+      }
+    } catch (err) {
+      yield { msg: 'تعذّر جلب التحويل الداخلي بين المحافظ (تم تخطّيه): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
+    }
+
     /* ---- عمليات Binance Pay (إرسال/استلام) ----
        نقطة /sapi/v1/pay/transactions: الحد الأقصى للفترة 90 يومًا، وأقصى 100 سجل
        لكل طلب دون ترقيم صفحات، ووزنها على حساب المستخدم (UID) 3000 وهو ضمن الحد.
@@ -636,7 +685,7 @@ async function* syncGenerator() {
 
     AC().lastSync = Date.now();
     Object.assign(result, {
-      added, updated, fetched, depAdded, wdAdded, payAdded, cvtAdded, txUpdated,
+      added, updated, fetched, depAdded, wdAdded, payAdded, cvtAdded, intAdded, txUpdated,
       total: Object.keys(orders).length,
       totalTx: Object.keys(transfers).length,
       lastSync: AC().lastSync,

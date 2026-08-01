@@ -11,6 +11,7 @@ const state = {
   auth: { role: null, token: null },
   orders: [],
   transfers: [],
+  internal: [],       // التحويل بين المحافظ — للحساب فقط، لا يظهر في الجدول
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
   ledger: [],         // القائمة الموحّدة للجدول
@@ -67,6 +68,17 @@ const balKey = (item, isP2P) => (isP2P ? 'o:' + item.orderNumber : 't:' + item.i
  *  تُحسب على كل العمليات المكتملة بالـ USDT (وليس المفلترة فقط) بترتيب زمني
  *  تصاعدي، ثم تُزاح كلها بحيث يساوي أحدثُ صفٍّ رصيدَ المحفظة الحالي — فيكون
  *  الرقم رصيدًا حقيقيًا لا مجرّد تجميع من الصفر. */
+const OUT_KINDS = new Set(['withdraw', 'pay-out', 'convert-out', 'internal-out']);
+
+/** هل هذه الحوالة تمسّ محفظة التمويل (التي تعمل بها P2P)؟
+ *  الإيداع/السحب على الحساب الفوري لا يغيّر رصيد التمويل، فاحتسابه يُنتج رقمًا سالبًا. */
+function touchesFunding(t) {
+  const w = Number(t.walletType);
+  if (!Number.isFinite(w)) return true; // غير معروف — نحسبه بدل أن نُهمله
+  if (isPayKind(t.kind)) return w !== 2; // ترقيم Binance Pay: 1 تمويل، 2 فوري
+  return w !== 0;                        // الإيداع/السحب: 0 = الحساب الفوري
+}
+
 function computeBalanceMap() {
   const evts = [];
   for (const o of state.orders) {
@@ -74,10 +86,12 @@ function computeBalanceMap() {
     const v = grossUSDT(o); // نفس الرقم المعروض في عمود USDT
     evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v });
   }
-  for (const t of state.transfers) {
+  // التحويل بين المحافظ لا يظهر في الجدول لكنه يدخل الحساب (يغيّر رصيد التمويل)
+  for (const t of state.transfers.concat(state.internal || [])) {
     if (t.status !== 'COMPLETED') continue;
     if (String(t.coin || '').toUpperCase() !== 'USDT') continue; // الرصيد بالـ USDT فقط
-    const isOut = t.kind === 'withdraw' || t.kind === 'pay-out' || t.kind === 'convert-out';
+    if (!touchesFunding(t)) continue;
+    const isOut = OUT_KINDS.has(t.kind);
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
     evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v });
   }
@@ -90,7 +104,8 @@ function computeBalanceMap() {
   let run = 0;
   for (const e of evts) { run += e.d; map.set(e.k, run); }
   const off = cur - run; // تثبيت آخر صف على الرصيد الفعلي
-  for (const [k, v] of map) map.set(k, v + off);
+  // رصيد سالب = تنقصنا حركة لم تُجلب؛ الرقم غير موثوق فنعرض «—» بدل رقم خاطئ
+  for (const [k, v] of map) { const b = v + off; map.set(k, b < 0 ? null : b); }
   return map;
 }
 
@@ -137,6 +152,7 @@ const TX_KIND = {
 };
 const isPayKind = (k) => k === 'pay-out' || k === 'pay-in';
 const isConvertKind = (k) => k === 'convert-out' || k === 'convert-in';
+const isInternalKind = (k) => k === 'internal-out' || k === 'internal-in';
 const TX_STATUS = {
   COMPLETED: { ar: 'مكتمل', color: 'var(--good)' },
   PENDING: { ar: 'قيد المعالجة', color: 'var(--warn)' },
@@ -232,7 +248,11 @@ async function loadOrders() {
 }
 async function loadTransfers() {
   const j = await api('/api/transfers');
-  state.transfers = (j.transfers || []).sort((a, b) => b.time - a.time);
+  const all = (j.transfers || []).sort((a, b) => b.time - a.time);
+  // التحويل بين المحافظ ليس عملية تخصّ المستخدم: لا يظهر في الجدول،
+  // لكنه يدخل حساب «الباقي من USDT» لأنه يغيّر رصيد محفظة التمويل.
+  state.transfers = all.filter((t) => !isInternalKind(t.kind));
+  state.internal = all.filter((t) => isInternalKind(t.kind));
   state.settings.lastSync = j.lastSync;
 }
 async function loadSettings() {
@@ -1938,7 +1958,7 @@ async function runSync() {
         if (ev.error) { sawError = ev.error; }
         else if (ev.done) {
           $('#syncPct').style.width = '100%';
-          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0);
+          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0) + (ev.intAdded || 0);
           toast(`اكتملت المزامنة ✓ — ${fmt0(ev.added)} طلب و ${fmt0(newTx)} حوالة (جديدة)`);
         } else {
           if (ev.msg) $('#syncMsg').textContent = ev.msg;
