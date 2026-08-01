@@ -12,6 +12,7 @@ const state = {
   orders: [],
   transfers: [],
   internal: [],       // تحويل بين المحافظ بقي من مزامنة سابقة — يُستبعد من الجدول والحساب
+  balGap: 0,          // مقدار الحركة الناقصة من السجل (من عمود «الباقي من USDT»)
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
   ledger: [],         // القائمة الموحّدة للجدول
@@ -89,14 +90,24 @@ function computeBalanceMap() {
   const cur = currentUsdtBalance();
   // بدون رصيد المحفظة لا يوجد ما نُثبّت عليه، وأي رقم سيكون مضلّلًا
   // (سالبًا غالبًا لمن يبيع أكثر مما يشتري) — فنعرض «—» بدل رقم خاطئ.
-  if (cur == null || !evts.length) return new Map();
+  if (cur == null || !evts.length) { state.balGap = 0; return new Map(); }
   evts.sort((a, b) => a.t - b.t);
   const map = new Map();
   let run = 0;
   for (const e of evts) { run += e.d; map.set(e.k, run); }
   const off = cur - run; // تثبيت آخر صف على الرصيد الفعلي
-  // رصيد سالب = تنقصنا حركة لم تُجلب؛ الرقم غير موثوق فنعرض «—» بدل رقم خاطئ
-  for (const [k, v] of map) { const b = v + off; map.set(k, b < 0 ? null : b); }
+  // أدنى نقطة في السلسلة: نزولها تحت الصفر بوضوح يعني أن حركة «خرج» ناقصة من
+  // السجل بعد تاريخ تلك الصفوف (بيع/سحب لم يُجلب)، أو أن الرصيد المثبَّت عليه
+  // منقوص (كجلب التمويل دون الفوري). المقدار حدّ أدنى للنقص، ونعرضه بدل الحيرة.
+  let minBal = Infinity;
+  for (const v of map.values()) minBal = Math.min(minBal, v + off);
+  state.balGap = minBal < -1 ? -minBal : 0;
+  for (const [k, v] of map) {
+    const b = v + off;
+    // سالب واضح (أكثر من 1 USDT) = ما قبل الحركة الناقصة، الرقم غير موثوق → «—».
+    // وما فوق ذلك كسورُ رسومٍ وتقريبٍ تُصفَّر حتى لا تختفي صفوف سليمة بلا تنبيه.
+    map.set(k, b < -1 ? null : Math.max(b, 0));
+  }
   return map;
 }
 
@@ -318,9 +329,10 @@ async function refreshBalance() {
   } finally {
     state.balanceLoading = false;
     if (btn) btn.disabled = false;
-    renderBalance();
-    // الرصيد المتبقي مثبّت على رصيد المحفظة، فنعيد بناء الجدول بعد وصوله
+    // الرصيد المتبقي مثبّت على رصيد المحفظة، فنعيد بناء الخريطة قبل عرض البطاقة
+    // (البطاقة تعرض تنبيه «حركة ناقصة» المحسوب داخل الخريطة)
     state.balMap = computeBalanceMap();
+    renderBalance();
     renderTable();
   }
 }
@@ -1354,6 +1366,9 @@ function renderTable() {
 function renderAll() {
   applyFilters();
   state.balMap = computeBalanceMap();
+  // البطاقة تعرض تنبيه «حركة ناقصة» المحسوب في الخريطة أعلاه، فتُحدَّث مع كل
+  // تغيير للبيانات (إضافة يدوية، حذف، استيراد…) لا مع تحديث الرصيد فقط
+  renderBalance();
   renderTiles();
   renderVolChart();
   renderPriceChart();
@@ -1794,7 +1809,10 @@ function renderBalance() {
   const split = b.spotIncluded
     ? `فوري ${fmt2(b.usdtSpot || 0)} · تمويل ${fmt2(b.usdtFunding || 0)}`
     : `⚠ التمويل فقط — تعذّر جلب الحساب الفوري: ${b.spotError || 'خطأ'}`;
-  subEl.textContent = `${split} · متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT`;
+  const gap = state.balGap > 1
+    ? ` · ⚠ في عملية خرج (بيع أو سحب) بمقدار ~${fmt2(state.balGap)} USDT على الأقل ناقصة من السجل — عمود «الباقي» يعرض «—» قبلها. زامن من جديد، وإن بقيت أضفها من «الإضافة اليدوية» بتاريخها الصحيح.`
+    : '';
+  subEl.textContent = `${split} · متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT${gap}`;
   const others = assets
     .filter((a) => String(a.asset).toUpperCase() !== 'USDT' && num(a.free) + num(a.locked) + num(a.freeze) > 0)
     .map((a) => `${a.asset} ${fmt2(num(a.free) + num(a.locked) + num(a.freeze))}`);
