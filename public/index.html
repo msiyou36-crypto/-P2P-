@@ -109,12 +109,12 @@
 
 <main>
 
-  <!-- بطاقة رصيد محفظة التمويل -->
-  <section class="card wallet-card" id="walletCard" aria-label="محفظة التمويل">
+  <!-- بطاقة الرصيد: الحساب الفوري + محفظة التمويل معًا -->
+  <section class="card wallet-card" id="walletCard" aria-label="الرصيد">
     <div class="wallet-main">
-      <div class="wallet-label">💰 رصيد محفظة التمويل (Funding)</div>
+      <div class="wallet-label">💰 الرصيد (الفوري + التمويل)</div>
       <div class="wallet-value"><span id="walletUsdt">—</span><span class="unit">USDT</span></div>
-      <div class="sub" id="walletSub">اضغط «⟳ تحديث الرصيد» لعرض رصيدك الحالي في محفظة التمويل.</div>
+      <div class="sub" id="walletSub">اضغط «⟳ تحديث الرصيد» لعرض رصيدك الحالي في الحساب الفوري ومحفظة التمويل معًا.</div>
     </div>
     <div class="wallet-side">
       <div class="sub" id="walletExtra"></div>
@@ -199,7 +199,7 @@
             <th data-sort="_price" class="sortable num">السعر</th>
             <th data-sort="_total" class="sortable num">المبلغ</th>
             <th>العملة/الشبكة</th>
-            <th class="num col-bal" title="رصيد محفظة التمويل من USDT بعد كل عملية — مثبّت على الرصيد الحالي، ويشمل التحويل بين المحافظ. يظهر «—» للعمليات الملغاة وغير USDT، أو إذا لم يُجلب الرصيد، أو إذا نقصت حركة فصار الرقم غير موثوق.">الباقي من USDT</th>
+            <th class="num col-bal" title="الباقي من USDT بعد كل عملية (الحساب الفوري + محفظة التمويل معًا) — مثبّت على رصيدك الحالي. يظهر «—» للعمليات الملغاة وغير USDT، أو إذا لم يُجلب الرصيد، أو إذا نقصت حركة فصار الرقم غير موثوق.">الباقي من USDT</th>
             <th>الطرف الآخر</th>
             <th data-sort="_status" class="sortable">الحالة</th>
             <th class="col-note">الإشاري</th>

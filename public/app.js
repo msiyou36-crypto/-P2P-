@@ -11,7 +11,7 @@ const state = {
   auth: { role: null, token: null },
   orders: [],
   transfers: [],
-  internal: [],       // التحويل بين المحافظ — للحساب فقط، لا يظهر في الجدول
+  internal: [],       // تحويل بين المحافظ بقي من مزامنة سابقة — يُستبعد من الجدول والحساب
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
   ledger: [],         // القائمة الموحّدة للجدول
@@ -53,7 +53,7 @@ const effTotalPrice = (o) => (o.totalPriceOverride != null ? o.totalPriceOverrid
 /* ================== الرصيد التراكمي المتبقي ==================
    عمود «الباقي من USDT» يعمل كَكشف حساب: يعرض الرصيد بعد كل عملية. */
 
-/** رصيد USDT الحالي في محفظة التمويل، أو null إن لم يُجلب بعد */
+/** رصيد USDT الحالي (الفوري + التمويل معًا)، أو null إن لم يُجلب بعد */
 function currentUsdtBalance() {
   const assets = (state.balance && state.balance.assets) || null;
   if (!assets) return null;
@@ -67,17 +67,10 @@ const balKey = (item, isP2P) => (isP2P ? 'o:' + item.orderNumber : 't:' + item.i
 /** خريطة «الرصيد بعد العملية» لكل عملية.
  *  تُحسب على كل العمليات المكتملة بالـ USDT (وليس المفلترة فقط) بترتيب زمني
  *  تصاعدي، ثم تُزاح كلها بحيث يساوي أحدثُ صفٍّ رصيدَ المحفظة الحالي — فيكون
- *  الرقم رصيدًا حقيقيًا لا مجرّد تجميع من الصفر. */
-const OUT_KINDS = new Set(['withdraw', 'pay-out', 'convert-out', 'internal-out']);
-
-/** هل هذه الحوالة تمسّ محفظة التمويل (التي تعمل بها P2P)؟
- *  الإيداع/السحب على الحساب الفوري لا يغيّر رصيد التمويل، فاحتسابه يُنتج رقمًا سالبًا. */
-function touchesFunding(t) {
-  const w = Number(t.walletType);
-  if (!Number.isFinite(w)) return true; // غير معروف — نحسبه بدل أن نُهمله
-  if (isPayKind(t.kind)) return w !== 2; // ترقيم Binance Pay: 1 تمويل، 2 فوري
-  return w !== 0;                        // الإيداع/السحب: 0 = الحساب الفوري
-}
+ *  الرقم رصيدًا حقيقيًا لا مجرّد تجميع من الصفر.
+ *  الرصيد = الحساب الفوري + محفظة التمويل معًا، فالتحويل بينهما لا يغيّر
+ *  ما نملكه فعلًا ولا يدخل الحساب أصلًا. */
+const OUT_KINDS = new Set(['withdraw', 'pay-out', 'convert-out']);
 
 function computeBalanceMap() {
   const evts = [];
@@ -86,11 +79,9 @@ function computeBalanceMap() {
     const v = grossUSDT(o); // نفس الرقم المعروض في عمود USDT
     evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v });
   }
-  // التحويل بين المحافظ لا يظهر في الجدول لكنه يدخل الحساب (يغيّر رصيد التمويل)
-  for (const t of state.transfers.concat(state.internal || [])) {
+  for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
     if (String(t.coin || '').toUpperCase() !== 'USDT') continue; // الرصيد بالـ USDT فقط
-    if (!touchesFunding(t)) continue;
     const isOut = OUT_KINDS.has(t.kind);
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
     evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v });
@@ -249,8 +240,8 @@ async function loadOrders() {
 async function loadTransfers() {
   const j = await api('/api/transfers');
   const all = (j.transfers || []).sort((a, b) => b.time - a.time);
-  // التحويل بين المحافظ ليس عملية تخصّ المستخدم: لا يظهر في الجدول،
-  // لكنه يدخل حساب «الباقي من USDT» لأنه يغيّر رصيد محفظة التمويل.
+  // التحويل بين الفوري والتمويل لا يغيّر ما نملكه (المحفظتان تُحسبان معًا)،
+  // فيُستبعد من الجدول ومن الحساب. قد يكون بقي منه شيء من مزامنة سابقة.
   state.transfers = all.filter((t) => !isInternalKind(t.kind));
   state.internal = all.filter((t) => isInternalKind(t.kind));
   state.settings.lastSync = j.lastSync;
@@ -1779,7 +1770,7 @@ async function confirmImport() {
   } catch (e) { toast(e.message, 'err'); }
 }
 
-/* ============================ محفظة التمويل ============================ */
+/* =================== الرصيد (الفوري + التمويل) =================== */
 
 function renderBalance() {
   const valEl = $('#walletUsdt'), subEl = $('#walletSub'), extraEl = $('#walletExtra'), updEl = $('#walletUpdated');
@@ -1790,7 +1781,7 @@ function renderBalance() {
     return;
   }
   if (!state.balance) {
-    valEl.textContent = '—'; subEl.textContent = 'اضغط «⟳ تحديث الرصيد» لعرض رصيدك الحالي في محفظة التمويل.';
+    valEl.textContent = '—'; subEl.textContent = 'اضغط «⟳ تحديث الرصيد» لعرض رصيدك الحالي في الحساب الفوري ومحفظة التمويل معًا.';
     return;
   }
   const assets = state.balance.assets || [];
@@ -1798,7 +1789,8 @@ function renderBalance() {
   const free = usdt ? num(usdt.free) : 0;
   const held = usdt ? num(usdt.locked) + num(usdt.freeze) + num(usdt.withdrawing) : 0;
   valEl.textContent = fmt2(free + held);
-  subEl.textContent = `متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT`;
+  const scope = state.balance.spotIncluded ? 'الفوري + التمويل' : 'التمويل فقط (تعذّر جلب الفوري)';
+  subEl.textContent = `متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT · ${scope}`;
   const others = assets
     .filter((a) => String(a.asset).toUpperCase() !== 'USDT' && num(a.free) + num(a.locked) + num(a.freeze) > 0)
     .map((a) => `${a.asset} ${fmt2(num(a.free) + num(a.locked) + num(a.freeze))}`);
@@ -1958,7 +1950,7 @@ async function runSync() {
         if (ev.error) { sawError = ev.error; }
         else if (ev.done) {
           $('#syncPct').style.width = '100%';
-          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0) + (ev.intAdded || 0);
+          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0);
           toast(`اكتملت المزامنة ✓ — ${fmt0(ev.added)} طلب و ${fmt0(newTx)} حوالة (جديدة)`);
         } else {
           if (ev.msg) $('#syncMsg').textContent = ev.msg;
