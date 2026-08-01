@@ -953,12 +953,17 @@ const server = http.createServer(async (req, res) => {
       // الحساب الفوري (Spot): نجمعه مع التمويل لأن التحويل بينهما لا يغيّر ما نملكه فعلًا.
       // فشلُه غير قاتل — نعرض التمويل وحده بدل أن نُفشل الطلب كله.
       let spot = [];
+      let spotError = '';
       try {
-        spot = await signedGet(base, '/sapi/v3/asset/getUserAsset', { needBtcValuation: 'true' }, offset, 'POST');
-      } catch (e) { console.error('spot balance: ' + e.message); }
+        spot = await signedGet(base, '/sapi/v3/asset/getUserAsset', {}, offset, 'POST');
+      } catch (e) { spotError = e.message || 'تعذّر الجلب'; console.error('spot balance: ' + spotError); }
+
+      const NUMS = ['free', 'locked', 'freeze', 'withdrawing', 'btcValuation'];
+      const usdtTotal = (list) => (Array.isArray(list) ? list : [])
+        .filter((a) => String(a.asset || '').toUpperCase() === 'USDT')
+        .reduce((s, a) => s + num(a.free) + num(a.locked) + num(a.freeze) + num(a.withdrawing), 0);
 
       const merged = new Map();
-      const NUMS = ['free', 'locked', 'freeze', 'withdrawing', 'btcValuation'];
       for (const a of [...(Array.isArray(funding) ? funding : []), ...(Array.isArray(spot) ? spot : [])]) {
         const key = String(a.asset || '').toUpperCase();
         if (!key) continue;
@@ -968,7 +973,10 @@ const server = http.createServer(async (req, res) => {
       }
       sendJSON(res, 200, {
         assets: [...merged.values()],
-        spotIncluded: Array.isArray(spot) && spot.length > 0,
+        spotIncluded: !spotError,
+        spotError,
+        usdtFunding: usdtTotal(funding),
+        usdtSpot: usdtTotal(spot),
         updatedAt: Date.now(),
       });
       return;

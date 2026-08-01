@@ -1789,8 +1789,12 @@ function renderBalance() {
   const free = usdt ? num(usdt.free) : 0;
   const held = usdt ? num(usdt.locked) + num(usdt.freeze) + num(usdt.withdrawing) : 0;
   valEl.textContent = fmt2(free + held);
-  const scope = state.balance.spotIncluded ? 'الفوري + التمويل' : 'التمويل فقط (تعذّر جلب الفوري)';
-  subEl.textContent = `متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT · ${scope}`;
+  const b = state.balance;
+  // تقسيم واضح بين المحفظتين: لو رقم الفوري صفر أو ظهر تحذير، عرفنا فورًا أين الخلل
+  const split = b.spotIncluded
+    ? `فوري ${fmt2(b.usdtSpot || 0)} · تمويل ${fmt2(b.usdtFunding || 0)}`
+    : `⚠ التمويل فقط — تعذّر جلب الحساب الفوري: ${b.spotError || 'خطأ'}`;
+  subEl.textContent = `${split} · متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT`;
   const others = assets
     .filter((a) => String(a.asset).toUpperCase() !== 'USDT' && num(a.free) + num(a.locked) + num(a.freeze) > 0)
     .map((a) => `${a.asset} ${fmt2(num(a.free) + num(a.locked) + num(a.freeze))}`);
