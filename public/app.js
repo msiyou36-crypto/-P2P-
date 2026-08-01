@@ -13,6 +13,7 @@ const state = {
   transfers: [],
   internal: [],       // تحويل بين المحافظ بقي من مزامنة سابقة — يُستبعد من الجدول والحساب
   balGap: 0,          // مقدار الحركة الناقصة من السجل (من عمود «الباقي من USDT»)
+  balAbsurd: null,    // عملية بكمية غير معقولة تُفسد حساب «الباقي» (قيمة محلية في خانة USDT غالبًا)
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
   ledger: [],         // القائمة الموحّدة للجدول
@@ -86,6 +87,12 @@ function computeBalanceMap() {
     const isOut = OUT_KINDS.has(t.kind);
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
     evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v });
+  }
+  // عملية بكمية غير معقولة (أكبر عملياتهم الفعلية ~10 آلاف USDT): غالبًا قيمة
+  // بالعملة المحلية كُتبت في خانة الكمية — واحدة كهذه تُفسد العمود كله، فنسمّيها.
+  state.balAbsurd = null;
+  for (const e of evts) {
+    if (Math.abs(e.d) >= 100000 && (!state.balAbsurd || Math.abs(e.d) > Math.abs(state.balAbsurd.d))) state.balAbsurd = e;
   }
   const cur = currentUsdtBalance();
   // بدون رصيد المحفظة لا يوجد ما نُثبّت عليه، وأي رقم سيكون مضلّلًا
@@ -1809,9 +1816,14 @@ function renderBalance() {
   const split = b.spotIncluded
     ? `فوري ${fmt2(b.usdtSpot || 0)} · تمويل ${fmt2(b.usdtFunding || 0)}`
     : `⚠ التمويل فقط — تعذّر جلب الحساب الفوري: ${b.spotError || 'خطأ'}`;
-  const gap = state.balGap > 1
-    ? ` · ⚠ في عملية خرج (بيع أو سحب) بمقدار ~${fmt2(state.balGap)} USDT على الأقل ناقصة من السجل — عمود «الباقي» يعرض «—» قبلها. زامن من جديد، وإن بقيت أضفها من «الإضافة اليدوية» بتاريخها الصحيح.`
-    : '';
+  let gap = '';
+  if (state.balAbsurd) {
+    // عملية واحدة بكمية غير معقولة تفسد العمود كله — نسمّيها بدل تنبيه النقص العام
+    const a = state.balAbsurd;
+    gap = ` · ⚠ توجد عملية بتاريخ ${fmtDT(a.t)} كميتها ${fmt2(Math.abs(a.d))} USDT — رقم غير معقول (غالبًا مبلغ بالعملة المحلية كُتب في خانة الكمية). صحّح كميتها أو احذفها، فهي تُفسد عمود «الباقي» كله.`;
+  } else if (state.balGap > 1) {
+    gap = ` · ⚠ في عملية خرج (بيع أو سحب) بمقدار ~${fmt2(state.balGap)} USDT على الأقل ناقصة من السجل — عمود «الباقي» يعرض «—» قبلها. زامن من جديد، وإن بقيت أضفها من «الإضافة اليدوية» بتاريخها الصحيح.`;
+  }
   subEl.textContent = `${split} · متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT${gap}`;
   const others = assets
     .filter((a) => String(a.asset).toUpperCase() !== 'USDT' && num(a.free) + num(a.locked) + num(a.freeze) > 0)
