@@ -246,32 +246,30 @@ async function initStore() {
       seeded = true;
     }
     /* خمس عمليات بيع أخرى بعد الطلب أعلاه مباشرةً لا تُرجعها المنصة كذلك.
-       الكميات مأخوذة من إشعارات Binance نفسها («قام المشتري بوضع علامة مدفوع
-       على طلب P2P …»)، ومجموعها 886.04 USDT يطابق العجز المرصود بالضبط.
-       المتاح من رقم الطلب أربعة أرقام فقط، فالمعرّف مبدوء بـP2P- ليُعرف أنه
-       إدخال يدوي. السعر تقديري من سعر الطلب المجاور (14:15) — صحّحه من الجدول
-       بالنقر على خانتَي «السعر» و«المبلغ» ليصير المقبوض بالجنيه دقيقًا. */
+       كل القيم منقولة حرفيًا من شاشة «تفاصيل الطلب» في تطبيق Binance: رقم
+       الطلب والكمية والرسوم والسعر والمبلغ بالجنيه ووقت الإنشاء ولقب المشتري.
+       مجموع كمياتها 886.04 USDT يطابق العجز المرصود بالضبط. */
     const MISSING_SELLS = [
-      { tail: '2064', amount: 238.71, min: 18 },
-      { tail: '2768', amount: 170.57, min: 24 },
-      { tail: '6144', amount: 171.34, min: 30 },
-      { tail: '0160', amount: 160.20, min: 36 },
-      { tail: '0608', amount: 144.92, min: 42 },
+      { n: '22916845583096152064', rel: 238.71, price: 5863.01, sdg: 1399601, h: 14, m: 23, s: 45, who: 'ZEZOO0098' },
+      { n: '22916845909626912768', rel: 170.57, price: 5863.00, sdg: 1000090, h: 14, m: 25, s: 3,  who: 'Rania76' },
+      { n: '22916851014434566144', rel: 171.34, price: 5866.00, sdg: 1005107, h: 14, m: 45, s: 20, who: 'PRESTIGE_STORE' },
+      { n: '22916844005940060160', rel: 160.20, price: 5871.33, sdg: 940604,  h: 14, m: 17, s: 29, who: 'AHMED ALIi' },
+      { n: '22916851747372740608', rel: 144.92, price: 5867.00, sdg: 850274,  h: 14, m: 48, s: 15, who: 'Abdostor' },
     ];
-    const EST_PRICE = 5871.35; // سعر الطلب المجاور في 14:15
-    for (const s of MISSING_SELLS) {
-      const id = 'P2P-' + s.tail;
-      if (orders[id]) continue;
-      orders[id] = {
-        orderNumber: id,
+    for (const o of MISSING_SELLS) {
+      // إزالة النسخة التقديرية السابقة (معرّف P2P-xxxx) بعد وصول البيانات الحقيقية
+      const est = 'P2P-' + o.n.slice(-4);
+      if (orders[est]) { delete orders[est]; seeded = true; }
+      if (orders[o.n]) continue;
+      orders[o.n] = {
+        orderNumber: o.n,
         tradeType: 'SELL', asset: 'USDT', fiat: 'SDG', fiatSymbol: 'ج.س',
-        amount: s.amount, takerAmount: s.amount,
-        totalPrice: Math.round(s.amount * EST_PRICE), unitPrice: EST_PRICE,
-        commission: 0.06, counterPart: '', orderStatus: 'COMPLETED',
+        amount: o.rel, takerAmount: o.rel,
+        totalPrice: o.sdg, unitPrice: o.price,
+        commission: 0.06, counterPart: o.who, orderStatus: 'COMPLETED',
         advertisementRole: '',
-        createTime: Date.UTC(2026, 7, 1, 12, s.min, 0), // 14:xx بتوقيت السودان
-        note: 'أُضيفت يدويًا — المنصة لا تُرجع هذا الطلب. الكمية من إشعار Binance، والسعر تقديري فصحّحه.',
-        reference: '', source: 'manual',
+        createTime: Date.UTC(2026, 7, 1, o.h - 2, o.m, o.s), // التطبيق بتوقيت السودان (UTC+2)
+        note: '', reference: '', source: 'binance',
       };
       seeded = true;
     }
@@ -282,7 +280,8 @@ async function initStore() {
       stale1184.orderStatus = 'CANCELLED_BY_SYSTEM';
       seeded = true;
     }
-    if (seeded) { try { await saveOrders(); } catch (e) { console.error(e.message); } }
+    // بلا دمج: الذاكرة هنا نسخةُ المخزَّن للتوّ، والدمج يُعيد النسخ المحذوفة
+    if (seeded) { try { await saveOrders({ merge: false }); } catch (e) { console.error(e.message); } }
   }
 }
 
