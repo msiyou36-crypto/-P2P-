@@ -87,7 +87,7 @@ function computeBalanceMap() {
     if (o.orderStatus !== 'COMPLETED') continue;
     if (o.createTime < cutoff) continue;
     const v = grossUSDT(o); // نفس الرقم المعروض في عمود USDT
-    evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v });
+    evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v, zero: !!o.zeroPoint });
   }
   for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
@@ -97,7 +97,7 @@ function computeBalanceMap() {
     if (isInternalKind(t.kind)) continue;
     const isOut = OUT_KINDS.has(t.kind);
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
-    evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v });
+    evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v, zero: !!t.zeroPoint });
   }
   // عملية بكمية غير معقولة (أكبر عملياتهم الفعلية ~10 آلاف USDT): غالبًا قيمة
   // بالعملة المحلية كُتبت في خانة الكمية — واحدة كهذه تُفسد العمود كله، فنسمّيها.
@@ -128,6 +128,10 @@ function computeBalanceMap() {
     if (b < 0) { if (zIdx < 0) zIdx = i; adj -= b; map.set(evts[i].k, 0); }
     else map.set(evts[i].k, r2(b));
   }
+
+  /* علامة المستخدم «الرصيد صفر بعد هذه العملية» أوثق من أي استنتاج: هو يعرف
+     متى أفرغ محفظته، والنزول تحت الصفر مجرّد دليل ظرفي قد يغيب إن اكتمل السجل. */
+  for (let i = last; i >= 0; i--) if (evts[i].zero) { zIdx = i; break; }
 
   if (zIdx < 0) { state.balGap = 0; state.balGapAt = 0; return map; }
 
@@ -1426,7 +1430,11 @@ function renderTable() {
     }
     tr.append(labelCell(it, isP2P ? 'order' : 'transfer', isP2P ? fiatSymOf(it) : (it.network || it.coin || '—')));
     const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
-    tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
+    const tdBal = tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
+    if (it.zeroPoint && tdBal) {
+      tdBal.classList.add('is-zeropoint');
+      tdBal.title = 'نقطة التثبيت — أنت علّمت أن رصيدك كان صفرًا بعد هذه العملية';
+    }
     tdText(tr, it.counterPart || '—');
 
     const tdSt = document.createElement('td');
@@ -1504,8 +1512,44 @@ function detailRow(key, value, opts = {}) {
     });
     v.append(btn);
   }
+  if (opts.hint) {
+    const h = document.createElement('span');
+    h.className = 'detail-hint';
+    h.textContent = opts.hint;
+    v.append(h);
+  }
   row.append(k, v);
   return row;
+}
+
+/** صفٌّ يُعلّم العملية بأن الرصيد بلغ صفرًا بعدها — عليه يُثبَّت عمود «الباقي» */
+function zeroPointRow(entity, kind) {
+  const wrap = document.createElement('label');
+  wrap.className = 'zero-toggle';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = !!entity.zeroPoint;
+  cb.disabled = state.auth.role !== 'admin';
+  const txt = document.createElement('span');
+  txt.textContent = 'رصيدي كان صفرًا بعد هذه العملية';
+  wrap.append(cb, txt);
+  cb.addEventListener('change', async () => {
+    const on = cb.checked;
+    if (on) entity.zeroPoint = true; else delete entity.zeroPoint;
+    try {
+      await api(kind === 'transfer' ? '/api/transfers/annotate' : '/api/orders/annotate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: kind === 'transfer' ? entity.id : entity.orderNumber, zeroPoint: on }),
+      });
+      renderAll();
+      toast(on ? 'تم التثبيت على هذه العملية ✓' : 'أُلغي التثبيت');
+    } catch (e) {
+      cb.checked = !on;
+      if (on) delete entity.zeroPoint; else entity.zeroPoint = true;
+      toast('تعذّر الحفظ: ' + e.message, 'err');
+    }
+  });
+  return detailRow('تثبيت الباقي', wrap, { hint: 'يُحسب عمود «الباقي من USDT» تصاعديًا من هنا — علّمها عند العملية التي أفرغت محفظتك بعدها' });
 }
 
 function annotDetailRow(entity, field, kind, label) {
@@ -1554,6 +1598,7 @@ function openDetails(o) {
   wrap.append(detailRow('المصدر', SOURCE_AR[o.source] || o.source));
   wrap.append(annotDetailRow(o, 'reference', 'order', 'الإشاري'));
   wrap.append(annotDetailRow(o, 'note', 'order', 'الملاحظة'));
+  if (o.orderStatus === 'COMPLETED') wrap.append(zeroPointRow(o, 'order'));
   body.append(wrap);
   openModal('#mDetails');
 }
@@ -1602,6 +1647,7 @@ function openTransferDetails(t) {
   wrap.append(detailRow('المصدر', SOURCE_AR[t.source] || t.source || 'من المنصة'));
   wrap.append(annotDetailRow(t, 'reference', 'transfer', 'الإشاري'));
   wrap.append(annotDetailRow(t, 'note', 'transfer', 'الملاحظة'));
+  if (t.status === 'COMPLETED') wrap.append(zeroPointRow(t, 'transfer'));
   body.append(wrap);
   openModal('#mTransfer');
 }

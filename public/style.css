@@ -273,6 +273,17 @@ th.col-idx { width: 46px; text-align: center; }
 /* عمود «USDT الباقي»: لون مميّز ليبرز عن بقية الأرقام */
 #ledgerTable th.col-bal { color: var(--accent); }
 #ledgerTable td.col-bal { color: var(--accent); font-weight: 700; }
+/* نقطة التثبيت التي علّمها المستخدم: يُحسب العمود تصاعديًا منها */
+#ledgerTable td.col-bal.is-zeropoint { position: relative; }
+#ledgerTable td.col-bal.is-zeropoint::before {
+  content: '📌'; margin-inline-end: 4px; font-size: 11px;
+}
+
+/* مفتاح «رصيدي كان صفرًا بعد هذه العملية» داخل نافذة التفاصيل */
+.zero-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.zero-toggle input { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+.zero-toggle input:disabled { cursor: default; }
+.detail-hint { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.5; }
 
 /* شارات النوع والحالة: نقطة ملونة + نص بلون النص دائمًا */
 .chip { display: inline-flex; align-items: center; gap: 6px; }

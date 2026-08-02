@@ -329,6 +329,7 @@ function upsertOrder(o) {
   if (prev.unitPriceOverride != null) o.unitPriceOverride = prev.unitPriceOverride;
   if (prev.totalPriceOverride != null) o.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) o.networkLabelOverride = prev.networkLabelOverride;
+  if (prev.zeroPoint) o.zeroPoint = true;
   if (prev.source === 'binance' && o.source === 'manual') return 'same';
   const changed = JSON.stringify(prev) !== JSON.stringify(o);
   orders[o.orderNumber] = o;
@@ -538,6 +539,7 @@ function upsertTransfer(t) {
   if (prev.unitPriceOverride != null) t.unitPriceOverride = prev.unitPriceOverride;
   if (prev.totalPriceOverride != null) t.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) t.networkLabelOverride = prev.networkLabelOverride;
+  if (prev.zeroPoint) t.zeroPoint = true;
   const changed = JSON.stringify(prev) !== JSON.stringify(t);
   transfers[t.id] = t;
   return changed ? 'updated' : 'same';
@@ -1098,6 +1100,11 @@ const server = http.createServer(async (req, res) => {
         if (s === '') delete o.networkLabelOverride;
         else o.networkLabelOverride = s.slice(0, 40);
       }
+      // علامة «الرصيد صفر بعد هذه العملية»: يعرفها المستخدم ولا تعرفها المنصة،
+      // وعليها يُثبَّت عمود «الباقي» فتظهر ما بعدها بقيمها الحقيقية
+      if ('zeroPoint' in body) {
+        if (body.zeroPoint) o.zeroPoint = true; else delete o.zeroPoint;
+      }
       await saveOrders();
       sendJSON(res, 200, { ok: true, order: o });
       return;
@@ -1138,6 +1145,10 @@ const server = http.createServer(async (req, res) => {
         const s = String(body.networkLabel).trim();
         if (s === '') delete t.networkLabelOverride;
         else t.networkLabelOverride = s.slice(0, 40);
+      }
+      // علامة «الرصيد صفر بعد هذه العملية» (انظر التعليق في annotate الطلبات)
+      if ('zeroPoint' in body) {
+        if (body.zeroPoint) t.zeroPoint = true; else delete t.zeroPoint;
       }
       await saveTransfers();
       sendJSON(res, 200, { ok: true, transfer: t });
