@@ -245,6 +245,37 @@ async function initStore() {
       };
       seeded = true;
     }
+    /* خمس عمليات بيع أخرى بعد الطلب أعلاه مباشرةً لا تُرجعها المنصة كذلك.
+       الكميات مأخوذة من إشعارات Binance نفسها («قام المشتري بوضع علامة مدفوع
+       على طلب P2P …»)، ومجموعها 886.04 USDT يطابق العجز المرصود بالضبط.
+       المتاح من رقم الطلب أربعة أرقام فقط، فالمعرّف مبدوء بـP2P- ليُعرف أنه
+       إدخال يدوي. السعر تقديري من سعر الطلب المجاور (14:15) — صحّحه من الجدول
+       بالنقر على خانتَي «السعر» و«المبلغ» ليصير المقبوض بالجنيه دقيقًا. */
+    const MISSING_SELLS = [
+      { tail: '2064', amount: 238.71, min: 18 },
+      { tail: '2768', amount: 170.57, min: 24 },
+      { tail: '6144', amount: 171.34, min: 30 },
+      { tail: '0160', amount: 160.20, min: 36 },
+      { tail: '0608', amount: 144.92, min: 42 },
+    ];
+    const EST_PRICE = 5871.35; // سعر الطلب المجاور في 14:15
+    for (const s of MISSING_SELLS) {
+      const id = 'P2P-' + s.tail;
+      if (orders[id]) continue;
+      orders[id] = {
+        orderNumber: id,
+        tradeType: 'SELL', asset: 'USDT', fiat: 'SDG', fiatSymbol: 'ج.س',
+        amount: s.amount, takerAmount: s.amount,
+        totalPrice: Math.round(s.amount * EST_PRICE), unitPrice: EST_PRICE,
+        commission: 0.06, counterPart: '', orderStatus: 'COMPLETED',
+        advertisementRole: '',
+        createTime: Date.UTC(2026, 7, 1, 12, s.min, 0), // 14:xx بتوقيت السودان
+        note: 'أُضيفت يدويًا — المنصة لا تُرجع هذا الطلب. الكمية من إشعار Binance، والسعر تقديري فصحّحه.',
+        reference: '', source: 'manual',
+      };
+      seeded = true;
+    }
+
     const stale1184 = orders['22916831805419741184'];
     if (stale1184 && stale1184.orderStatus === 'TRADING') {
       // إشعار Binance: أُلغي تلقائيًا لأن المشتري لم يدفع في الوقت المحدد
