@@ -12,6 +12,7 @@ const state = {
   orders: [],
   transfers: [],
   balGap: 0,          // مقدار الحركة الناقصة من السجل (من عمود «الباقي من USDT»)
+  balGapAt: 0,        // وقت أحدث نقطة تصفير — العملية الناقصة وقعت بعده
   balAbsurd: null,    // عملية بكمية غير معقولة تُفسد حساب «الباقي» (قيمة محلية في خانة USDT غالبًا)
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
@@ -106,14 +107,17 @@ function computeBalanceMap() {
      تلك اللحظة (غالبًا بيع من رصيد الفوري لا تُرجعه واجهة المنصة). نفترض أن
      الرصيد بلغ صفرًا عندها — المستخدم يُفرغ محفظته كثيرًا — ونرفع ما قبلها
      بمقدار العجز، فتظهر أرقام تقديرية معقولة بدل «—»، والعجز يُعرض في البطاقة. */
-  const keys = [...map.keys()]; // بترتيب زمني تصاعدي (ترتيب الإدراج)
-  let adj = 0, gap = 0;
+  const keys = [...map.keys()]; // بترتيب زمني تصاعدي (ترتيب الإدراج — يطابق evts)
+  let adj = 0, gap = 0, gapAt = 0;
   for (let i = keys.length - 1; i >= 0; i--) {
     const b = map.get(keys[i]) + off + adj;
-    if (b < 0) { adj -= b; gap -= b; map.set(keys[i], 0); }
-    else map.set(keys[i], b);
+    if (b < 0) {
+      if (!gap) gapAt = evts[i].t; // أحدث نقطة تصفير = العملية الناقصة وقعت بعدها
+      adj -= b; gap -= b; map.set(keys[i], 0);
+    } else map.set(keys[i], b);
   }
   state.balGap = gap > 1 ? gap : 0;
+  state.balGapAt = state.balGap ? gapAt : 0;
   return map;
 }
 
@@ -1822,7 +1826,8 @@ function renderBalance() {
     const a = state.balAbsurd;
     gap = ` · ⚠ توجد عملية بتاريخ ${fmtDT(a.t)} كميتها ${fmt2(Math.abs(a.d))} USDT — رقم غير معقول (غالبًا مبلغ بالعملة المحلية كُتب في خانة الكمية). صحّح كميتها أو احذفها، فهي تُفسد عمود «الباقي» كله.`;
   } else if (state.balGap > 1) {
-    gap = ` · ⚠ في عمليات خرج بمقدار ~${fmt2(state.balGap)} USDT ناقصة من السجل (غالبًا بيع من رصيد الفوري لا تُرجعه المنصة) — عُوّضت في الحساب بافتراض أن الرصيد بلغ صفرًا عندها، فالأرقام الأقدم منها تقريبية. أضف العملية من «الإضافة اليدوية» متى عرفتها ليصير الحساب دقيقًا.`;
+    const when = state.balGapAt ? ` بعد ${fmtDT(state.balGapAt)}` : '';
+    gap = ` · ⚠ في عمليات خرج بمقدار ~${fmt2(state.balGap)} USDT ناقصة من السجل${when} (غالبًا بيع من رصيد الفوري لا تُرجعه المنصة) — ابحث عنها في سجل P2P بتطبيق Binance بعد هذا الوقت، وأضفها من «الإضافة اليدوية» ليصير الحساب دقيقًا. إلى حينها عُوّض العجز بافتراض بلوغ الرصيد صفرًا عند تلك النقطة.`;
   }
   subEl.textContent = `${split} · متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT${gap}`;
   const others = assets
