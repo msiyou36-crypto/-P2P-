@@ -227,6 +227,32 @@ async function initStore() {
 
   orders = await loadAccountData('orders');
   transfers = await loadAccountData('transfers');
+
+  /* إصلاح بيانات لمرة واحدة: عمليتا P2P نُفِّذتا عبر رصيد الحساب الفوري ولا
+     تُرجعهما واجهة Binance (listUserOrderHistory) إطلاقًا رغم أن نوافذ المزامنة
+     غطّت وقتيهما مرارًا — القيم منقولة من تفاصيل الطلب في تطبيق Binance نفسه.
+     المفتاح هو رقم الطلب الحقيقي: لو أرجعتها المنصة يومًا تُحدَّث ولا تتكرر. */
+  if (config.active === 'p2p') {
+    let seeded = false;
+    if (!orders['22916843477495025664']) {
+      orders['22916843477495025664'] = {
+        orderNumber: '22916843477495025664',
+        tradeType: 'SELL', asset: 'USDT', fiat: 'SDG', fiatSymbol: 'ج.س',
+        amount: 179.06, takerAmount: 179.06, totalPrice: 1051344, unitPrice: 5871.35,
+        commission: 0.06, counterPart: 'Rania76', orderStatus: 'COMPLETED',
+        advertisementRole: '', createTime: Date.UTC(2026, 7, 1, 12, 15, 23),
+        note: '', reference: '', source: 'binance',
+      };
+      seeded = true;
+    }
+    const stale1184 = orders['22916831805419741184'];
+    if (stale1184 && stale1184.orderStatus === 'TRADING') {
+      // إشعار Binance: أُلغي تلقائيًا لأن المشتري لم يدفع في الوقت المحدد
+      stale1184.orderStatus = 'CANCELLED_BY_SYSTEM';
+      seeded = true;
+    }
+    if (seeded) { try { await saveOrders(); } catch (e) { console.error(e.message); } }
+  }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
