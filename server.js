@@ -426,6 +426,38 @@ function normalizePay(raw) {
   };
 }
 
+/* ============ تداول السوق الفوري (Spot) — شراء/بيع عملة مقابل USDT ============
+ * آخر ما بقي من حركة محفظة الفوري غير المجلوبة. نتتبّع جانب الـ USDT فقط:
+ * شراء عملة = صرف USDT، وبيعها = دخل USDT. */
+function normalizeSpotTrade(raw, symbol) {
+  const base = String(symbol).replace(/USDT$/i, '').toUpperCase();
+  const isBuy = !!raw.isBuyer; // شراء العملة الأساسية يعني صرف USDT
+  const quote = num(raw.quoteQty); // قيمة الصفقة بالـ USDT
+  const t = Number(raw.time) || Date.now();
+  return {
+    id: 'SPT' + String(symbol).toUpperCase() + '-' + String(raw.id),
+    kind: isBuy ? 'spot-buy' : 'spot-sell',
+    coin: 'USDT',
+    network: base, // العملة المقابلة تظهر في عمود العملة/الشبكة
+    amount: quote,
+    // العمولة لا تُخصم إلا إن كانت بالـ USDT نفسه
+    fee: String(raw.commissionAsset || '').toUpperCase() === 'USDT' ? num(raw.commission) : 0,
+    status: 'COMPLETED', // النقطة تُرجع الصفقات المنفَّذة فقط
+    statusCode: null,
+    address: '',
+    txId: String(raw.orderId || raw.id || ''),
+    counterPart: '',
+    symbol: String(symbol).toUpperCase(),
+    baseQty: num(raw.qty),
+    unitPrice: num(raw.price),
+    time: t,
+    completeTime: t,
+    note: '',
+    reference: '',
+    source: 'binance',
+  };
+}
+
 /* ===================== عمليات التحويل (Convert) ===================== */
 
 /** توحيد عملية تحويل عملة (مثل USDT → TRX) في شكل الحوالة.
@@ -458,32 +490,6 @@ function normalizeConvert(raw) {
     toAmount: toAmt,
     time: t,
     completeTime: t,
-    note: '',
-    reference: '',
-    source: 'binance',
-  };
-}
-
-/* ============ التحويل الداخلي بين المحافظ (الفوري ↔ التمويل) ============
- * يظهر صفًّا في الجدول كأي عملية (بطلب المستخدم — «ما تديرش فلتر»)، ولا يغيّر
- * عمود «الباقي» لأن الرصيد يجمع المحفظتين معًا فالتحويل بينهما يلغي نفسه. */
-const INTERNAL_TYPES = ['MAIN_FUNDING', 'FUNDING_MAIN']; // فوري←تمويل ، تمويل←فوري
-function normalizeInternal(raw) {
-  const toFunding = String(raw.type || '').toUpperCase() === 'MAIN_FUNDING';
-  return {
-    id: 'TRF' + String(raw.tranId || ((raw.timestamp || '') + '' + (raw.amount || ''))),
-    kind: toFunding ? 'internal-in' : 'internal-out',
-    coin: String(raw.asset || 'USDT').trim() || 'USDT',
-    network: toFunding ? 'فوري ← تمويل' : 'تمويل ← فوري',
-    amount: num(raw.amount),
-    fee: 0,
-    status: String(raw.status || '').toUpperCase() === 'CONFIRMED' ? 'COMPLETED' : 'PENDING',
-    statusCode: null,
-    address: '',
-    txId: String(raw.tranId || ''),
-    counterPart: '',
-    time: Number(raw.timestamp) || Date.now(),
-    completeTime: Number(raw.timestamp) || 0,
     note: '',
     reference: '',
     source: 'binance',
@@ -586,9 +592,9 @@ async function* syncGenerator() {
   const convertWindows = makeWindows(now, minStart, 29 * 86400000); // Convert: أقصى نافذة 30 يومًا
 
   let added = 0, updated = 0, fetched = 0;
-  let depAdded = 0, wdAdded = 0, payAdded = 0, cvtAdded = 0, intAdded = 0, txUpdated = 0;
+  let depAdded = 0, wdAdded = 0, payAdded = 0, cvtAdded = 0, sptAdded = 0, txUpdated = 0;
   let step = 0;
-  const totalSteps = p2pWindows.length * 2 + txWindows.length * (3 + INTERNAL_TYPES.length) + convertWindows.length;
+  const totalSteps = p2pWindows.length * 2 + txWindows.length * 3 + convertWindows.length + 4;
   const prog = (msg) => { step++; return { msg, pct: Math.min(1 + Math.round((step / totalSteps) * 96), 97) }; };
 
   const result = { done: true };
@@ -657,36 +663,6 @@ async function* syncGenerator() {
       await sleep(400);
     }
 
-    /* ---- التحويل الداخلي بين الفوري والتمويل ----
-       نقطة /sapi/v1/asset/transfer: «type» في كل طلب، والترقيم بـ current/size.
-       تظهر صفوفًا في الجدول ولا تغيّر «الباقي» (المحفظتان محسوبتان معًا).
-       مغلّفة بـ try/catch حتى لا يوقف فشلُها بقيةَ المزامنة. */
-    try {
-      for (const type of INTERNAL_TYPES) {
-        const label = type === 'MAIN_FUNDING' ? 'فوري ← تمويل' : 'تمويل ← فوري';
-        for (const [s, e] of txWindows) {
-          yield prog(`جلب التحويل الداخلي (${label}): ${dayLabel(s)} ← ${dayLabel(e)}`);
-          let current = 1;
-          for (;;) {
-            const j = await signedGet(base, '/sapi/v1/asset/transfer',
-              { type, startTime: s, endTime: e, current, size: 100 }, offset);
-            const rows = Array.isArray(j.rows) ? j.rows : [];
-            for (const raw of rows) {
-              const r = upsertTransfer(normalizeInternal(raw));
-              if (r === 'added') intAdded++;
-              else if (r === 'updated') txUpdated++;
-            }
-            if (rows.length < 100 || current >= 60) break;
-            current++;
-            await sleep(300);
-          }
-          await sleep(400);
-        }
-      }
-    } catch (err) {
-      yield { msg: 'تعذّر جلب التحويل الداخلي بين المحافظ (تم تخطّيه): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
-    }
-
     /* ---- عمليات Binance Pay (إرسال/استلام) ----
        نقطة /sapi/v1/pay/transactions: الحد الأقصى للفترة 90 يومًا، وأقصى 100 سجل
        لكل طلب دون ترقيم صفحات، ووزنها على حساب المستخدم (UID) 3000 وهو ضمن الحد.
@@ -730,9 +706,41 @@ async function* syncGenerator() {
       yield { msg: 'تعذّر جلب سجل التحويل Convert (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
     }
 
+    /* ---- تداول السوق الفوري (Spot) ----
+       /api/v3/myTrades تلزمها «symbol»، ومداها الزمني محدود بـ٢٤ ساعة؛ لكن
+       بدون تحديد وقت تُرجع أحدث ١٠٠٠ صفقة دفعةً واحدة — طلبٌ واحد لكل زوج.
+       الأزواج تُستنتج من العملات التي مرّت فعلًا على الحساب (بلا تخمين واسع). */
+    try {
+      const bases = new Set();
+      for (const t of Object.values(transfers)) {
+        for (const a of [t.coin, t.network, t.fromAsset, t.toAsset]) {
+          const s = String(a || '').trim().toUpperCase();
+          if (s && s !== 'USDT' && /^[A-Z0-9]{2,10}$/.test(s)) bases.add(s);
+        }
+      }
+      const symbols = [...bases].slice(0, 8).map((b) => b + 'USDT');
+      for (const symbol of symbols) {
+        yield prog(`جلب تداول السوق الفوري: ${symbol}`);
+        try {
+          const arr = await signedGet(base, '/api/v3/myTrades', { symbol, limit: 1000 }, offset);
+          for (const raw of (Array.isArray(arr) ? arr : [])) {
+            const r = upsertTransfer(normalizeSpotTrade(raw, symbol));
+            if (r === 'added') sptAdded++;
+            else if (r === 'updated') txUpdated++;
+          }
+        } catch (e) {
+          // زوج غير موجود أو بلا صلاحية — نتخطّاه ونكمل البقية
+          if (!/-1121|Invalid symbol/i.test(e.message || '')) throw e;
+        }
+        await sleep(400);
+      }
+    } catch (err) {
+      yield { msg: 'تعذّر جلب تداول السوق الفوري (تم تخطّيه): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
+    }
+
     AC().lastSync = Date.now();
     Object.assign(result, {
-      added, updated, fetched, depAdded, wdAdded, payAdded, cvtAdded, intAdded, txUpdated,
+      added, updated, fetched, depAdded, wdAdded, payAdded, cvtAdded, sptAdded, txUpdated,
       total: Object.keys(orders).length,
       totalTx: Object.keys(transfers).length,
       lastSync: AC().lastSync,

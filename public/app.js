@@ -72,7 +72,7 @@ const balKey = (item, isP2P) => (isP2P ? 'o:' + item.orderNumber : 't:' + item.i
  *  الرقم رصيدًا حقيقيًا لا مجرّد تجميع من الصفر.
  *  الرصيد = الحساب الفوري + محفظة التمويل معًا، فالتحويل بينهما لا يغيّر
  *  ما نملكه فعلًا ولا يدخل الحساب أصلًا. */
-const OUT_KINDS = new Set(['withdraw', 'pay-out', 'convert-out']);
+const OUT_KINDS = new Set(['withdraw', 'pay-out', 'convert-out', 'spot-buy']);
 
 /* لا يُحسب «الباقي» إلا على آخر ٩٠ يومًا: منصة Binance لا تُرجع مبيعات P2P
  * الأقدم من ~٦ أشهر بينما تُرجع الإيداعات والسحوبات القديمة، فالسجل البعيد
@@ -92,8 +92,8 @@ function computeBalanceMap() {
     if (t.status !== 'COMPLETED') continue;
     if (t.time < cutoff) continue;
     if (String(t.coin || '').toUpperCase() !== 'USDT') continue; // الرصيد بالـ USDT فقط
-    // التحويل بين الفوري والتمويل: أثره صفر (المحفظتان معًا)، لكن صفّه يعرض الرصيد عنده
-    if (isInternalKind(t.kind)) { evts.push({ k: balKey(t, false), t: t.time, d: 0 }); continue; }
+    // التحويل بين الفوري والتمويل لا يغيّر ما نملكه (المحفظتان معًا) — حصانة لو بقي صفٌّ منه
+    if (isInternalKind(t.kind)) continue;
     const isOut = OUT_KINDS.has(t.kind);
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
     evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v });
@@ -171,12 +171,13 @@ const TX_KIND = {
   'pay-in': { ar: 'استلام Pay', color: 'var(--good)' },
   'convert-out': { ar: 'تحويل (USDT→)', color: 'var(--critical)' },
   'convert-in': { ar: 'تحويل (→USDT)', color: 'var(--good)' },
-  'internal-in': { ar: 'فوري ← تمويل', color: 'var(--muted)' },
-  'internal-out': { ar: 'تمويل ← فوري', color: 'var(--muted)' },
+  'spot-buy': { ar: 'شراء فوري', color: 'var(--critical)' },
+  'spot-sell': { ar: 'بيع فوري', color: 'var(--good)' },
 };
 const isPayKind = (k) => k === 'pay-out' || k === 'pay-in';
 const isConvertKind = (k) => k === 'convert-out' || k === 'convert-in';
 const isInternalKind = (k) => k === 'internal-out' || k === 'internal-in';
+const isSpotKind = (k) => k === 'spot-buy' || k === 'spot-sell';
 const TX_STATUS = {
   COMPLETED: { ar: 'مكتمل', color: 'var(--good)' },
   PENDING: { ar: 'قيد المعالجة', color: 'var(--warn)' },
@@ -272,9 +273,12 @@ async function loadOrders() {
 }
 async function loadTransfers() {
   const j = await api('/api/transfers');
-  // التحويل بين الفوري والتمويل يظهر كأي عملية (بلا فلترة)؛
-  // وفي حساب «الباقي» أثره صفر لأن المحفظتين محسوبتان معًا.
-  state.transfers = (j.transfers || []).sort((a, b) => b.time - a.time);
+  // الجدول للعمليات الفعلية فقط (P2P/Pay/سحب/إيداع/تحويل عملة) — التحويل بين
+  // الفوري والتمويل ليس عمليةً، ولا يؤثر على «الباقي» (المحفظتان محسوبتان معًا)،
+  // فيُستبعد؛ وقد تبقى صفوف منه محفوظة من مزامنة سابقة.
+  state.transfers = (j.transfers || [])
+    .filter((t) => !isInternalKind(t.kind))
+    .sort((a, b) => b.time - a.time);
   state.settings.lastSync = j.lastSync;
 }
 async function loadSettings() {
@@ -610,7 +614,7 @@ function applyFilters() {
   const [from, to] = rangeBounds();
   const q = f.q.trim().toLowerCase();
   const typeIsP2P = f.type === 'SELL' || f.type === 'BUY';
-  const typeIsTx = f.type === 'deposit' || f.type === 'withdraw' || f.type === 'pay' || f.type === 'convert' || f.type === 'internal';
+  const typeIsTx = f.type === 'deposit' || f.type === 'withdraw' || f.type === 'pay' || f.type === 'convert' || f.type === 'spot';
   const statusIsTx = f.status === 'PENDING' || f.status === 'FAILED';
   const statusIsOther = f.status === 'other';
 
@@ -631,7 +635,7 @@ function applyFilters() {
     if (typeIsTx) {
       if (f.type === 'pay') { if (!isPayKind(t.kind)) return false; }
       else if (f.type === 'convert') { if (!isConvertKind(t.kind)) return false; }
-      else if (f.type === 'internal') { if (!isInternalKind(t.kind)) return false; }
+      else if (f.type === 'spot') { if (!isSpotKind(t.kind)) return false; }
       else if (t.kind !== f.type) return false;
     }
     if (!statusMatchTx(t.status, f.status)) return false;
@@ -1999,7 +2003,7 @@ async function runSync() {
         if (ev.error) { sawError = ev.error; }
         else if (ev.done) {
           $('#syncPct').style.width = '100%';
-          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0) + (ev.intAdded || 0);
+          const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0) + (ev.sptAdded || 0);
           toast(`اكتملت المزامنة ✓ — ${fmt0(ev.added)} طلب و ${fmt0(newTx)} حوالة (جديدة)`);
         } else {
           if (ev.msg) $('#syncMsg').textContent = ev.msg;
