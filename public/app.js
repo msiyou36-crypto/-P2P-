@@ -13,6 +13,7 @@ const state = {
   transfers: [],
   balGap: 0,          // مقدار الحركة الناقصة من السجل (من عمود «الباقي من USDT»)
   balGapAt: 0,        // وقت أحدث نقطة تصفير — العملية الناقصة وقعت بعده
+  balGapOut: true,    // هل الناقص حركة خرج (بيع/سحب) أم دخل (إيداع/شراء)
   balAbsurd: null,    // عملية بكمية غير معقولة تُفسد حساب «الباقي» (قيمة محلية في خانة USDT غالبًا)
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
@@ -111,23 +112,30 @@ function computeBalanceMap() {
   evts.sort((a, b) => a.t - b.t);
   let run = 0;
   for (const e of evts) { run += e.d; e.bal = run; } // الرصيد التراكمي بعد كل عملية
-  const off = cur - run; // تثبيت أحدث صف على الرصيد الفعلي
-  /* من الأحدث إلى الأقدم: النزول تحت الصفر يعني حركة «خرج» ناقصة من السجل بعد
-     تلك اللحظة (غالبًا بيع من رصيد الفوري لا تُرجعه واجهة المنصة). نفترض أن
-     الرصيد بلغ صفرًا عندها — المستخدم يُفرغ محفظته كثيرًا — ونرفع ما قبلها
-     بمقدار العجز، فتظهر أرقام تقديرية معقولة بدل «—»، والعجز يُعرض في البطاقة. */
+  const off = cur - run; // مبدئيًا: تثبيت أحدث صف على الرصيد الفعلي
+  const last = evts.length - 1;
   const map = new Map();
-  let adj = 0, gap = 0, gapAt = 0;
-  for (let i = evts.length - 1; i >= 0; i--) {
-    const e = evts[i];
-    const b = e.bal + off + adj;
-    if (b < 0) {
-      if (!gap) gapAt = e.t; // أحدث نقطة تصفير = العملية الناقصة وقعت بعدها
-      adj -= b; gap -= b; map.set(e.k, 0);
-    } else map.set(e.k, b);
+  /* مرور من الأحدث إلى الأقدم: نزولُ الرصيد تحت الصفر مستحيل، فمعناه أن حركة
+     «خرج» بعد تلك اللحظة لم تصل من المنصة. أحدثُ نزولٍ هو نقطة تصفير مؤكَّدة
+     (أفرغ المستخدم محفظته فعلًا هناك)، فنجعلها الأساس بدل الرصيد الحالي. */
+  let adj = 0, zIdx = -1;
+  for (let i = last; i >= 0; i--) {
+    const b = evts[i].bal + off + adj;
+    if (b < 0) { if (zIdx < 0) zIdx = i; adj -= b; map.set(evts[i].k, 0); }
+    else map.set(evts[i].k, b);
   }
-  state.balGap = gap > 1 ? gap : 0;
-  state.balGapAt = state.balGap ? gapAt : 0;
+
+  if (zIdx < 0) { state.balGap = 0; state.balGapAt = 0; return map; }
+
+  /* التثبيت على نقطة التصفير: كل ما بعدها يُحسب تصاعديًا منها، فتظهر العمليات
+     التالية بقيمها الكاملة (إيداعٌ بعد تصفيرٍ يساوي مبلغه كاملًا) بدل توزيع
+     النقص عليها. والفرقُ بين آخر صفٍّ والرصيد الفعلي هو الحركة الناقصة نفسها. */
+  const base = evts[zIdx].bal;
+  for (let i = zIdx; i <= last; i++) map.set(evts[i].k, Math.max(evts[i].bal - base, 0));
+  const gap = (evts[last].bal - base) - cur; // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
+  state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
+  state.balGapOut = gap > 0;      // نوع الحركة الناقصة
+  state.balGapAt = state.balGap ? evts[zIdx].t : 0; // وقعت بعد نقطة التصفير هذه
   return map;
 }
 
@@ -1901,7 +1909,8 @@ function renderBalance() {
     gap = ` · ⚠ توجد عملية بتاريخ ${fmtDT(a.t)} كميتها ${fmt2(Math.abs(a.d))} USDT — رقم غير معقول (غالبًا مبلغ بالعملة المحلية كُتب في خانة الكمية). صحّح كميتها أو احذفها، فهي تُفسد عمود «الباقي» كله.`;
   } else if (state.balGap > 1) {
     const when = state.balGapAt ? ` بعد ${fmtDT(state.balGapAt)}` : '';
-    gap = ` · ⚠ في عمليات خرج بمقدار ~${fmt2(state.balGap)} USDT ناقصة من السجل${when} (غالبًا بيع من رصيد الفوري لا تُرجعه المنصة) — ابحث عنها في سجل P2P بتطبيق Binance بعد هذا الوقت، وأضفها من «الإضافة اليدوية» ليصير الحساب دقيقًا. إلى حينها عُوّض العجز بافتراض بلوغ الرصيد صفرًا عند تلك النقطة.`;
+    const what = state.balGapOut ? 'خرج (بيع أو سحب)' : 'دخل (إيداع أو شراء)';
+    gap = ` · ⚠ عمليات ${what} بمقدار ${fmt2(state.balGap)} USDT ناقصة من السجل${when} — أرقام العمود صحيحة، والفرق كله في هذه العمليات وحدها. ابحث عنها في تطبيق Binance بعد هذا الوقت وأضفها من «الإضافة اليدوية»، أو افحصها من «🔍 فحص المزامنة».`;
   }
   subEl.textContent = `${split} · متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT${gap}`;
   const others = assets
