@@ -519,6 +519,66 @@ function startMaintenanceWatch() {
   }, 60000);
 }
 
+/* ==================== فحص المزامنة (للمسؤول) ==================== */
+
+function openDiag() { $('#diagResult').textContent = ''; openModal('#mDiag'); }
+
+function diagLine(cls, text) {
+  const d = document.createElement('div');
+  d.className = cls;
+  d.textContent = text;
+  return d;
+}
+
+async function runDiag() {
+  const days = Math.min(Math.max(Number($('#diagDays').value) || 3, 1), 29);
+  const box = $('#diagResult');
+  const btn = $('#btnRunDiag');
+  btn.disabled = true;
+  box.textContent = '';
+  box.append(diagLine('hint', 'جارٍ سؤال المنصة… قد يستغرق بضع ثوانٍ.'));
+  let d;
+  try { d = await api('/api/diag/p2p?days=' + days); }
+  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); btn.disabled = false; return; }
+  btn.disabled = false;
+  box.textContent = '';
+
+  const total = d.fromPlatform.length;
+  // الخلاصة أولًا: أي الاحتمالين هو الواقع
+  box.append(diagLine(
+    total === 0 || d.notStored > 0 ? 'diag-bad' : 'diag-ok',
+    total === 0
+      ? `المنصة لم تُرجع أي عملية P2P في آخر ${days} يوم — العمليات المفقودة ليست على هذا المفتاح.`
+      : (d.notStored > 0
+        ? `المنصة أرجعت ${fmt0(total)} عملية، منها ${fmt0(d.notStored)} غير محفوظة عندك — الخلل في الحفظ، والمزامنة القادمة تُصلحه.`
+        : `المنصة أرجعت ${fmt0(total)} عملية وكلها محفوظة عندك — فما لا تجده في الجدول لا تُرجعه المنصة أصلًا لهذا المفتاح.`)));
+
+  if (total) {
+    const t = document.createElement('table');
+    t.className = 'diag-table';
+    const th = document.createElement('tr');
+    for (const h of ['التاريخ', 'النوع', 'الكمية', 'الحالة', 'آخر ٤', 'محفوظة؟']) {
+      const c = document.createElement('th'); c.textContent = h; th.append(c);
+    }
+    t.append(th);
+    for (const r of d.fromPlatform) {
+      const tr = document.createElement('tr');
+      if (!r.stored) tr.className = 'diag-miss';
+      for (const v of [fmtDT(r.time), r.tradeType === 'BUY' ? 'شراء' : 'بيع', fmt2(r.amount),
+        r.status, r.tail, r.stored ? 'نعم' : 'لا ✗']) {
+        const c = document.createElement('td'); c.textContent = v; tr.append(c);
+      }
+      t.append(tr);
+    }
+    box.append(t);
+  }
+
+  if (d.onlyOurs && d.onlyOurs.length) {
+    box.append(diagLine('hint', `محفوظ عندك ولم تُرجعه المنصة (${fmt0(d.onlyOurs.length)}): `
+      + d.onlyOurs.map((o) => o.tail + ' · ' + fmt2(o.amount)).join(' — ')));
+  }
+}
+
 function showMaintenanceScreen(m) {
   $('#loginScreen').classList.add('hidden');
   $('#app').classList.add('hidden');
@@ -2124,6 +2184,8 @@ function wireEvents() {
 
   $('#btnSync').addEventListener('click', () => { closeMenu(); runSync(); });
   applySyncCooldown();
+  $('#btnDiag').addEventListener('click', () => { closeMenu(); openDiag(); });
+  $('#btnRunDiag').addEventListener('click', runDiag);
   $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
   $('#btnSaveMaint').addEventListener('click', saveMaintenance);
   $('#maintLogout').addEventListener('click', doLogout);

@@ -439,6 +439,23 @@ td.col-note { padding: 6px 8px; }
 .maint-link { text-decoration: none; }
 .maint-link, .maint-box .btn { min-width: 180px; }
 
+/* نافذة فحص المزامنة */
+#mDiag .modal { max-width: 760px; }
+.diag-bar { display: flex; align-items: flex-end; gap: 10px; margin: 10px 0 4px; }
+.diag-bar label { flex: 0 0 130px; }
+.diag-bar input { width: 100%; }
+.diag-result { max-height: 52vh; overflow: auto; margin-top: 12px; }
+.diag-ok, .diag-bad {
+  padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.7;
+  margin-bottom: 12px; border: 1px solid;
+}
+.diag-ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); background: color-mix(in srgb, var(--good) 10%, transparent); }
+.diag-bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.diag-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.diag-table th, .diag-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
+.diag-table th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background: var(--card); }
+.diag-table tr.diag-miss td { color: var(--critical); font-weight: 600; }
+
 /* صف مفتاح التبديل داخل النماذج */
 .switch-row { flex-direction: row; align-items: center; gap: 10px; cursor: pointer; }
 .switch-row input { width: 18px; height: 18px; accent-color: var(--accent); }

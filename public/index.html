@@ -91,6 +91,7 @@
         <button id="btnSettings" class="menu-item admin-only" role="menuitem">⚙ الإعدادات</button>
         <button id="btnChangePass" class="menu-item admin-only" role="menuitem">🔑 تغيير كلمات السر</button>
         <button id="btnLoginLog" class="menu-item admin-only" role="menuitem">🕒 سجل الدخول</button>
+        <button id="btnDiag" class="menu-item admin-only" role="menuitem">🔍 فحص المزامنة</button>
         <button id="btnMaintenance" class="menu-item admin-only" role="menuitem">⛔ إيقاف العمل (صيانة)</button>
         <div class="menu-sep"></div>
         <button id="btnLogout" class="menu-item danger-item" role="menuitem">↩ تسجيل الخروج</button>
@@ -415,6 +416,26 @@
         </table>
         <div id="loginLogEmpty" class="empty hidden"><div class="empty-icon">🕒</div><p>لا توجد عمليات دخول مسجّلة بعد.</p></div>
       </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>إغلاق</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة فحص المزامنة: ما تُرجعه المنصة فعلًا (للمسؤول فقط) -->
+<div class="backdrop hidden" id="mDiag">
+  <div class="modal wide" role="dialog" aria-modal="true" aria-label="فحص المزامنة">
+    <div class="modal-head"><h3>🔍 فحص المزامنة</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body">
+      <p class="hint">يسأل المنصة مباشرةً عن طلبات P2P في فترة محددة، ويقارنها بالمحفوظ عندك — فيتبيّن هل العملية المفقودة لم تصل من المنصة أصلًا، أم وصلت ولم تُحفظ.</p>
+      <div class="diag-bar">
+        <label>الفترة (أيام)
+          <input type="number" id="diagDays" value="3" min="1" max="29" dir="ltr">
+        </label>
+        <button class="btn accent" id="btnRunDiag">فحص</button>
+      </div>
+      <div id="diagResult" class="diag-result"></div>
     </div>
     <div class="modal-foot">
       <button class="btn" data-close>إغلاق</button>

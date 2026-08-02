@@ -900,7 +900,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/orders'], ['DELETE', '/api/orders'], ['POST', '/api/orders/bulk'],
       ['POST', '/api/orders/clear'], ['POST', '/api/transfers/clear'],
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
-      ['POST', '/api/maintenance'],
+      ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'],
     ];
     // للمسؤول و«مستخدم 2» (الكتابة في الإشاري/الملاحظة فقط)
     const ANNOTATE_ROUTES = [
@@ -926,6 +926,66 @@ const server = http.createServer(async (req, res) => {
       // يُوقف هذا السستم فقط (النطاق الحالي)، والسستم الثاني يبقى شغّالًا
       await saveStore(maintKey(req), m);
       sendJSON(res, 200, { ok: true, maintenance: m });
+      return;
+    }
+
+    /* ---------- فحص المزامنة: ما تُرجعه المنصة فعلًا مقابل ما هو محفوظ ----------
+       يفصل السببين نهائيًا: إن ظهرت العملية هنا ولم تُحفظ فالخلل عندنا،
+       وإن لم تظهر أصلًا فالمنصة لا تُرجعها لهذا المفتاح. (للمسؤول فقط) */
+    if (p === '/api/diag/p2p' && req.method === 'GET') {
+      if (!AC().apiKey || !AC().apiSecret) {
+        sendJSON(res, 400, { error: 'أدخل مفتاح API من الإعدادات أولًا' });
+        return;
+      }
+      const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 3, 1), 29);
+      const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
+      const offset = await timeOffset(base);
+      const end = Date.now();
+      const start = end - days * 86400000;
+      const list = [];
+      for (const tradeType of ['SELL', 'BUY']) {
+        let page = 1;
+        for (;;) {
+          const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
+            { tradeType, startTimestamp: start, endTimestamp: end, page, rows: 100 }, offset);
+          const rows = Array.isArray(j.data) ? j.data : [];
+          for (const r of rows) {
+            const n = String(r.orderNumber || '').trim();
+            list.push({
+              orderNumber: n,
+              tail: n.slice(-4),
+              tradeType: String(r.tradeType || ''),
+              amount: num(r.amount),
+              totalPrice: num(r.totalPrice),
+              status: String(r.orderStatus || ''),
+              time: Number(r.createTime) || 0,
+              stored: Object.prototype.hasOwnProperty.call(orders, n),
+            });
+          }
+          if (rows.length < 100 || page >= 60) break;
+          page++;
+          await sleep(250);
+        }
+        await sleep(250);
+      }
+      list.sort((a, b) => b.time - a.time);
+      // ما هو محفوظ عندنا في نفس الفترة ولم تُرجعه المنصة (مُدخل يدويًا أو مزروع)
+      const fromApi = new Set(list.map((x) => x.orderNumber));
+      const onlyOurs = Object.values(orders)
+        .filter((o) => o.createTime >= start && o.createTime <= end && !fromApi.has(o.orderNumber))
+        .map((o) => ({
+          orderNumber: o.orderNumber, tail: String(o.orderNumber).slice(-4),
+          tradeType: o.tradeType, amount: o.amount, totalPrice: o.totalPrice,
+          status: o.orderStatus, time: o.createTime, source: o.source,
+        }))
+        .sort((a, b) => b.time - a.time);
+      sendJSON(res, 200, {
+        days, from: start, to: end,
+        fromPlatform: list,
+        notStored: list.filter((x) => !x.stored).length,
+        onlyOurs,
+        storedTotal: Object.keys(orders).length,
+      });
       return;
     }
 
