@@ -118,11 +118,15 @@ function computeBalanceMap() {
   /* مرور من الأحدث إلى الأقدم: نزولُ الرصيد تحت الصفر مستحيل، فمعناه أن حركة
      «خرج» بعد تلك اللحظة لم تصل من المنصة. أحدثُ نزولٍ هو نقطة تصفير مؤكَّدة
      (أفرغ المستخدم محفظته فعلًا هناك)، فنجعلها الأساس بدل الرصيد الحالي. */
+  // رصيدُ حسابٍ لا يُقاس بأكثر من قرشين؛ وبعض الكميات تصل بثماني خانات عشرية
+  // (صفقات السوق الفوري) فيتراكم كسرٌ طويل على كل الصفوف — نُقرّبه هنا لا عند
+  // العرض وحده، ليخرج نظيفًا في الجدول وملف التصدير معًا.
+  const r2 = (v) => Math.round(v * 100) / 100;
   let adj = 0, zIdx = -1;
   for (let i = last; i >= 0; i--) {
     const b = evts[i].bal + off + adj;
     if (b < 0) { if (zIdx < 0) zIdx = i; adj -= b; map.set(evts[i].k, 0); }
-    else map.set(evts[i].k, b);
+    else map.set(evts[i].k, r2(b));
   }
 
   if (zIdx < 0) { state.balGap = 0; state.balGapAt = 0; return map; }
@@ -131,8 +135,8 @@ function computeBalanceMap() {
      التالية بقيمها الكاملة (إيداعٌ بعد تصفيرٍ يساوي مبلغه كاملًا) بدل توزيع
      النقص عليها. والفرقُ بين آخر صفٍّ والرصيد الفعلي هو الحركة الناقصة نفسها. */
   const base = evts[zIdx].bal;
-  for (let i = zIdx; i <= last; i++) map.set(evts[i].k, Math.max(evts[i].bal - base, 0));
-  const gap = (evts[last].bal - base) - cur; // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
+  for (let i = zIdx; i <= last; i++) map.set(evts[i].k, r2(Math.max(evts[i].bal - base, 0)));
+  const gap = r2((evts[last].bal - base) - cur); // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
   state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
   state.balGapOut = gap > 0;      // نوع الحركة الناقصة
   state.balGapAt = state.balGap ? evts[zIdx].t : 0; // وقعت بعد نقطة التصفير هذه
