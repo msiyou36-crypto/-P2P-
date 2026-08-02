@@ -74,15 +74,23 @@ const balKey = (item, isP2P) => (isP2P ? 'o:' + item.orderNumber : 't:' + item.i
  *  ما نملكه فعلًا ولا يدخل الحساب أصلًا. */
 const OUT_KINDS = new Set(['withdraw', 'pay-out', 'convert-out']);
 
+/* لا يُحسب «الباقي» إلا على آخر ٩٠ يومًا: منصة Binance لا تُرجع مبيعات P2P
+ * الأقدم من ~٦ أشهر بينما تُرجع الإيداعات والسحوبات القديمة، فالسجل البعيد
+ * فيه دخلٌ بلا خرجه (عجز بمئات الآلاف) وأي رقم هناك تخمين مضلّل → «—». */
+const CHAIN_WINDOW_MS = 90 * 86400000;
+
 function computeBalanceMap() {
+  const cutoff = Date.now() - CHAIN_WINDOW_MS;
   const evts = [];
   for (const o of state.orders) {
     if (o.orderStatus !== 'COMPLETED') continue;
+    if (o.createTime < cutoff) continue;
     const v = grossUSDT(o); // نفس الرقم المعروض في عمود USDT
     evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v });
   }
   for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
+    if (t.time < cutoff) continue;
     if (String(t.coin || '').toUpperCase() !== 'USDT') continue; // الرصيد بالـ USDT فقط
     const isOut = OUT_KINDS.has(t.kind);
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
@@ -99,22 +107,22 @@ function computeBalanceMap() {
   // (سالبًا غالبًا لمن يبيع أكثر مما يشتري) — فنعرض «—» بدل رقم خاطئ.
   if (cur == null || !evts.length) { state.balGap = 0; return new Map(); }
   evts.sort((a, b) => a.t - b.t);
-  const map = new Map();
   let run = 0;
-  for (const e of evts) { run += e.d; map.set(e.k, run); }
+  for (const e of evts) { run += e.d; e.bal = run; } // الرصيد التراكمي بعد كل عملية
   const off = cur - run; // تثبيت أحدث صف على الرصيد الفعلي
   /* من الأحدث إلى الأقدم: النزول تحت الصفر يعني حركة «خرج» ناقصة من السجل بعد
      تلك اللحظة (غالبًا بيع من رصيد الفوري لا تُرجعه واجهة المنصة). نفترض أن
      الرصيد بلغ صفرًا عندها — المستخدم يُفرغ محفظته كثيرًا — ونرفع ما قبلها
      بمقدار العجز، فتظهر أرقام تقديرية معقولة بدل «—»، والعجز يُعرض في البطاقة. */
-  const keys = [...map.keys()]; // بترتيب زمني تصاعدي (ترتيب الإدراج — يطابق evts)
+  const map = new Map();
   let adj = 0, gap = 0, gapAt = 0;
-  for (let i = keys.length - 1; i >= 0; i--) {
-    const b = map.get(keys[i]) + off + adj;
+  for (let i = evts.length - 1; i >= 0; i--) {
+    const e = evts[i];
+    const b = e.bal + off + adj;
     if (b < 0) {
-      if (!gap) gapAt = evts[i].t; // أحدث نقطة تصفير = العملية الناقصة وقعت بعدها
-      adj -= b; gap -= b; map.set(keys[i], 0);
-    } else map.set(keys[i], b);
+      if (!gap) gapAt = e.t; // أحدث نقطة تصفير = العملية الناقصة وقعت بعدها
+      adj -= b; gap -= b; map.set(e.k, 0);
+    } else map.set(e.k, b);
   }
   state.balGap = gap > 1 ? gap : 0;
   state.balGapAt = state.balGap ? gapAt : 0;
