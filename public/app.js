@@ -21,7 +21,8 @@ const state = {
   balance: null,
   balanceLoading: false,
   balanceError: null,
-  settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', rangeHours: 720, lastSync: null },
+  settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', rangeHours: 720, syncQuota: 3, lastSync: null },
+  syncQuota: { unlimited: true, quota: 0, used: 0, left: null },
   account: { active: 'p2p', name: 'حوالات P2P', list: [] },
   switchingAccount: false,
   filters: { range: '1', from: null, to: null, type: 'all', status: 'all', fiat: 'all', q: '' },
@@ -300,6 +301,12 @@ async function loadTransfers() {
 async function loadSettings() {
   state.settings = await api('/api/settings');
 }
+/* رصيد مرات المزامنة المتبقية اليوم — يُحسب في الخادم، فلا يتحايل عليه المتصفّح */
+async function loadSyncQuota() {
+  try { state.syncQuota = await api('/api/sync/quota'); }
+  catch { state.syncQuota = { unlimited: true, quota: 0, used: 0, left: null }; }
+  applySyncCooldown();
+}
 async function loadAccount() {
   const j = await api('/api/account');
   state.account.active = j.active;
@@ -321,7 +328,7 @@ function renderAccount() {
   const other = state.account.list.find((a) => a.id !== state.account.active);
   btn.title = other ? ('التبديل إلى: ' + other.name + ' — لكل حساب مفتاح API وبياناته الخاصة') : 'تبديل الحساب';
 }
-const loadAll = () => Promise.all([loadAccount(), loadOrders(), loadTransfers(), loadSettings()]);
+const loadAll = () => Promise.all([loadAccount(), loadOrders(), loadTransfers(), loadSettings(), loadSyncQuota()]);
 
 // التبديل بين الحسابين (P2P / P3P): يحفظ الخادم بيانات الحساب الحالي ويحمّل الآخر
 async function switchAccount() {
@@ -1986,6 +1993,7 @@ async function openSettings() {
     ? '•••••••• (محفوظ — اتركه فارغًا للإبقاء عليه)'
     : 'ألصق المفتاح السري هنا';
   form.elements.rangeHours.value = String(state.settings.rangeHours || 720);
+  form.elements.syncQuota.value = String(state.settings.syncQuota != null ? state.settings.syncQuota : 3);
   form.elements.baseUrl.value = state.settings.baseUrl || 'https://api.binance.com';
   openModal('#mSettings');
 }
@@ -1998,9 +2006,11 @@ async function saveSettings() {
       body: JSON.stringify({
         apiKey: el.apiKey.value.trim(), apiSecret: el.apiSecret.value.trim(),
         rangeHours: Number(el.rangeHours.value) || 720, baseUrl: el.baseUrl.value,
+        syncQuota: Math.max(Math.floor(Number(el.syncQuota.value)) || 0, 0),
       }),
     });
     await loadSettings();
+    await loadSyncQuota();
     closeModal('#mSettings');
     toast('تم حفظ الإعدادات ✓');
   } catch (e) { toast(e.message, 'err'); }
@@ -2064,17 +2074,25 @@ function setSyncCooldown(ms) {
 function applySyncCooldown() {
   const btn = $('#btnSync');
   if (!btn || state.syncing) return;
+  const q = state.syncQuota || { unlimited: true };
+  // غير المسؤول: العدد المتبقي اليوم يظهر على الزر نفسه
+  btn.textContent = q.unlimited ? '⟳ مزامنة' : `⟳ مزامنة (${fmt0(q.left || 0)})`;
   const rem = syncCooldownUntil() - Date.now();
   if (rem > 0) {
     btn.disabled = true;
     btn.title = `المنصة حظرت الطلبات مؤقتًا — انتظر ${Math.ceil(rem / 60000)} دقيقة قبل إعادة المزامنة`;
     if (_cooldownTimer) clearTimeout(_cooldownTimer);
     _cooldownTimer = setTimeout(applySyncCooldown, Math.min(rem, 30000));
-  } else {
-    btn.disabled = false;
-    btn.title = 'مزامنة';
-    if (_cooldownTimer) { clearTimeout(_cooldownTimer); _cooldownTimer = null; }
+    return;
   }
+  if (_cooldownTimer) { clearTimeout(_cooldownTimer); _cooldownTimer = null; }
+  if (!q.unlimited && !(q.left > 0)) {
+    btn.disabled = true;
+    btn.title = q.quota ? `انتهى عدد مرات المزامنة اليوم (${fmt0(q.quota)}) — يتجدّد بكرة` : 'المزامنة غير مسموحة لحسابك — راجع المسؤول';
+    return;
+  }
+  btn.disabled = false;
+  btn.title = q.unlimited ? 'مزامنة' : `متبقّي ${fmt0(q.left)} من ${fmt0(q.quota)} مزامنة اليوم`;
 }
 
 async function runSync() {
@@ -2082,6 +2100,12 @@ async function runSync() {
   const rem = syncCooldownUntil() - Date.now();
   if (rem > 0) {
     toast(`المنصة حظرت الطلبات مؤقتًا — انتظر ${Math.ceil(rem / 60000)} دقيقة قبل إعادة المحاولة، فتكرار الضغط يُطيل الحظر`, 'err');
+    return;
+  }
+  try { await loadSyncQuota(); } catch {}
+  const q = state.syncQuota || { unlimited: true };
+  if (!q.unlimited && !(q.left > 0)) {
+    toast(q.quota ? `انتهى عدد مرات المزامنة اليوم (${fmt0(q.quota)}) — جرّب بكرة أو راجع المسؤول` : 'المزامنة غير مسموحة لحسابك — راجع المسؤول', 'err');
     return;
   }
   try { await loadSettings(); } catch {}
@@ -2140,7 +2164,8 @@ async function runSync() {
     if (/HTTP 4(18|29)|حظر/.test(e.message || '')) setSyncCooldown(30 * 60000);
   } finally {
     state.syncing = false;
-    applySyncCooldown();
+    // الخادم خصم مرّة قبل البدء — نُحدّث العدّاد من عنده لا من المتصفّح
+    loadSyncQuota().catch(() => applySyncCooldown());
     setTimeout(() => $('#syncBar').classList.add('hidden'), 800);
   }
 }

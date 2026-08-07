@@ -79,7 +79,7 @@
   </div>
   <div class="actions">
     <span id="roleBadge" class="role-badge"></span>
-    <button id="btnSync" class="btn accent admin-only" title="جلب أحدث الطلبات من المنصة">⟳ مزامنة</button>
+    <button id="btnSync" class="btn accent" title="جلب أحدث الطلبات من المنصة">⟳ مزامنة</button>
     <button id="btnAccount" class="btn ghost acct-btn" title="تبديل الحساب — لكل حساب مفتاح API وبياناته الخاصة">🔀 <span id="acctName">حوالات P2P</span></button>
     <div class="menu-wrap">
       <button id="btnMenu" class="btn ghost" title="القائمة" aria-haspopup="true" aria-expanded="false">☰ القائمة</button>
@@ -352,6 +352,9 @@
             <option value="2160">آخر 3 أشهر</option>
             <option value="8760">آخر سنة</option>
           </select>
+        </label>
+        <label title="عدد مرات المزامنة المسموحة يوميًا لكل من «مستخدم» و«مستخدم 2» — المسؤول بلا حد. صفر = منع المزامنة عنهم.">مرات المزامنة اليومية للمستخدمين
+          <input type="number" name="syncQuota" min="0" max="500" step="1" inputmode="numeric" dir="ltr">
         </label>
         <label>عنوان الخادم
           <select name="baseUrl">

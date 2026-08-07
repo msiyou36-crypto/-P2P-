@@ -127,6 +127,42 @@ async function loadMaintenance(req) {
   return Object.assign({}, MAINT_DEFAULT, { system });
 }
 
+/* ===== حصّة المزامنة للمستخدمين (غير المسؤول) =====
+ * المسؤول يزامن بلا حد. «مستخدم» و«مستخدم 2» لكلٍّ منهما عدد مرات في اليوم يحدّده المسؤول.
+ * العدّاد في مفتاح تخزين مستقل يُقرأ طازجًا عند كل طلب، حتى لا يكتب سستمٌ فوق عدّاد الآخر،
+ * والحصّة مشتركة بين السستمين لأن الحظر يقع على الحساب في المنصة لا على السستم.
+ */
+const SYNC_QUOTA_DEFAULT = 3;
+const SYNC_USAGE_KEY = 'syncusage';
+/* اليوم بتوقيت السودان (UTC+2) — التصفير منتصف الليل محليًا لا بتوقيت غرينتش */
+const syncDayKey = () => new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 10);
+const syncQuotaValue = () => {
+  const n = Number(config.syncQuota);
+  return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), 500) : SYNC_QUOTA_DEFAULT;
+};
+async function loadSyncUsage() {
+  const day = syncDayKey();
+  try {
+    const u = await loadStore(SYNC_USAGE_KEY, null);
+    if (u && typeof u === 'object' && u.day === day && u.used && typeof u.used === 'object') {
+      return { day, used: Object.assign({}, u.used) };
+    }
+  } catch (e) { console.error('sync usage read: ' + e.message); }
+  return { day, used: {} };
+}
+async function syncQuotaFor(role) {
+  const quota = syncQuotaValue();
+  if (role === 'admin') return { unlimited: true, quota: 0, used: 0, left: null };
+  const u = await loadSyncUsage();
+  const used = Number(u.used[role] || 0);
+  return { unlimited: false, quota, used, left: Math.max(quota - used, 0) };
+}
+async function bumpSyncUsage(role) {
+  const u = await loadSyncUsage();
+  u.used[role] = Number(u.used[role] || 0) + 1;
+  try { await saveStore(SYNC_USAGE_KEY, u); } catch (e) { console.error('sync usage save: ' + e.message); }
+}
+
 /* ===================== المصادقة والصلاحيات ===================== */
 
 function hashPassword(password, salt) {
@@ -210,6 +246,9 @@ async function initStore() {
 
   // وضع الصيانة انتقل لمفاتيح مستقلة لكل سستم — يُحذف من config نهائيًا
   delete config.maintenance;
+
+  // عدد مرات المزامنة المسموحة يوميًا لكل مستخدم غير مسؤول
+  if (config.syncQuota == null) config.syncQuota = SYNC_QUOTA_DEFAULT;
 
   // المصادقة + ضبط كلمات السر من البيئة عند أول تشغيل
   if (!config.auth || typeof config.auth !== 'object') config.auth = {};
@@ -940,7 +979,7 @@ const server = http.createServer(async (req, res) => {
     ];
     // لأي مستخدم مسجّل دخوله
     const LOGIN_ROUTES = [
-      ['POST', '/api/sync'], ['GET', '/api/balance'],
+      ['POST', '/api/sync'], ['GET', '/api/sync/quota'], ['GET', '/api/balance'],
       ['GET', '/api/orders'], ['GET', '/api/transfers'], ['GET', '/api/settings'],
       ['GET', '/api/account'], ['POST', '/api/account'],
     ];
@@ -1232,6 +1271,7 @@ const server = http.createServer(async (req, res) => {
         hasSecret: !!AC().apiSecret,
         baseUrl: AC().baseUrl,
         rangeHours: AC().rangeHours,
+        syncQuota: syncQuotaValue(),
         lastSync: AC().lastSync,
       });
       return;
@@ -1245,14 +1285,33 @@ const server = http.createServer(async (req, res) => {
         AC().baseUrl = body.baseUrl.trim().replace(/\/+$/, '');
       }
       if (body.rangeHours != null) AC().rangeHours = Math.min(Math.max(Number(body.rangeHours) || 720, 1), 26280);
+      if (body.syncQuota != null) config.syncQuota = Math.min(Math.max(Math.floor(Number(body.syncQuota)) || 0, 0), 500);
       await saveStore('config', config);
       sendJSON(res, 200, { ok: true });
       return;
     }
 
+    /* ---------- رصيد مرات المزامنة المتبقية لهذا الدور اليوم ---------- */
+    if (p === '/api/sync/quota' && req.method === 'GET') {
+      sendJSON(res, 200, await syncQuotaFor(role));
+      return;
+    }
+
     /* ---------- المزامنة (بث التقدم NDJSON) ---------- */
     if (p === '/api/sync' && req.method === 'POST') {
+      // الحصّة تُفحص قبل أي شيء: المسؤول بلا حد، وغيره بعدد مرات يوميًا
+      const q = await syncQuotaFor(role);
+      if (!q.unlimited && q.left <= 0) {
+        sendJSON(res, 429, {
+          error: q.quota === 0
+            ? 'المزامنة غير مسموحة لحسابك — راجع المسؤول'
+            : `انتهى عدد مرات المزامنة اليوم (${q.quota}) — جرّب بكرة أو راجع المسؤول`,
+          quota: q.quota, used: q.used, left: 0,
+        });
+        return;
+      }
       if (syncRunning) { sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ بالفعل' }); return; }
+      if (!q.unlimited) await bumpSyncUsage(role);
       syncRunning = true;
       res.writeHead(200, {
         'Content-Type': 'application/x-ndjson; charset=utf-8',
