@@ -1311,6 +1311,11 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (syncRunning) { sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ بالفعل' }); return; }
+      // خلل في الإعداد ليس محاولة مزامنة — لا يُحسب من حصّة المستخدم
+      if (!AC().apiKey || !AC().apiSecret) {
+        sendJSON(res, 400, { error: 'لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا' });
+        return;
+      }
       if (!q.unlimited) await bumpSyncUsage(role);
       syncRunning = true;
       res.writeHead(200, {
