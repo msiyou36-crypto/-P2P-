@@ -14,6 +14,7 @@ const state = {
   balGap: 0,          // مقدار الحركة الناقصة من السجل (من عمود «الباقي من USDT»)
   balGapAt: 0,        // وقت أحدث نقطة تصفير — العملية الناقصة وقعت بعده
   balGapOut: true,    // هل الناقص حركة خرج (بيع/سحب) أم دخل (إيداع/شراء)
+  balNeedsWallet: false, // العمود فارغ لأن الرصيد لم يُجلب ولا توجد نقطة تصفير
   balAbsurd: null,    // عملية بكمية غير معقولة تُفسد حساب «الباقي» (قيمة محلية في خانة USDT غالبًا)
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
@@ -107,33 +108,54 @@ function computeBalanceMap() {
     if (Math.abs(e.d) >= 100000 && (!state.balAbsurd || Math.abs(e.d) > Math.abs(state.balAbsurd.d))) state.balAbsurd = e;
   }
   const cur = currentUsdtBalance();
-  // بدون رصيد المحفظة لا يوجد ما نُثبّت عليه، وأي رقم سيكون مضلّلًا
-  // (سالبًا غالبًا لمن يبيع أكثر مما يشتري) — فنعرض «—» بدل رقم خاطئ.
-  if (cur == null || !evts.length) { state.balGap = 0; return new Map(); }
+  state.balNeedsWallet = false;
+  if (!evts.length) { state.balGap = 0; state.balGapAt = 0; return new Map(); }
   evts.sort((a, b) => a.t - b.t);
   let run = 0;
   for (const e of evts) { run += e.d; e.bal = run; } // الرصيد التراكمي بعد كل عملية
-  const off = cur - run; // مبدئيًا: تثبيت أحدث صف على الرصيد الفعلي
   const last = evts.length - 1;
   const map = new Map();
-  /* مرور من الأحدث إلى الأقدم: نزولُ الرصيد تحت الصفر مستحيل، فمعناه أن حركة
-     «خرج» بعد تلك اللحظة لم تصل من المنصة. أحدثُ نزولٍ هو نقطة تصفير مؤكَّدة
-     (أفرغ المستخدم محفظته فعلًا هناك)، فنجعلها الأساس بدل الرصيد الحالي. */
   // رصيدُ حسابٍ لا يُقاس بأكثر من قرشين؛ وبعض الكميات تصل بثماني خانات عشرية
   // (صفقات السوق الفوري) فيتراكم كسرٌ طويل على كل الصفوف — نُقرّبه هنا لا عند
   // العرض وحده، ليخرج نظيفًا في الجدول وملف التصدير معًا.
   const r2 = (v) => Math.round(v * 100) / 100;
+
+  /* علامات «رصيدي كان صفرًا بعد هذه العملية» أوثق من أي استنتاج: المستخدم يعرف
+     متى أفرغ محفظته. وهي تُثبّت العمود كلّه بلا حاجة لرصيد المحفظة إطلاقًا —
+     الرصيد بعد النقطة صفرٌ معلوم، فما بعدها يُجمع منها وما قبلها يُطرح إليها.
+     لذلك يعمل العمود حتى لو تعذّر جلب الرصيد (مفتاح ناقص أو حظر مؤقت). */
+  const zeros = [];
+  for (let i = 0; i <= last; i++) if (evts[i].zero) zeros.push(i);
+
+  if (zeros.length) {
+    // كل صفٍّ يُقاس من أقرب نقطة تصفير إليه، فالخطأ يتراكم كلّما بَعُدنا عنها
+    let zi = 0;
+    for (let i = 0; i <= last; i++) {
+      while (zi + 1 < zeros.length && Math.abs(zeros[zi + 1] - i) <= Math.abs(zeros[zi] - i)) zi++;
+      map.set(evts[i].k, r2(Math.max(evts[i].bal - evts[zeros[zi]].bal, 0)));
+    }
+    const zLast = zeros[zeros.length - 1];
+    if (cur == null) { state.balGap = 0; state.balGapAt = 0; return map; }
+    const gap = r2((evts[last].bal - evts[zLast].bal) - cur); // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
+    state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
+    state.balGapOut = gap > 0;      // نوع الحركة الناقصة
+    state.balGapAt = state.balGap ? evts[zLast].t : 0; // وقعت بعد نقطة التصفير هذه
+    return map;
+  }
+
+  /* بلا علامة من المستخدم لا يبقى إلا رصيد المحفظة نُثبّت عليه، وبدونه أي رقم
+     مضلّل (سالبٌ غالبًا لمن يبيع أكثر مما يشتري) — فنعرض «—» ونشرح السبب. */
+  if (cur == null) { state.balGap = 0; state.balGapAt = 0; state.balNeedsWallet = true; return new Map(); }
+  const off = cur - run; // مبدئيًا: تثبيت أحدث صف على الرصيد الفعلي
+  /* مرور من الأحدث إلى الأقدم: نزولُ الرصيد تحت الصفر مستحيل، فمعناه أن حركة
+     «خرج» بعد تلك اللحظة لم تصل من المنصة. أحدثُ نزولٍ هو نقطة تصفير مؤكَّدة
+     (أفرغ المستخدم محفظته فعلًا هناك)، فنجعلها الأساس بدل الرصيد الحالي. */
   let adj = 0, zIdx = -1;
   for (let i = last; i >= 0; i--) {
     const b = evts[i].bal + off + adj;
     if (b < 0) { if (zIdx < 0) zIdx = i; adj -= b; map.set(evts[i].k, 0); }
     else map.set(evts[i].k, r2(b));
   }
-
-  /* علامة المستخدم «الرصيد صفر بعد هذه العملية» أوثق من أي استنتاج: هو يعرف
-     متى أفرغ محفظته، والنزول تحت الصفر مجرّد دليل ظرفي قد يغيب إن اكتمل السجل. */
-  for (let i = last; i >= 0; i--) if (evts[i].zero) { zIdx = i; break; }
-
   if (zIdx < 0) { state.balGap = 0; state.balGapAt = 0; return map; }
 
   /* التثبيت على نقطة التصفير: كل ما بعدها يُحسب تصاعديًا منها، فتظهر العمليات
@@ -141,10 +163,10 @@ function computeBalanceMap() {
      النقص عليها. والفرقُ بين آخر صفٍّ والرصيد الفعلي هو الحركة الناقصة نفسها. */
   const base = evts[zIdx].bal;
   for (let i = zIdx; i <= last; i++) map.set(evts[i].k, r2(Math.max(evts[i].bal - base, 0)));
-  const gap = r2((evts[last].bal - base) - cur); // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
+  const gap = r2((evts[last].bal - base) - cur);
   state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
-  state.balGapOut = gap > 0;      // نوع الحركة الناقصة
-  state.balGapAt = state.balGap ? evts[zIdx].t : 0; // وقعت بعد نقطة التصفير هذه
+  state.balGapOut = gap > 0;
+  state.balGapAt = state.balGap ? evts[zIdx].t : 0;
   return map;
 }
 
@@ -1941,12 +1963,18 @@ function renderBalance() {
   const valEl = $('#walletUsdt'), subEl = $('#walletSub'), extraEl = $('#walletExtra'), updEl = $('#walletUpdated');
   if (!valEl) return;
   if (state.balanceLoading) { subEl.textContent = 'جارٍ جلب الرصيد من المنصة…'; return; }
+  /* لماذا عمود «الباقي» فارغ: بلا رصيدٍ ولا نقطة تصفير لا يوجد ما نُثبّت عليه.
+     نقولها هنا لأن المستخدم يرى «—» في العمود ولا يعرف أن سببها هذه البطاقة. */
+  const colHint = state.balNeedsWallet
+    ? ' عمود «الباقي من USDT» فارغ لهذا السبب — أو علّم «رصيدي كان صفرًا بعد هذه العملية» على أي عملية أفرغتَ محفظتك بعدها، فيعمل العمود بلا حاجة للرصيد.'
+    : '';
   if (state.balanceError) {
-    valEl.textContent = '—'; subEl.textContent = '⚠ ' + state.balanceError; extraEl.textContent = ''; updEl.textContent = '';
+    valEl.textContent = '—'; subEl.textContent = '⚠ ' + state.balanceError + colHint; extraEl.textContent = ''; updEl.textContent = '';
     return;
   }
   if (!state.balance) {
-    valEl.textContent = '—'; subEl.textContent = 'اضغط «⟳ تحديث الرصيد» لعرض رصيدك الحالي في الحساب الفوري ومحفظة التمويل معًا.';
+    valEl.textContent = '—';
+    subEl.textContent = 'اضغط «⟳ تحديث الرصيد» لعرض رصيدك الحالي في الحساب الفوري ومحفظة التمويل معًا.' + colHint;
     return;
   }
   const assets = state.balance.assets || [];
