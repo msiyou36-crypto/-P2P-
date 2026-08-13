@@ -134,8 +134,9 @@ async function loadMaintenance(req) {
  */
 const SYNC_QUOTA_DEFAULT = 3;
 const SYNC_USAGE_KEY = 'syncusage';
-/* اليوم بتوقيت السودان (UTC+2) — التصفير منتصف الليل محليًا لا بتوقيت غرينتش */
-const syncDayKey = () => new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 10);
+/* اليوم بتوقيت السودان (UTC+2) — حدُّ اليوم منتصف الليل محليًا لا بتوقيت غرينتش */
+const dayKey = (ms) => new Date((ms || Date.now()) + 2 * 3600000).toISOString().slice(0, 10);
+const syncDayKey = () => dayKey();
 const syncQuotaValue = () => {
   const n = Number(config.syncQuota);
   return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), 500) : SYNC_QUOTA_DEFAULT;
@@ -161,6 +162,32 @@ async function bumpSyncUsage(role) {
   const u = await loadSyncUsage();
   u.used[role] = Number(u.used[role] || 0) + 1;
   try { await saveStore(SYNC_USAGE_KEY, u); } catch (e) { console.error('sync usage save: ' + e.message); }
+}
+
+/* ===== لقطات الرصيد اليومية: ما يُثبِّت عمود «الباقي من USDT» تلقائيًا =====
+ * لكل يومٍ آخرُ قراءةٍ لرصيد USDT (الفوري + التمويل معًا). ما إن يدخل يومٌ جديد
+ * حتى تُغلق قراءةُ أمس وتصير ثابتة إلى الأبد، فلا تتحرّك أرقام الأيام الماضية
+ * مهما دخل من عمليات. تُقرأ طازجة وتُدمج قبل الحفظ، فلا يمحو سستمٌ لقطات الآخر.
+ */
+const SNAP_KEEP_DAYS = 200;
+const snapKey = () => 'balsnap__' + config.active;
+async function loadBalSnaps() {
+  try {
+    const s = await loadStore(snapKey(), null);
+    if (s && typeof s === 'object' && !Array.isArray(s)) return s;
+  } catch (e) { console.error('balsnap read: ' + e.message); }
+  return {};
+}
+async function saveBalSnap(bal, at) {
+  const s = await loadBalSnaps();
+  const day = dayKey(at);
+  // آخر قراءة في اليوم هي المعتمدة: كلّما تأخّرت كانت أقرب لإغلاق اليوم
+  if (s[day] && Number(s[day].at) > at) return s;
+  s[day] = { bal, at };
+  const days = Object.keys(s).sort();
+  for (const d of days.slice(0, Math.max(days.length - SNAP_KEEP_DAYS, 0))) delete s[d];
+  try { await saveStore(snapKey(), s); } catch (e) { console.error('balsnap save: ' + e.message); }
+  return s;
 }
 
 /* ===================== المصادقة والصلاحيات ===================== */
@@ -979,7 +1006,8 @@ const server = http.createServer(async (req, res) => {
     ];
     // لأي مستخدم مسجّل دخوله
     const LOGIN_ROUTES = [
-      ['POST', '/api/sync'], ['GET', '/api/sync/quota'], ['GET', '/api/balance'],
+      ['POST', '/api/sync'], ['GET', '/api/sync/quota'],
+      ['GET', '/api/balance'], ['GET', '/api/balance/snapshots'],
       ['GET', '/api/orders'], ['GET', '/api/transfers'], ['GET', '/api/settings'],
       ['GET', '/api/account'], ['POST', '/api/account'],
     ];
@@ -1224,14 +1252,29 @@ const server = http.createServer(async (req, res) => {
         for (const f of NUMS) cur[f] = num(cur[f]) + num(a[f]);
         merged.set(key, cur);
       }
+      const now = Date.now();
+      /* لا نسجّل لقطةً إلا إذا وصلت المحفظتان معًا: رقمُ التمويل وحده ناقصٌ،
+         ولقطةٌ ناقصة تصير أساسًا خاطئًا يثبّت عليه عمودُ «الباقي» كل صفوف اليوم. */
+      let snapshots = null;
+      if (!spotError) {
+        try { snapshots = await saveBalSnap(usdtTotal(funding) + usdtTotal(spot), now); }
+        catch (e) { console.error('balsnap: ' + e.message); }
+      }
       sendJSON(res, 200, {
         assets: [...merged.values()],
         spotIncluded: !spotError,
         spotError,
         usdtFunding: usdtTotal(funding),
         usdtSpot: usdtTotal(spot),
-        updatedAt: Date.now(),
+        snapshots: snapshots || await loadBalSnaps(),
+        updatedAt: now,
       });
+      return;
+    }
+
+    /* ---------- لقطات الرصيد اليومية (تُقرأ بلا اتصال بالمنصة) ---------- */
+    if (p === '/api/balance/snapshots' && req.method === 'GET') {
+      sendJSON(res, 200, { snapshots: await loadBalSnaps() });
       return;
     }
 

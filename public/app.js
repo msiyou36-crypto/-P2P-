@@ -16,6 +16,7 @@ const state = {
   balGapOut: true,    // هل الناقص حركة خرج (بيع/سحب) أم دخل (إيداع/شراء)
   balNeedsWallet: false, // العمود فارغ لأن الرصيد لم يُجلب ولا توجد نقطة تصفير
   balFloating: false, // العمود مثبَّت على الرصيد الحالي فيتغيّر مع كل عملية جديدة
+  balSnaps: [],       // لقطات الرصيد اليومية — تُثبّت أرقام الأيام الماضية تلقائيًا
   balAbsurd: null,    // عملية بكمية غير معقولة تُفسد حساب «الباقي» (قيمة محلية في خانة USDT غالبًا)
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
@@ -122,33 +123,46 @@ function computeBalanceMap() {
   // العرض وحده، ليخرج نظيفًا في الجدول وملف التصدير معًا.
   const r2 = (v) => Math.round(v * 100) / 100;
 
-  /* علامات «رصيدي كان صفرًا بعد هذه العملية» أوثق من أي استنتاج: المستخدم يعرف
-     متى أفرغ محفظته. وهي تُثبّت العمود كلّه بلا حاجة لرصيد المحفظة إطلاقًا —
-     الرصيد بعد النقطة صفرٌ معلوم، فما بعدها يُجمع منها وما قبلها يُطرح إليها.
-     لذلك يعمل العمود حتى لو تعذّر جلب الرصيد (مفتاح ناقص أو حظر مؤقت). */
-  const zeros = [];
-  for (let i = 0; i <= last; i++) if (evts[i].zero) zeros.push(i);
+  /* ============ نقاط الإرساء ============
+     نقطة الإرساء = «بعد هذه العملية كان الرصيد كذا». نوعان، وكلاهما يقين:
+       • لقطة يومية تلقائية: رصيد المحفظة الحقيقي كما قرأته المنصة في وقتٍ ما.
+         ما إن يدخل يومٌ جديد حتى تُغلق لقطةُ أمس فلا تتحرّك أرقامه أبدًا.
+       • علامة المستخدم 📌 «رصيدي كان صفرًا» — قيمتها صفر، وهي الأقوى.
+     كل صفٍّ يُقاس من آخر نقطة عنده أو قبله، فلا يغيّره شيءٌ وقع بعده. والصفوف
+     الأقدم من أول نقطة تُقاس منها رجوعًا، وهي ثابتة أيضًا لأن الجديد يأتي بعدها. */
+  const anchors = [];   // { i, off } حيث المعروض = bal − off
+  for (const s of (state.balSnaps || [])) {
+    // آخر عملية وقعت عند وقت اللقطة أو قبله: الرصيد بعدها هو ما قرأته المنصة
+    let i = -1;
+    for (let j = last; j >= 0; j--) if (evts[j].t <= s.at) { i = j; break; }
+    if (i < 0) continue;                       // لقطة أقدم من كل عملياتنا
+    anchors.push({ i, off: evts[i].bal - s.bal, snap: true, at: s.at });
+  }
+  for (let i = 0; i <= last; i++) if (evts[i].zero) anchors.push({ i, off: evts[i].bal, snap: false });
+  // عند تساوي الموضع تفوز علامةُ المستخدم: هو يقرّر، لا القراءة الآلية
+  anchors.sort((a, b) => (a.i - b.i) || ((a.snap ? 0 : 1) - (b.snap ? 0 : 1)));
+  const uniq = [];
+  for (const a of anchors) {
+    if (uniq.length && uniq[uniq.length - 1].i === a.i) uniq[uniq.length - 1] = a;
+    else uniq.push(a);
+  }
 
-  if (zeros.length) {
-    /* كشف حساب لا يتحرّك: كل صفٍّ يُقاس من آخر نقطة تصفير عنده أو قبله فقط،
-       فلا يغيّره شيءٌ وقع بعده. رقم أمس يبقى رقم أمس مهما دخل اليوم من عمليات
-       أو تغيّر رصيد المحفظة. والصفوف الأقدم من أول نقطة تُقاس منها رجوعًا،
-       وهي ثابتة أيضًا لأن العمليات الجديدة تأتي بعدها لا قبلها. */
+  if (uniq.length) {
     let zi = 0;
     for (let i = 0; i <= last; i++) {
-      while (zi + 1 < zeros.length && zeros[zi + 1] <= i) zi++;
-      map.set(evts[i].k, r2(Math.max(evts[i].bal - evts[zeros[zi]].bal, 0)));
+      while (zi + 1 < uniq.length && uniq[zi + 1].i <= i) zi++;
+      map.set(evts[i].k, r2(Math.max(evts[i].bal - uniq[zi].off, 0)));
     }
-    const zLast = zeros[zeros.length - 1];
+    const zLast = uniq[uniq.length - 1];
     if (cur == null) { state.balGap = 0; state.balGapAt = 0; return map; }
-    const gap = r2((evts[last].bal - evts[zLast].bal) - cur); // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
+    const gap = r2((evts[last].bal - zLast.off) - cur); // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
     state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
     state.balGapOut = gap > 0;      // نوع الحركة الناقصة
-    state.balGapAt = state.balGap ? evts[zLast].t : 0; // وقعت بعد نقطة التصفير هذه
+    state.balGapAt = state.balGap ? evts[zLast.i].t : 0; // وقعت بعد نقطة الإرساء هذه
     return map;
   }
 
-  /* بلا علامة من المستخدم لا يبقى إلا رصيد المحفظة نُثبّت عليه، وبدونه أي رقم
+  /* بلا لقطةٍ ولا علامة لا يبقى إلا رصيد المحفظة نُثبّت عليه، وبدونه أي رقم
      مضلّل (سالبٌ غالبًا لمن يبيع أكثر مما يشتري) — فنعرض «—» ونشرح السبب. */
   if (cur == null) { state.balGap = 0; state.balGapAt = 0; state.balNeedsWallet = true; return new Map(); }
   /* التثبيت على الرصيد الحالي يعني أن كل صفٍّ قديم يتغيّر كلّما دخلت عملية جديدة
@@ -331,6 +345,17 @@ async function loadTransfers() {
 async function loadSettings() {
   state.settings = await api('/api/settings');
 }
+/* لقطات الرصيد اليومية: { 'YYYY-MM-DD': {bal, at} } → مصفوفة مرتّبة بالوقت */
+function setBalSnaps(obj) {
+  state.balSnaps = Object.entries(obj || {})
+    .map(([day, v]) => ({ day, bal: num(v && v.bal), at: Number(v && v.at) || 0 }))
+    .filter((s) => s.at > 0)
+    .sort((a, b) => a.at - b.at);
+}
+async function loadBalSnaps() {
+  try { setBalSnaps((await api('/api/balance/snapshots')).snapshots); }
+  catch { state.balSnaps = []; }
+}
 /* رصيد مرات المزامنة المتبقية اليوم — يُحسب في الخادم، فلا يتحايل عليه المتصفّح */
 async function loadSyncQuota() {
   try { state.syncQuota = await api('/api/sync/quota'); }
@@ -358,7 +383,7 @@ function renderAccount() {
   const other = state.account.list.find((a) => a.id !== state.account.active);
   btn.title = other ? ('التبديل إلى: ' + other.name + ' — لكل حساب مفتاح API وبياناته الخاصة') : 'تبديل الحساب';
 }
-const loadAll = () => Promise.all([loadAccount(), loadOrders(), loadTransfers(), loadSettings(), loadSyncQuota()]);
+const loadAll = () => Promise.all([loadAccount(), loadOrders(), loadTransfers(), loadSettings(), loadSyncQuota(), loadBalSnaps()]);
 
 // التبديل بين الحسابين (P2P / P3P): يحفظ الخادم بيانات الحساب الحالي ويحمّل الآخر
 async function switchAccount() {
@@ -401,6 +426,8 @@ async function refreshBalance() {
   if (btn) btn.disabled = true;
   try {
     state.balance = await api('/api/balance');
+    // كل قراءة ناجحة تُسجَّل لقطةً لليوم في الخادم، فنأخذها معها فورًا
+    if (state.balance.snapshots) setBalSnaps(state.balance.snapshots);
   } catch (e) {
     state.balanceError = e.message;
   } finally {
@@ -1974,7 +2001,7 @@ function renderBalance() {
   /* لماذا عمود «الباقي» فارغ: بلا رصيدٍ ولا نقطة تصفير لا يوجد ما نُثبّت عليه.
      نقولها هنا لأن المستخدم يرى «—» في العمود ولا يعرف أن سببها هذه البطاقة. */
   const colHint = state.balNeedsWallet
-    ? ' عمود «الباقي من USDT» فارغ لهذا السبب — أو علّم «رصيدي كان صفرًا بعد هذه العملية» على أي عملية أفرغتَ محفظتك بعدها، فيعمل العمود بلا حاجة للرصيد.'
+    ? ' عمود «الباقي من USDT» فارغ لهذا السبب — أول قراءة ناجحة للرصيد تُسجَّل لقطةً لليوم، وبها يشتغل العمود ويثبت تلقائيًا بعدها.'
     : '';
   if (state.balanceError) {
     valEl.textContent = '—'; subEl.textContent = '⚠ ' + state.balanceError + colHint; extraEl.textContent = ''; updEl.textContent = '';
@@ -2002,7 +2029,7 @@ function renderBalance() {
     gap = ` · ⚠ توجد عملية بتاريخ ${fmtDT(a.t)} كميتها ${fmt2(Math.abs(a.d))} USDT — رقم غير معقول (غالبًا مبلغ بالعملة المحلية كُتب في خانة الكمية). صحّح كميتها أو احذفها، فهي تُفسد عمود «الباقي» كله.`;
   } else if (state.balFloating) {
     // العمود بلا نقطة تصفير يتبع الرصيد الحالي، فأرقامه تتغيّر مع كل عملية جديدة
-    gap = ' · ℹ أرقام عمود «الباقي من USDT» مثبَّتة على رصيدك الحالي، فتتغيّر كلّما دخلت عملية جديدة. لتثبيتها نهائيًا: افتح آخر عملية أفرغتَ محفظتك بعدها وعلّم «رصيدي كان صفرًا بعد هذه العملية».';
+    gap = ' · ℹ أرقام عمود «الباقي من USDT» مثبَّتة على رصيدك الحالي مؤقتًا، فتتغيّر كلّما دخلت عملية جديدة. أول قراءة ناجحة للرصيد تُسجَّل لقطةً لهذا اليوم، وبمجرّد دخول يومٍ جديد تثبت أرقام اليوم الماضي ولا تعود تتحرّك.';
   } else if (state.balGap > 1) {
     const when = state.balGapAt ? ` بعد ${fmtDT(state.balGapAt)}` : '';
     const what = state.balGapOut ? 'خرج (بيع أو سحب)' : 'دخل (إيداع أو شراء)';
