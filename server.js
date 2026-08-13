@@ -396,6 +396,7 @@ function upsertOrder(o) {
   if (prev.totalPriceOverride != null) o.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) o.networkLabelOverride = prev.networkLabelOverride;
   if (prev.zeroPoint) o.zeroPoint = true;
+  if (prev.balAfter != null) o.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
   if (prev.source === 'binance' && o.source === 'manual') return 'same';
   const changed = JSON.stringify(prev) !== JSON.stringify(o);
   orders[o.orderNumber] = o;
@@ -606,6 +607,7 @@ function upsertTransfer(t) {
   if (prev.totalPriceOverride != null) t.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) t.networkLabelOverride = prev.networkLabelOverride;
   if (prev.zeroPoint) t.zeroPoint = true;
+  if (prev.balAfter != null) t.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
   const changed = JSON.stringify(prev) !== JSON.stringify(t);
   transfers[t.id] = t;
   return changed ? 'updated' : 'same';
@@ -999,6 +1001,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/orders/clear'], ['POST', '/api/transfers/clear'],
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
       ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'],
+      ['POST', '/api/balance/unfreeze'],
     ];
     // للمسؤول و«مستخدم 2» (الكتابة في الإشاري/الملاحظة فقط)
     const ANNOTATE_ROUTES = [
@@ -1008,6 +1011,7 @@ const server = http.createServer(async (req, res) => {
     const LOGIN_ROUTES = [
       ['POST', '/api/sync'], ['GET', '/api/sync/quota'],
       ['GET', '/api/balance'], ['GET', '/api/balance/snapshots'],
+      ['POST', '/api/balance/freeze'],
       ['GET', '/api/orders'], ['GET', '/api/transfers'], ['GET', '/api/settings'],
       ['GET', '/api/account'], ['POST', '/api/account'],
     ];
@@ -1275,6 +1279,43 @@ const server = http.createServer(async (req, res) => {
     /* ---------- لقطات الرصيد اليومية (تُقرأ بلا اتصال بالمنصة) ---------- */
     if (p === '/api/balance/snapshots' && req.method === 'GET') {
       sendJSON(res, 200, { snapshots: await loadBalSnaps() });
+      return;
+    }
+
+    /* ---------- تثبيت «الباقي من USDT» على العمليات المكتملة ----------
+       العملية متى اكتملت صار باقيها رقمًا نهائيًا يُكتب على الصفّ نفسه، فلا
+       يعود يُحسب ولا يتحرّك مهما دخل بعده من عمليات أو تغيّر رصيد المحفظة.
+       أول قيمة تُكتب هي النهائية — الكتابةُ فوقها ممنوعة، وإلا عاد يتحرّك. */
+    if (p === '/api/balance/freeze' && req.method === 'POST') {
+      const body = await readBody(req);
+      let n = 0;
+      const put = (store, id, v) => {
+        const rec = store[id];
+        if (!rec || rec.balAfter != null) return;
+        const x = Number(v);
+        if (!Number.isFinite(x)) return;
+        rec.balAfter = Math.round(x * 100) / 100;
+        n++;
+      };
+      for (const [id, v] of Object.entries(body.orders || {})) put(orders, id, v);
+      for (const [id, v] of Object.entries(body.transfers || {})) put(transfers, id, v);
+      if (n) { await saveOrders(); await saveTransfers(); }
+      sendJSON(res, 200, { ok: true, frozen: n });
+      return;
+    }
+
+    /* إلغاء التثبيت وإعادة الحساب من الصفر (للمسؤول): مخرجٌ إن ثُبِّتت أرقام
+       خاطئة يومًا — كأن يُثبَّت العمود قبل وصول عملية ناقصة من المنصة. */
+    if (p === '/api/balance/unfreeze' && req.method === 'POST') {
+      // ادمج أولًا حتى تشمل الإزالةُ ما كتبه السستم الآخر، فالحفظ هنا بلا دمج
+      await mergeFromStore('orders__' + config.active, orders);
+      await mergeFromStore('transfers__' + config.active, transfers);
+      let n = 0;
+      for (const o of Object.values(orders)) if (o.balAfter != null) { delete o.balAfter; n++; }
+      for (const t of Object.values(transfers)) if (t.balAfter != null) { delete t.balAfter; n++; }
+      await saveOrders({ merge: false });
+      await saveTransfers({ merge: false });
+      sendJSON(res, 200, { ok: true, cleared: n });
       return;
     }
 

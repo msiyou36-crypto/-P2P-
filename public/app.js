@@ -192,6 +192,52 @@ function computeBalanceMap() {
   return map;
 }
 
+/** الباقي المعروض: المثبَّت على الصفّ أوّلًا — رقمٌ نهائي لا يُعاد حسابه أبدًا */
+function balOf(item, isP2P) {
+  if (item.balAfter != null) return item.balAfter;
+  const v = state.balMap && state.balMap.get(balKey(item, isP2P));
+  return v == null ? null : v;
+}
+
+/* ===== تثبيت الباقي على العمليات المكتملة =====
+   العملية متى اكتملت صار باقيها نهائيًا، فنكتبه على الصفّ في الخادم مرّةً
+   واحدة. بعدها يُقرأ مكتوبًا لا محسوبًا، فلا يتحرّك مهما دخل من عمليات.
+   لا نثبّت ما لم يكن للعمود أساسٌ موثوق (لقطة رصيد أو علامة تصفير)، وإلّا
+   ثبّتنا أرقامًا مؤقتة مبنيّة على رصيدٍ متغيّر. */
+let _freezeTimer = null;
+function scheduleFreeze() {
+  if (_freezeTimer) clearTimeout(_freezeTimer);
+  _freezeTimer = setTimeout(() => { _freezeTimer = null; freezeSettled(); }, 1200);
+}
+async function freezeSettled() {
+  if (!state.auth.token || state.balFloating || state.balNeedsWallet) return;
+  if (!state.balMap || !state.balMap.size) return;
+  const o = {}, t = {};
+  let n = 0;
+  for (const x of state.orders) {
+    if (x.balAfter != null || x.orderStatus !== 'COMPLETED') continue;
+    const v = state.balMap.get(balKey(x, true));
+    if (v == null) continue;
+    o[x.orderNumber] = v; n++;
+  }
+  for (const x of state.transfers) {
+    if (x.balAfter != null || x.status !== 'COMPLETED') continue;
+    const v = state.balMap.get(balKey(x, false));
+    if (v == null) continue;
+    t[x.id] = v; n++;
+  }
+  if (!n) return;
+  try {
+    await api('/api/balance/freeze', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orders: o, transfers: t }),
+    });
+    // اكتبها في الذاكرة أيضًا حتى تُقرأ مثبَّتة فورًا بلا إعادة تحميل
+    for (const x of state.orders) if (x.balAfter == null && o[x.orderNumber] != null) x.balAfter = o[x.orderNumber];
+    for (const x of state.transfers) if (x.balAfter == null && t[x.id] != null) x.balAfter = t[x.id];
+  } catch (e) { console.error('freeze: ' + e.message); }
+}
+
 function fmtDT(ms) {
   const d = new Date(ms);
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -1493,8 +1539,9 @@ function renderTable() {
       tr.append(priceCell(it, 'totalPrice', it.totalPriceOverride != null ? fmt0(it.totalPriceOverride) : '—', 'transfer'));
     }
     tr.append(labelCell(it, isP2P ? 'order' : 'transfer', isP2P ? fiatSymOf(it) : (it.network || it.coin || '—')));
-    const bal = state.balMap && state.balMap.get(balKey(it, isP2P));
+    const bal = balOf(it, isP2P);
     const tdBal = tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
+    if (it.balAfter != null && tdBal) tdBal.title = 'رقم مثبَّت — تُبِّت ساعة اكتمال العملية ولا يتغيّر';
     if (it.zeroPoint && tdBal) {
       tdBal.classList.add('is-zeropoint');
       tdBal.title = 'نقطة التثبيت — أنت علّمت أن رصيدك كان صفرًا بعد هذه العملية';
@@ -1542,6 +1589,7 @@ function renderAll() {
   renderVolChart();
   renderPriceChart();
   renderTable();
+  scheduleFreeze(); // ما اكتمل من العمليات يُثبَّت باقيه في الخادم مرّةً واحدة
   const ls = state.settings.lastSync;
   $('#lastSync').textContent = ls ? 'آخر مزامنة: ' + fmtDT(ls) : 'لم تتم مزامنة بعد';
 }
@@ -1788,7 +1836,7 @@ function ledgerRows() {
       date: fmtDTsec(row._t),
       type: isP2P ? (it.tradeType === 'SELL' ? 'بيع' : 'شراء') : ((TX_KIND[it.kind] && TX_KIND[it.kind].ar) || it.kind),
       amount: isP2P ? grossUSDT(it) : it.amount,
-      balance: (() => { const b = state.balMap && state.balMap.get(balKey(it, isP2P)); return b == null ? '' : b; })(),
+      balance: (() => { const b = balOf(it, isP2P); return b == null ? '' : b; })(),
       price: isP2P ? effUnitPrice(it) : (it.unitPriceOverride != null ? it.unitPriceOverride : ''),
       total: isP2P ? effTotalPrice(it) : (it.totalPriceOverride != null ? it.totalPriceOverride : ''),
       curNet: it.networkLabelOverride != null ? it.networkLabelOverride : (isP2P ? fiatSymOf(it) : (it.network || it.coin || '')),
@@ -2383,6 +2431,18 @@ function wireEvents() {
     openConfirm('سيتم حذف سجل الإيداع والسحب المخزّن محليًا نهائيًا. هل أنت متأكد؟', async () => {
       try { await api('/api/transfers/clear', { method: 'POST' }); closeAllModals(); toast('تم مسح سجل الإيداع والسحب'); await loadTransfers(); renderAll(); }
       catch (e) { toast(e.message, 'err'); }
+    });
+  });
+
+  $('#btnUnfreezeBal').addEventListener('click', () => {
+    openConfirm('سيُلغى تثبيت عمود «الباقي من USDT» وتُحسب كل الأرقام من جديد. استخدمها لو ثُبِّتت أرقام خاطئة. هل أنت متأكد؟', async () => {
+      try {
+        const j = await api('/api/balance/unfreeze', { method: 'POST' });
+        closeAllModals();
+        await Promise.all([loadOrders(), loadTransfers()]);
+        renderAll();
+        toast(`أُلغي تثبيت ${fmt0(j.cleared)} رقم — أُعيد الحساب`);
+      } catch (e) { toast(e.message, 'err'); }
     });
   });
 
