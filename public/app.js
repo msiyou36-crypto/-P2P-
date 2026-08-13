@@ -15,6 +15,7 @@ const state = {
   balGapAt: 0,        // وقت أحدث نقطة تصفير — العملية الناقصة وقعت بعده
   balGapOut: true,    // هل الناقص حركة خرج (بيع/سحب) أم دخل (إيداع/شراء)
   balNeedsWallet: false, // العمود فارغ لأن الرصيد لم يُجلب ولا توجد نقطة تصفير
+  balFloating: false, // العمود مثبَّت على الرصيد الحالي فيتغيّر مع كل عملية جديدة
   balAbsurd: null,    // عملية بكمية غير معقولة تُفسد حساب «الباقي» (قيمة محلية في خانة USDT غالبًا)
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
@@ -109,6 +110,7 @@ function computeBalanceMap() {
   }
   const cur = currentUsdtBalance();
   state.balNeedsWallet = false;
+  state.balFloating = false;
   if (!evts.length) { state.balGap = 0; state.balGapAt = 0; return new Map(); }
   evts.sort((a, b) => a.t - b.t);
   let run = 0;
@@ -128,10 +130,13 @@ function computeBalanceMap() {
   for (let i = 0; i <= last; i++) if (evts[i].zero) zeros.push(i);
 
   if (zeros.length) {
-    // كل صفٍّ يُقاس من أقرب نقطة تصفير إليه، فالخطأ يتراكم كلّما بَعُدنا عنها
+    /* كشف حساب لا يتحرّك: كل صفٍّ يُقاس من آخر نقطة تصفير عنده أو قبله فقط،
+       فلا يغيّره شيءٌ وقع بعده. رقم أمس يبقى رقم أمس مهما دخل اليوم من عمليات
+       أو تغيّر رصيد المحفظة. والصفوف الأقدم من أول نقطة تُقاس منها رجوعًا،
+       وهي ثابتة أيضًا لأن العمليات الجديدة تأتي بعدها لا قبلها. */
     let zi = 0;
     for (let i = 0; i <= last; i++) {
-      while (zi + 1 < zeros.length && Math.abs(zeros[zi + 1] - i) <= Math.abs(zeros[zi] - i)) zi++;
+      while (zi + 1 < zeros.length && zeros[zi + 1] <= i) zi++;
       map.set(evts[i].k, r2(Math.max(evts[i].bal - evts[zeros[zi]].bal, 0)));
     }
     const zLast = zeros[zeros.length - 1];
@@ -146,6 +151,9 @@ function computeBalanceMap() {
   /* بلا علامة من المستخدم لا يبقى إلا رصيد المحفظة نُثبّت عليه، وبدونه أي رقم
      مضلّل (سالبٌ غالبًا لمن يبيع أكثر مما يشتري) — فنعرض «—» ونشرح السبب. */
   if (cur == null) { state.balGap = 0; state.balGapAt = 0; state.balNeedsWallet = true; return new Map(); }
+  /* التثبيت على الرصيد الحالي يعني أن كل صفٍّ قديم يتغيّر كلّما دخلت عملية جديدة
+     أو تغيّر الرصيد — عمودٌ «يتحرّك». علامةُ التصفير وحدها تُنهي ذلك، فننبّه لها. */
+  state.balFloating = true;
   const off = cur - run; // مبدئيًا: تثبيت أحدث صف على الرصيد الفعلي
   /* مرور من الأحدث إلى الأقدم: نزولُ الرصيد تحت الصفر مستحيل، فمعناه أن حركة
      «خرج» بعد تلك اللحظة لم تصل من المنصة. أحدثُ نزولٍ هو نقطة تصفير مؤكَّدة
@@ -1992,6 +2000,9 @@ function renderBalance() {
     // عملية واحدة بكمية غير معقولة تفسد العمود كله — نسمّيها بدل تنبيه النقص العام
     const a = state.balAbsurd;
     gap = ` · ⚠ توجد عملية بتاريخ ${fmtDT(a.t)} كميتها ${fmt2(Math.abs(a.d))} USDT — رقم غير معقول (غالبًا مبلغ بالعملة المحلية كُتب في خانة الكمية). صحّح كميتها أو احذفها، فهي تُفسد عمود «الباقي» كله.`;
+  } else if (state.balFloating) {
+    // العمود بلا نقطة تصفير يتبع الرصيد الحالي، فأرقامه تتغيّر مع كل عملية جديدة
+    gap = ' · ℹ أرقام عمود «الباقي من USDT» مثبَّتة على رصيدك الحالي، فتتغيّر كلّما دخلت عملية جديدة. لتثبيتها نهائيًا: افتح آخر عملية أفرغتَ محفظتك بعدها وعلّم «رصيدي كان صفرًا بعد هذه العملية».';
   } else if (state.balGap > 1) {
     const when = state.balGapAt ? ` بعد ${fmtDT(state.balGapAt)}` : '';
     const what = state.balGapOut ? 'خرج (بيع أو سحب)' : 'دخل (إيداع أو شراء)';
