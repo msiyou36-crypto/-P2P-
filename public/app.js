@@ -84,6 +84,10 @@ const OUT_KINDS = new Set(['withdraw', 'pay-out', 'convert-out', 'spot-buy']);
  * فيه دخلٌ بلا خرجه (عجز بمئات الآلاف) وأي رقم هناك تخمين مضلّل → «—». */
 const CHAIN_WINDOW_MS = 90 * 86400000;
 
+/* مهلةُ استقرار الرصيد: لا تُعتمد لقطةٌ قُرئت قبل مرور هذه المدّة على آخر عملية
+   قبلها، لأن المبلغ قد لا يكون غادر المحفظة بعدُ فتصير اللقطة أساسًا خاطئًا. */
+const SNAP_SETTLE_MS = 20 * 60000;
+
 function computeBalanceMap() {
   const cutoff = Date.now() - CHAIN_WINDOW_MS;
   const evts = [];
@@ -91,7 +95,7 @@ function computeBalanceMap() {
     if (o.orderStatus !== 'COMPLETED') continue;
     if (o.createTime < cutoff) continue;
     const v = grossUSDT(o); // نفس الرقم المعروض في عمود USDT
-    evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v, zero: !!o.zeroPoint });
+    evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v, zero: !!o.zeroPoint, frozen: o.balAfter });
   }
   for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
@@ -101,7 +105,7 @@ function computeBalanceMap() {
     if (isInternalKind(t.kind)) continue;
     const isOut = OUT_KINDS.has(t.kind);
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
-    evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v, zero: !!t.zeroPoint });
+    evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v, zero: !!t.zeroPoint, frozen: t.balAfter });
   }
   // عملية بكمية غير معقولة (أكبر عملياتهم الفعلية ~10 آلاف USDT): غالبًا قيمة
   // بالعملة المحلية كُتبت في خانة الكمية — واحدة كهذه تُفسد العمود كله، فنسمّيها.
@@ -112,6 +116,7 @@ function computeBalanceMap() {
   const cur = currentUsdtBalance();
   state.balNeedsWallet = false;
   state.balFloating = false;
+  state.balSettledTo = 0;
   if (!evts.length) { state.balGap = 0; state.balGapAt = 0; return new Map(); }
   evts.sort((a, b) => a.t - b.t);
   let run = 0;
@@ -123,42 +128,51 @@ function computeBalanceMap() {
   // العرض وحده، ليخرج نظيفًا في الجدول وملف التصدير معًا.
   const r2 = (v) => Math.round(v * 100) / 100;
 
-  /* ============ نقاط الإرساء ============
-     نقطة الإرساء = «بعد هذه العملية كان الرصيد كذا». نوعان، وكلاهما يقين:
-       • لقطة يومية تلقائية: رصيد المحفظة الحقيقي كما قرأته المنصة في وقتٍ ما.
-         ما إن يدخل يومٌ جديد حتى تُغلق لقطةُ أمس فلا تتحرّك أرقامه أبدًا.
-       • علامة المستخدم 📌 «رصيدي كان صفرًا» — قيمتها صفر، وهي الأقوى.
-     كل صفٍّ يُقاس من آخر نقطة عنده أو قبله، فلا يغيّره شيءٌ وقع بعده. والصفوف
-     الأقدم من أول نقطة تُقاس منها رجوعًا، وهي ثابتة أيضًا لأن الجديد يأتي بعدها. */
-  const anchors = [];   // { i, off } حيث المعروض = bal − off
-  for (const s of (state.balSnaps || [])) {
-    // آخر عملية وقعت عند وقت اللقطة أو قبله: الرصيد بعدها هو ما قرأته المنصة
-    let i = -1;
-    for (let j = last; j >= 0; j--) if (evts[j].t <= s.at) { i = j; break; }
-    if (i < 0) continue;                       // لقطة أقدم من كل عملياتنا
-    anchors.push({ i, off: evts[i].bal - s.bal, snap: true, at: s.at });
-  }
-  for (let i = 0; i <= last; i++) if (evts[i].zero) anchors.push({ i, off: evts[i].bal, snap: false });
-  // عند تساوي الموضع تفوز علامةُ المستخدم: هو يقرّر، لا القراءة الآلية
-  anchors.sort((a, b) => (a.i - b.i) || ((a.snap ? 0 : 1) - (b.snap ? 0 : 1)));
-  const uniq = [];
-  for (const a of anchors) {
-    if (uniq.length && uniq[uniq.length - 1].i === a.i) uniq[uniq.length - 1] = a;
-    else uniq.push(a);
-  }
-
-  if (uniq.length) {
-    let zi = 0;
-    for (let i = 0; i <= last; i++) {
-      while (zi + 1 < uniq.length && uniq[zi + 1].i <= i) zi++;
-      map.set(evts[i].k, r2(Math.max(evts[i].bal - uniq[zi].off, 0)));
+  /* ============ المرساة ============
+     دفترُ حسابٍ واحد متّصل: مرساةٌ واحدة للسلسلة كلّها، وكل صفٍّ بعدها هو الصفُّ
+     الذي قبله ± مبلغه. مرساتان مختلفتان تعنيان قفزةً بينهما — صفّان بنفس الرقم
+     أو فرقٌ لا تفسّره أي عملية — فلا نسمح إلا بواحدة. أولويتها:
+       ١) أحدث صفٍّ مثبَّت: الدفتر يواصل من حيث انتهى، فلا تنشأ قفزةٌ أبدًا.
+       ٢) أحدث علامة 📌 «رصيدي كان صفرًا».
+       ٣) أحدث لقطة رصيدٍ مستقرّة، ثم أحدث لقطة مهما كانت.
+     تغييرُ المرساة بعد التثبيت يتطلّب «إعادة حساب الباقي» من منطقة الخطر. */
+  const anchorAtSnap = (s) => {           // موضع اللقطة في السلسلة، أو null
+    for (let j = last; j >= 0; j--) if (evts[j].t <= s.at) return j;
+    return null;                          // لقطة أقدم من كل عملياتنا
+  };
+  const snaps = (state.balSnaps || []).slice().sort((a, b) => a.at - b.at);
+  /* لقطةٌ قُرئت بُعيد عملية مباشرةً لا يُوثق بها: وقتُ طلب P2P هو وقت إنشائه لا
+     وقت اكتماله، فقد يُقرأ الرصيد قبل أن يغادره المبلغ فتُرسي الصفَّ على رقمٍ
+     لم يشمل عمليته. نُفضّل المستقرّة، ونقبل غيرها فقط إن لم تبقَ سواها. */
+  const snapAnchor = (needSettled) => {
+    for (let s = snaps.length - 1; s >= 0; s--) {
+      const i = anchorAtSnap(snaps[s]);
+      if (i == null) continue;
+      if (needSettled && snaps[s].at - evts[i].t < SNAP_SETTLE_MS) continue;
+      return { i, off: evts[i].bal - snaps[s].bal };
     }
-    const zLast = uniq[uniq.length - 1];
+    return null;
+  };
+
+  let a = null;
+  for (let i = last; i >= 0 && !a; i--) if (evts[i].frozen != null) a = { i, off: evts[i].bal - evts[i].frozen };
+  for (let i = last; i >= 0 && !a; i--) if (evts[i].zero) a = { i, off: evts[i].bal };
+  if (!a) a = snapAnchor(true) || snapAnchor(false);
+
+  if (a) {
+    for (let i = 0; i <= last; i++) map.set(evts[i].k, r2(Math.max(evts[i].bal - a.off, 0)));
+    /* حدُّ التثبيت: عمليةٌ مضى عليها وقتُ الاستقرار قبل آخر قراءةِ رصيدٍ فقد
+       شملتها تلك القراءة يقينًا، فرقمها مؤكَّد ويصلح للتثبيت. وما بعد الحدّ
+       امتدادٌ للسلسلة لم تؤكّده قراءة — لا يُثبَّت، وإلّا خلّدنا رقمًا خاطئًا
+       لو تأخّرت عمليةٌ عن الوصول من المنصة. */
+    let settled = snaps.length ? snaps[snaps.length - 1].at - SNAP_SETTLE_MS : 0;
+    for (let i = last; i >= 0; i--) if (evts[i].zero) { settled = Math.max(settled, evts[i].t); break; }
+    state.balSettledTo = settled;
     if (cur == null) { state.balGap = 0; state.balGapAt = 0; return map; }
-    const gap = r2((evts[last].bal - zLast.off) - cur); // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
+    const gap = r2((evts[last].bal - a.off) - cur); // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
     state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
     state.balGapOut = gap > 0;      // نوع الحركة الناقصة
-    state.balGapAt = state.balGap ? evts[zLast.i].t : 0; // وقعت بعد نقطة الإرساء هذه
+    state.balGapAt = state.balGap ? evts[a.i].t : 0; // وقعت بعد المرساة
     return map;
   }
 
@@ -211,17 +225,19 @@ function scheduleFreeze() {
 }
 async function freezeSettled() {
   if (!state.auth.token || state.balFloating || state.balNeedsWallet) return;
-  if (!state.balMap || !state.balMap.size) return;
+  if (!state.balMap || !state.balMap.size || !state.balSettledTo) return;
   const o = {}, t = {};
   let n = 0;
   for (const x of state.orders) {
     if (x.balAfter != null || x.orderStatus !== 'COMPLETED') continue;
+    if (x.createTime > state.balSettledTo) continue;   // لم تؤكّده قراءةُ رصيدٍ بعدُ
     const v = state.balMap.get(balKey(x, true));
     if (v == null) continue;
     o[x.orderNumber] = v; n++;
   }
   for (const x of state.transfers) {
     if (x.balAfter != null || x.status !== 'COMPLETED') continue;
+    if (x.time > state.balSettledTo) continue;
     const v = state.balMap.get(balKey(x, false));
     if (v == null) continue;
     t[x.id] = v; n++;
