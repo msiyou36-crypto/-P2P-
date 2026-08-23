@@ -128,6 +128,21 @@ function computeBalanceMap() {
   // العرض وحده، ليخرج نظيفًا في الجدول وملف التصدير معًا.
   const r2 = (v) => Math.round(v * 100) / 100;
 
+  /* أرقامٌ مثبَّتة لا يفسّرها الدفتر — من نسخةٍ سابقة كانت تُرسي كل يومٍ وحده
+     فتبتلع أثر عملية ويتساوى صفّان. الفرق بين كل مثبَّتين يجب أن يساوي مجموع
+     ما بينهما؛ فإن خالفه فالمثبَّت فاسد ويُصلَّح تلقائيًا (انظر healFrozen).
+     نتجاوز الأصفار لأنها قد تكون قُصَّت عند الصفر فلا تصلح للمقارنة. */
+  state.balFrozenBroken = false;
+  for (let i = 0, pf = -1; i <= last; i++) {
+    if (evts[i].frozen == null) continue;
+    if (pf >= 0 && evts[i].frozen > 0 && evts[pf].frozen > 0
+      && Math.abs((evts[i].frozen - evts[pf].frozen) - (evts[i].bal - evts[pf].bal)) > 0.02) {
+      state.balFrozenBroken = true;
+      break;
+    }
+    pf = i;
+  }
+
   /* ============ المرساة ============
      دفترُ حسابٍ واحد متّصل: مرساةٌ واحدة للسلسلة كلّها، وكل صفٍّ بعدها هو الصفُّ
      الذي قبله ± مبلغه. مرساتان مختلفتان تعنيان قفزةً بينهما — صفّان بنفس الرقم
@@ -223,7 +238,22 @@ function scheduleFreeze() {
   if (_freezeTimer) clearTimeout(_freezeTimer);
   _freezeTimer = setTimeout(() => { _freezeTimer = null; freezeSettled(); }, 1200);
 }
+/* إصلاحٌ ذاتي: أرقامٌ مثبَّتة لا يفسّرها الدفتر تُمسح ويُعاد حسابها مرّةً واحدة
+   في الجلسة. المستخدم ليس مبرمجًا، فلا يُطلب منه تشغيل صيانة ليُصلَّح خطؤنا. */
+let _healed = false;
+async function healFrozen() {
+  if (_healed || !state.auth.token) return;
+  _healed = true;
+  try {
+    const j = await api('/api/balance/unfreeze', { method: 'POST' });
+    await Promise.all([loadOrders(), loadTransfers()]);
+    renderAll();
+    if (j.cleared) toast(`صُحّح عمود «الباقي من USDT» — أُعيد حساب ${fmt0(j.cleared)} رقم`);
+  } catch (e) { console.error('heal: ' + e.message); }
+}
+
 async function freezeSettled() {
+  if (state.balFrozenBroken) { await healFrozen(); return; }
   if (!state.auth.token || state.balFloating || state.balNeedsWallet) return;
   if (!state.balMap || !state.balMap.size || !state.balSettledTo) return;
   const o = {}, t = {};

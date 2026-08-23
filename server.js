@@ -1001,7 +1001,6 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/orders/clear'], ['POST', '/api/transfers/clear'],
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
       ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'],
-      ['POST', '/api/balance/unfreeze'],
     ];
     // للمسؤول و«مستخدم 2» (الكتابة في الإشاري/الملاحظة فقط)
     const ANNOTATE_ROUTES = [
@@ -1011,7 +1010,9 @@ const server = http.createServer(async (req, res) => {
     const LOGIN_ROUTES = [
       ['POST', '/api/sync'], ['GET', '/api/sync/quota'],
       ['GET', '/api/balance'], ['GET', '/api/balance/snapshots'],
-      ['POST', '/api/balance/freeze'],
+      // الإلغاء متاحٌ لكل داخل: لا يمحو بيانات، بل أرقامًا مشتقّة تُحسب فورًا
+      // من جديد — والإصلاح الذاتي يحتاجه أيًّا كان الدور الذي فتح النظام
+      ['POST', '/api/balance/freeze'], ['POST', '/api/balance/unfreeze'],
       ['GET', '/api/orders'], ['GET', '/api/transfers'], ['GET', '/api/settings'],
       ['GET', '/api/account'], ['POST', '/api/account'],
     ];
