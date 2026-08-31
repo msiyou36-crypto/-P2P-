@@ -1000,7 +1000,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/orders'], ['DELETE', '/api/orders'], ['POST', '/api/orders/bulk'],
       ['POST', '/api/orders/clear'], ['POST', '/api/transfers/clear'],
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
-      ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'],
+      ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'], ['POST', '/api/sync/day'],
     ];
     // للمسؤول و«مستخدم 2» (الكتابة في الإشاري/الملاحظة فقط)
     const ANNOTATE_ROUTES = [
@@ -1274,6 +1274,79 @@ const server = http.createServer(async (req, res) => {
         snapshots: snapshots || await loadBalSnaps(),
         updatedAt: now,
       });
+      return;
+    }
+
+    /* ---------- جلب يومٍ واحد بعينه (إصلاح موضعي) ----------
+       المزامنة الكاملة تسأل المنصة عشرات الأسئلة فتُرهق الحصّة وتقرّب الحظر،
+       ومَن ينقصه يومٌ واحد لا يحتاجها. هنا نسأل عن ذلك اليوم وحده — ستة طلبات
+       تغطّي كل الأنواع — ثم نُبلّغ بما وجدناه وما كان جديدًا. (للمسؤول) */
+    if (p === '/api/sync/day' && req.method === 'POST') {
+      if (!AC().apiKey || !AC().apiSecret) {
+        sendJSON(res, 400, { error: 'أدخل مفتاح API من الإعدادات أولًا' });
+        return;
+      }
+      const body = await readBody(req);
+      const m = String(body.day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!m) { sendJSON(res, 400, { error: 'حدّد اليوم بصيغة YYYY-MM-DD' }); return; }
+      // حدود اليوم بتوقيت السودان (UTC+2) — نفس ما يعرضه الجدول
+      const s = Date.UTC(+m[1], +m[2] - 1, +m[3], 0, 0, 0) - 2 * 3600000;
+      const e = s + 86400000 - 1;
+      if (s > Date.now()) { sendJSON(res, 400, { error: 'هذا اليوم لم يأتِ بعد' }); return; }
+      const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
+      const offset = await timeOffset(base);
+      await mergeFromStore('orders__' + config.active, orders);
+      await mergeFromStore('transfers__' + config.active, transfers);
+
+      const found = { p2p: 0, deposit: 0, withdraw: 0, pay: 0, convert: 0 };
+      const added = { p2p: 0, deposit: 0, withdraw: 0, pay: 0, convert: 0 };
+      const skipped = [];
+      const rowsOf = (j, key) => (Array.isArray(j) ? j : (Array.isArray(j && j[key]) ? j[key] : []));
+      const take = (kind, list, norm, isOrder) => {
+        for (const raw of list) {
+          found[kind]++;
+          const r = isOrder ? upsertOrder(norm(raw)) : upsertTransfer(norm(raw));
+          if (r === 'added') added[kind]++;
+        }
+      };
+      try {
+        for (const tradeType of ['SELL', 'BUY']) {
+          let page = 1;
+          for (;;) {
+            const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
+              { tradeType, startTimestamp: s, endTimestamp: e, page, rows: 100 }, offset);
+            const rows = rowsOf(j, 'data');
+            take('p2p', rows, (raw) => normalizeOrder(raw, 'binance'), true);
+            if (rows.length < 100 || page >= 20) break;
+            page++;
+            await sleep(250);
+          }
+          await sleep(250);
+        }
+        take('deposit', rowsOf(await signedGet(base, '/sapi/v1/capital/deposit/hisrec',
+          { startTime: s, endTime: e, offset: 0, limit: 1000 }, offset)), (raw) => normalizeTransfer(raw, 'deposit'), false);
+        await sleep(300);
+        take('withdraw', rowsOf(await signedGet(base, '/sapi/v1/capital/withdraw/history',
+          { startTime: s, endTime: e, offset: 0, limit: 1000 }, offset)), (raw) => normalizeTransfer(raw, 'withdraw'), false);
+        await sleep(300);
+      } catch (err) {
+        sendJSON(res, 502, { error: err && err.message ? err.message : 'تعذّر سؤال المنصة' });
+        return;
+      }
+      // النوعان التاليان قد يُمنعان بصلاحية المفتاح أو المنطقة — فشلهما لا يُفشل الباقي
+      for (const [kind, path, key, norm] of [
+        ['pay', '/sapi/v1/pay/transactions', 'data', normalizePay],
+        ['convert', '/sapi/v1/convert/tradeFlow', 'list', normalizeConvert],
+      ]) {
+        try {
+          const j = await signedGet(base, path, { startTime: s, endTime: e, limit: kind === 'pay' ? 100 : 1000 }, offset);
+          take(kind, rowsOf(j, key), norm, false);
+          await sleep(500);
+        } catch (err) { skipped.push(kind + ': ' + (err && err.message ? err.message : 'خطأ')); }
+      }
+      try { await saveOrders(); await saveTransfers(); } catch (err) { console.error(err.message); }
+      const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+      sendJSON(res, 200, { ok: true, day: body.day, from: s, to: e, found, added, skipped, total: sum(found), totalAdded: sum(added) });
       return;
     }
 

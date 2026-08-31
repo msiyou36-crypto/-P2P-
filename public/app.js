@@ -702,6 +702,46 @@ function diagLine(cls, text) {
   return d;
 }
 
+/* جلب يومٍ واحد: علاجٌ موضعي لمن ينقصه يوم، بلا كلفة المزامنة الكاملة */
+async function fetchOneDay() {
+  const day = $('#diagDay').value;
+  const box = $('#diagResult');
+  const btn = $('#btnFetchDay');
+  if (!day) { box.textContent = ''; box.append(diagLine('diag-bad', 'اختر اليوم أولًا')); return; }
+  btn.disabled = true;
+  box.textContent = '';
+  box.append(diagLine('hint', `جارٍ سؤال المنصة عن ${day}…`));
+  let d;
+  try {
+    d = await api('/api/sync/day', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ day }),
+    });
+  } catch (e) {
+    box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); btn.disabled = false; return;
+  }
+  btn.disabled = false;
+  box.textContent = '';
+  const NAMES = { p2p: 'طلبات P2P', deposit: 'إيداع', withdraw: 'سحب', pay: 'Binance Pay', convert: 'تحويل Convert' };
+  box.append(diagLine(
+    d.total === 0 ? 'diag-bad' : (d.totalAdded > 0 ? 'diag-ok' : 'hint'),
+    d.total === 0
+      ? `المنصة لم تُرجع أي عملية في ${d.day} — فما ينقصك لا تُرجعه المنصة أصلًا لهذا المفتاح، وسبيلُه «+ إضافة يدوية».`
+      : (d.totalAdded > 0
+        ? `وصلت ${fmt0(d.total)} عملية في ${d.day}، منها ${fmt0(d.totalAdded)} جديدة أُضيفت للسجل ✓`
+        : `وصلت ${fmt0(d.total)} عملية في ${d.day} وكلها محفوظة عندك — فما لا تجده في الجدول لا تُرجعه المنصة.`)));
+  for (const k of Object.keys(NAMES)) {
+    if (!d.found[k]) continue;
+    box.append(diagLine('hint', `${NAMES[k]}: وصل ${fmt0(d.found[k])}${d.added[k] ? ` · جديد ${fmt0(d.added[k])}` : ''}`));
+  }
+  for (const s of (d.skipped || [])) box.append(diagLine('diag-bad', '⚠ تعذّر جلب ' + s));
+  if (d.totalAdded > 0) {
+    await Promise.all([loadOrders(), loadTransfers()]);
+    renderAll();
+    toast(`أُضيفت ${fmt0(d.totalAdded)} عملية من ${d.day} ✓`);
+  }
+}
+
 async function runDiag() {
   const days = Math.min(Math.max(Number($('#diagDays').value) || 3, 1), 29);
   const box = $('#diagResult');
@@ -2430,6 +2470,7 @@ function wireEvents() {
   applySyncCooldown();
   $('#btnDiag').addEventListener('click', () => { closeMenu(); openDiag(); });
   $('#btnRunDiag').addEventListener('click', runDiag);
+  $('#btnFetchDay').addEventListener('click', fetchOneDay);
   $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
   $('#btnSaveMaint').addEventListener('click', saveMaintenance);
   $('#maintLogout').addEventListener('click', doLogout);
