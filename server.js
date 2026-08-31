@@ -1346,7 +1346,14 @@ const server = http.createServer(async (req, res) => {
       }
       try { await saveOrders(); await saveTransfers(); } catch (err) { console.error(err.message); }
       const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
-      sendJSON(res, 200, { ok: true, day: body.day, from: s, to: e, found, added, skipped, total: sum(found), totalAdded: sum(added) });
+      // المحفوظ فعلًا في ذلك اليوم — به نفرّق: أهي لم تصل، أم وصلت والجدول يخفيها؟
+      const inDay = (t) => t >= s && t <= e;
+      const stored = Object.values(orders).filter((o) => inDay(o.createTime)).length
+        + Object.values(transfers).filter((t) => inDay(t.time)).length;
+      sendJSON(res, 200, {
+        ok: true, day: body.day, from: s, to: e, found, added, skipped,
+        total: sum(found), totalAdded: sum(added), stored,
+      });
       return;
     }
 

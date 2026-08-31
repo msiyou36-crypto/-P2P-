@@ -735,11 +735,25 @@ async function fetchOneDay() {
     box.append(diagLine('hint', `${NAMES[k]}: وصل ${fmt0(d.found[k])}${d.added[k] ? ` · جديد ${fmt0(d.added[k])}` : ''}`));
   }
   for (const s of (d.skipped || [])) box.append(diagLine('diag-bad', '⚠ تعذّر جلب ' + s));
-  if (d.totalAdded > 0) {
-    await Promise.all([loadOrders(), loadTransfers()]);
-    renderAll();
-    toast(`أُضيفت ${fmt0(d.totalAdded)} عملية من ${d.day} ✓`);
-  }
+  if (d.totalAdded > 0) await Promise.all([loadOrders(), loadTransfers()]);
+
+  /* الحلقة المفقودة: أن يجلب المستخدم اليوم ثم لا يراه لأن فلتر الجدول يخفيه.
+     نضبط الفلتر على ذلك اليوم بالذات ونغلق النافذة، فيرى النتيجة أمامه فورًا. */
+  $('#xFrom').value = d.day;
+  $('#xTo').value = d.day;
+  state.filters.range = 'custom';
+  state.filters.from = d.day;
+  state.filters.to = d.day;
+  state.page = 1;
+  $$('#rangeSeg button').forEach((b) => b.classList.remove('on'));
+  renderAll();
+  const shown = state.ledger.length;
+  box.append(diagLine(
+    shown ? 'diag-ok' : 'diag-bad',
+    shown
+      ? `محفوظ عندك في ${d.day}: ${fmt0(d.stored)} عملية — وضبطتُ الجدول على هذا اليوم، وهي ظاهرة فيه الآن (${fmt0(shown)}).`
+      : `محفوظ عندك في ${d.day}: ${fmt0(d.stored)} عملية، ولا يعرض الجدول شيئًا — تحقّق من فلتر «النوع» و«الحالة» أعلى الجدول.`));
+  if (d.totalAdded > 0) toast(`أُضيفت ${fmt0(d.totalAdded)} عملية من ${d.day} ✓`);
 }
 
 async function runDiag() {
