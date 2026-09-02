@@ -396,6 +396,7 @@ function upsertOrder(o) {
   if (prev.totalPriceOverride != null) o.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) o.networkLabelOverride = prev.networkLabelOverride;
   if (prev.zeroPoint) o.zeroPoint = true;
+  if (prev.balanceAt != null) o.balanceAt = prev.balanceAt; // مرساة المستخدم اليدوية
   if (prev.balAfter != null) o.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
   if (prev.source === 'binance' && o.source === 'manual') return 'same';
   const changed = JSON.stringify(prev) !== JSON.stringify(o);
@@ -607,6 +608,7 @@ function upsertTransfer(t) {
   if (prev.totalPriceOverride != null) t.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) t.networkLabelOverride = prev.networkLabelOverride;
   if (prev.zeroPoint) t.zeroPoint = true;
+  if (prev.balanceAt != null) t.balanceAt = prev.balanceAt; // مرساة المستخدم اليدوية
   if (prev.balAfter != null) t.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
   const changed = JSON.stringify(prev) !== JSON.stringify(t);
   transfers[t.id] = t;
@@ -1202,6 +1204,11 @@ const server = http.createServer(async (req, res) => {
       if ('zeroPoint' in body) {
         if (body.zeroPoint) o.zeroPoint = true; else delete o.zeroPoint;
       }
+      if ('balanceAt' in body) {
+        const v = Number(body.balanceAt);
+        if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete o.balanceAt; delete o.zeroPoint; }
+        else { o.balanceAt = Math.round(v * 100) / 100; delete o.zeroPoint; }
+      }
       await saveOrders();
       sendJSON(res, 200, { ok: true, order: o });
       return;
@@ -1246,6 +1253,11 @@ const server = http.createServer(async (req, res) => {
       // علامة «الرصيد صفر بعد هذه العملية» (انظر التعليق في annotate الطلبات)
       if ('zeroPoint' in body) {
         if (body.zeroPoint) t.zeroPoint = true; else delete t.zeroPoint;
+      }
+      if ('balanceAt' in body) {
+        const v = Number(body.balanceAt);
+        if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete t.balanceAt; delete t.zeroPoint; }
+        else { t.balanceAt = Math.round(v * 100) / 100; delete t.zeroPoint; }
       }
       await saveTransfers();
       sendJSON(res, 200, { ok: true, transfer: t });

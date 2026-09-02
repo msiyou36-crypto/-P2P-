@@ -131,7 +131,7 @@ function computeBalanceMap() {
     if (o.orderStatus !== 'COMPLETED') continue;
     if (o.createTime < cutoff) continue;
     const v = grossUSDT(o); // نفس الرقم المعروض في عمود USDT
-    evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v, zero: !!o.zeroPoint, frozen: o.balAfter });
+    evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v, zero: !!o.zeroPoint, at: (o.balanceAt != null ? o.balanceAt : (o.zeroPoint ? 0 : null)), frozen: o.balAfter });
   }
   for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
@@ -141,7 +141,7 @@ function computeBalanceMap() {
     if (isInternalKind(t.kind)) continue;
     const isOut = OUT_KINDS.has(t.kind);
     const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
-    evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v, zero: !!t.zeroPoint, frozen: t.balAfter });
+    evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v, zero: !!t.zeroPoint, at: (t.balanceAt != null ? t.balanceAt : (t.zeroPoint ? 0 : null)), frozen: t.balAfter });
   }
   // عملية بكمية غير معقولة (أكبر عملياتهم الفعلية ~10 آلاف USDT): غالبًا قيمة
   // بالعملة المحلية كُتبت في خانة الكمية — واحدة كهذه تُفسد العمود كله، فنسمّيها.
@@ -213,8 +213,9 @@ function computeBalanceMap() {
   };
 
   let a = null;
+  // ما كتبه المستخدم بيده أوثق من كل شيء: يعرف رصيده، ولا يحتاج منصةً ولا مفتاحًا
+  for (let i = last; i >= 0 && !a; i--) if (evts[i].at != null) a = { i, off: evts[i].bal - evts[i].at };
   for (let i = last; i >= 0 && !a; i--) if (evts[i].frozen != null) a = { i, off: evts[i].bal - evts[i].frozen };
-  for (let i = last; i >= 0 && !a; i--) if (evts[i].zero) a = { i, off: evts[i].bal };
   if (!a) a = snapAnchor(true) || snapAnchor(false);
 
   if (a) {
@@ -1688,9 +1689,10 @@ function renderTable() {
     const bal = balOf(it, isP2P);
     const tdBal = tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
     if (it.balAfter != null && tdBal) tdBal.title = 'رقم مثبَّت — تُبِّت ساعة اكتمال العملية ولا يتغيّر';
-    if (it.zeroPoint && tdBal) {
+    if ((it.balanceAt != null || it.zeroPoint) && tdBal) {
       tdBal.classList.add('is-zeropoint');
-      tdBal.title = 'نقطة التثبيت — أنت علّمت أن رصيدك كان صفرًا بعد هذه العملية';
+      const v = it.balanceAt != null ? it.balanceAt : 0;
+      tdBal.title = `نقطة التثبيت — أنت كتبت أن رصيدك بعد هذه العملية كان ${fmt2(v)} USDT، والعمود كلّه محسوب منها`;
     }
     tdText(tr, it.counterPart || '—');
 
@@ -1781,33 +1783,59 @@ function detailRow(key, value, opts = {}) {
 }
 
 /** صفٌّ يُعلّم العملية بأن الرصيد بلغ صفرًا بعدها — عليه يُثبَّت عمود «الباقي» */
+/* مرساةٌ بيد المستخدم: يكتب رصيده الحقيقي بعد عمليةٍ يعرفها، فيُحسب العمود
+   كلّه منها. لا تحتاج منصةً ولا مفتاحًا ولا اتصالًا — وهي المخرج حين يتعذّر
+   جلب الرصيد أو تُمحى الأرقام المثبَّتة فلا يبقى للعمود ما يرتكز عليه. */
 function zeroPointRow(entity, kind) {
-  const wrap = document.createElement('label');
+  const wrap = document.createElement('div');
   wrap.className = 'zero-toggle';
-  const cb = document.createElement('input');
-  cb.type = 'checkbox';
-  cb.checked = !!entity.zeroPoint;
-  cb.disabled = state.auth.role !== 'admin';
-  const txt = document.createElement('span');
-  txt.textContent = 'رصيدي كان صفرًا بعد هذه العملية';
-  wrap.append(cb, txt);
-  cb.addEventListener('change', async () => {
-    const on = cb.checked;
-    if (on) entity.zeroPoint = true; else delete entity.zeroPoint;
-    try {
-      await api(kind === 'transfer' ? '/api/transfers/annotate' : '/api/orders/annotate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: kind === 'transfer' ? entity.id : entity.orderNumber, zeroPoint: on }),
-      });
-      renderAll();
-      toast(on ? 'تم التثبيت على هذه العملية ✓' : 'أُلغي التثبيت');
-    } catch (e) {
-      cb.checked = !on;
-      if (on) delete entity.zeroPoint; else entity.zeroPoint = true;
-      toast('تعذّر الحفظ: ' + e.message, 'err');
-    }
+  const inp = document.createElement('input');
+  inp.type = 'number';
+  inp.step = 'any';
+  inp.min = '0';
+  inp.dir = 'ltr';
+  inp.className = 'num-input';
+  inp.placeholder = 'مثلًا 1250.75';
+  inp.disabled = !canEdit();
+  const cur = entity.balanceAt != null ? entity.balanceAt : (entity.zeroPoint ? 0 : null);
+  if (cur != null) inp.value = String(cur);
+  const btn = document.createElement('button');
+  btn.className = 'btn';
+  btn.textContent = 'تثبيت';
+  btn.disabled = !canEdit();
+  const clr = document.createElement('button');
+  clr.className = 'btn';
+  clr.textContent = 'إلغاء التثبيت';
+  clr.disabled = !canEdit() || cur == null;
+  wrap.append(inp, btn, clr);
+
+  const send = async (val) => {
+    const id = kind === 'transfer' ? entity.id : entity.orderNumber;
+    await api(kind === 'transfer' ? '/api/transfers/annotate' : '/api/orders/annotate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, balanceAt: val }),
+    });
+    // المرساة اليدوية أوثق من كل رقمٍ مثبَّتٍ سابقًا، فتُمسح ويُعاد الحساب عليها
+    try { await api('/api/balance/unfreeze', { method: 'POST' }); } catch {}
+    await Promise.all([loadOrders(), loadTransfers()]);
+    renderAll();
+  };
+  btn.addEventListener('click', async () => {
+    const v = Number(inp.value);
+    if (!Number.isFinite(v) || v < 0) { toast('اكتب رقمًا صحيحًا (صفر فأكثر)', 'err'); return; }
+    btn.disabled = true;
+    try { await send(v); closeAllModals(); toast(`ثُبِّت الرصيد على ${fmt2(v)} USDT — أُعيد حساب العمود ✓`); }
+    catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
+    btn.disabled = false;
   });
-  return detailRow('تثبيت الباقي', wrap, { hint: 'يُحسب عمود «الباقي من USDT» تصاعديًا من هنا — علّمها عند العملية التي أفرغت محفظتك بعدها' });
+  clr.addEventListener('click', async () => {
+    clr.disabled = true;
+    try { await send(null); closeAllModals(); toast('أُلغي التثبيت — أُعيد حساب العمود'); }
+    catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
+  });
+  return detailRow('تثبيت الباقي', wrap, {
+    hint: 'اكتب رصيد USDT الحقيقي بعد هذه العملية (الفوري + التمويل معًا)، فيُحسب العمود كلّه منها — ما بعدها بالجمع وما قبلها بالطرح. اكتب صفرًا إن كنت أفرغت محفظتك بعدها.',
+  });
 }
 
 function annotDetailRow(entity, field, kind, label) {
