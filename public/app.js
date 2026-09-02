@@ -18,6 +18,10 @@ const state = {
   balFloating: false, // العمود مثبَّت على الرصيد الحالي فيتغيّر مع كل عملية جديدة
   balSnaps: [],       // لقطات الرصيد اليومية — تُثبّت أرقام الأيام الماضية تلقائيًا
   balAbsurd: null,    // عملية بكمية غير معقولة تُفسد حساب «الباقي» (قيمة محلية في خانة USDT غالبًا)
+  balBroke: false,    // السلسلة نزلت تحت الصفر: دخلٌ لم يصل، وما بعده لا يُعرف («—»)
+  balBrokeAt: 0,      // اللحظة التي انقطعت عندها
+  balBrokeMissing: 0, // أقلُّ دخلٍ مفقود يفسّر النزول
+  balBrokeRows: 0,    // كم صفًّا تُرك بلا رقم بسببه
   filtered: [],       // طلبات P2P بعد الفلترة
   filteredTx: [],     // حوالات بعد الفلترة
   ledger: [],         // القائمة الموحّدة للجدول
@@ -88,6 +92,38 @@ const CHAIN_WINDOW_MS = 90 * 86400000;
    قبلها، لأن المبلغ قد لا يكون غادر المحفظة بعدُ فتصير اللقطة أساسًا خاطئًا. */
 const SNAP_SETTLE_MS = 20 * 60000;
 
+/* ===== حدُّ ما يفسّره الدفتر =====
+ * رصيدٌ سالب مستحيل: لا يبيع أحدُ ما لا يملك. فنزولُ السلسلة تحت الصفر دليلٌ
+ * قاطع على أن حركة دخلٍ لم تصل من المنصة (Pay فوق حدّ المئة، تحويلٌ من حسابٍ
+ * فرعي، مكافأة، أو عمليةٌ خارج ما نجلبه). وكلُّ صفٍّ بعد تلك اللحظة أنقصُ
+ * بمقدار المفقود.
+ *
+ * قصُّ السالب عند الصفر — ما كان يفعله هذا الموضع — يحوّل «لا نعرف» إلى «صفر»:
+ * عمودٌ من الأصفار يقرؤه المستخدم كأن رصيده نفد فعلًا، بينما هو يبيع مئاتٍ في
+ * الصفّ نفسه. فنترك ما لا نستطيع تفسيره فارغًا («—») ونسمّي المفقود ووقته.
+ *
+ * المرساة هي الرقم الموثوق، فالسلسلة تُقرأ منها في الاتجاهين، وتنقطع عند أول
+ * سالبٍ في كل اتجاه — لا عند أول سالبٍ في الجدول، وإلّا محونا الجهة السليمة.
+ */
+function fillChain(evts, last, map, off, ai, r2, st) {
+  let lo = 0, hi = last;
+  for (let i = ai; i <= last; i++) if (evts[i].bal - off < -0.02) { hi = i - 1; break; }
+  for (let i = ai; i >= 0; i--) if (evts[i].bal - off < -0.02) { lo = i + 1; break; }
+  for (let i = lo; i <= hi; i++) map.set(evts[i].k, r2(Math.max(evts[i].bal - off, 0)));
+
+  // أعمقُ نزولٍ خارج المدى المفسَّر = أقلُّ دخلٍ مفقود يفسّر ما نراه
+  let deepest = 0;
+  for (let i = 0; i <= last; i++) {
+    if (i >= lo && i <= hi) continue;
+    const v = evts[i].bal - off;
+    if (v < deepest) deepest = v;
+  }
+  st.balBroke = hi < last || lo > 0;
+  st.balBrokeAt = hi < last ? evts[hi + 1].t : (lo > 0 ? evts[lo - 1].t : 0);
+  st.balBrokeMissing = r2(-deepest) || 0;   // ‏|| 0 يمحو «‎-0» فلا يظهر في النص
+  st.balBrokeRows = (last - hi) + lo;
+}
+
 function computeBalanceMap() {
   const cutoff = Date.now() - CHAIN_WINDOW_MS;
   const evts = [];
@@ -117,6 +153,10 @@ function computeBalanceMap() {
   state.balNeedsWallet = false;
   state.balFloating = false;
   state.balSettledTo = 0;
+  state.balBroke = false;
+  state.balBrokeAt = 0;
+  state.balBrokeMissing = 0;
+  state.balBrokeRows = 0;
   if (!evts.length) { state.balGap = 0; state.balGapAt = 0; return new Map(); }
   evts.sort((a, b) => a.t - b.t);
   let run = 0;
@@ -131,11 +171,14 @@ function computeBalanceMap() {
   /* أرقامٌ مثبَّتة لا يفسّرها الدفتر — من نسخةٍ سابقة كانت تُرسي كل يومٍ وحده
      فتبتلع أثر عملية ويتساوى صفّان. الفرق بين كل مثبَّتين يجب أن يساوي مجموع
      ما بينهما؛ فإن خالفه فالمثبَّت فاسد ويُصلَّح تلقائيًا (انظر healFrozen).
-     نتجاوز الأصفار لأنها قد تكون قُصَّت عند الصفر فلا تصلح للمقارنة. */
+     الأصفار داخلةٌ في الفحص: كانت تُستثنى لأن الحساب كان يقصّ السالب عند الصفر
+     فتخرج أصفارٌ لا تصلح للمقارنة — ولمّا كفّ عن القصّ صار الصفر رقمًا كغيره،
+     وصارت الأصفارُ المثبَّتة قديمًا (صفٌّ كامل منها بعد دخلٍ مفقود) تُكشف
+     وتُصلَّح بدل أن تبقى مخلَّدة في القاعدة لا يمسّها شيء. */
   state.balFrozenBroken = false;
   for (let i = 0, pf = -1; i <= last; i++) {
     if (evts[i].frozen == null) continue;
-    if (pf >= 0 && evts[i].frozen > 0 && evts[pf].frozen > 0
+    if (pf >= 0
       && Math.abs((evts[i].frozen - evts[pf].frozen) - (evts[i].bal - evts[pf].bal)) > 0.02) {
       state.balFrozenBroken = true;
       break;
@@ -175,7 +218,7 @@ function computeBalanceMap() {
   if (!a) a = snapAnchor(true) || snapAnchor(false);
 
   if (a) {
-    for (let i = 0; i <= last; i++) map.set(evts[i].k, r2(Math.max(evts[i].bal - a.off, 0)));
+    fillChain(evts, last, map, a.off, a.i, r2, state);
     /* حدُّ التثبيت: عمليةٌ مضى عليها وقتُ الاستقرار قبل آخر قراءةِ رصيدٍ فقد
        شملتها تلك القراءة يقينًا، فرقمها مؤكَّد ويصلح للتثبيت. وما بعد الحدّ
        امتدادٌ للسلسلة لم تؤكّده قراءة — لا يُثبَّت، وإلّا خلّدنا رقمًا خاطئًا
@@ -200,20 +243,23 @@ function computeBalanceMap() {
   const off = cur - run; // مبدئيًا: تثبيت أحدث صف على الرصيد الفعلي
   /* مرور من الأحدث إلى الأقدم: نزولُ الرصيد تحت الصفر مستحيل، فمعناه أن حركة
      «خرج» بعد تلك اللحظة لم تصل من المنصة. أحدثُ نزولٍ هو نقطة تصفير مؤكَّدة
-     (أفرغ المستخدم محفظته فعلًا هناك)، فنجعلها الأساس بدل الرصيد الحالي. */
-  let adj = 0, zIdx = -1;
-  for (let i = last; i >= 0; i--) {
-    const b = evts[i].bal + off + adj;
-    if (b < 0) { if (zIdx < 0) zIdx = i; adj -= b; map.set(evts[i].k, 0); }
-    else map.set(evts[i].k, r2(b));
+     (أفرغ المستخدم محفظته فعلًا هناك)، فنجعلها الأساس بدل الرصيد الحالي.
+     نبحث عنها فقط دون كتابة أرقام: الكتابة تأتي بعد اختيار الأساس. */
+  let zIdx = -1;
+  for (let i = last; i >= 0 && zIdx < 0; i--) if (evts[i].bal + off < 0) zIdx = i;
+  if (zIdx < 0) {
+    for (let i = 0; i <= last; i++) map.set(evts[i].k, r2(evts[i].bal + off));
+    state.balGap = 0; state.balGapAt = 0;
+    return map;
   }
-  if (zIdx < 0) { state.balGap = 0; state.balGapAt = 0; return map; }
 
   /* التثبيت على نقطة التصفير: كل ما بعدها يُحسب تصاعديًا منها، فتظهر العمليات
      التالية بقيمها الكاملة (إيداعٌ بعد تصفيرٍ يساوي مبلغه كاملًا) بدل توزيع
-     النقص عليها. والفرقُ بين آخر صفٍّ والرصيد الفعلي هو الحركة الناقصة نفسها. */
+     النقص عليها. والفرقُ بين آخر صفٍّ والرصيد الفعلي هو الحركة الناقصة نفسها.
+     وما قبلها يُقرأ رجوعًا من الصفر، فينقطع عند أول نزولٍ مستحيل — كان يُفترض
+     هناك تصفيرٌ آخر ثم آخر، فيخرج صفٌّ من الأصفار المخترَعة بدل الاعتراف بالجهل. */
   const base = evts[zIdx].bal;
-  for (let i = zIdx; i <= last; i++) map.set(evts[i].k, r2(Math.max(evts[i].bal - base, 0)));
+  fillChain(evts, last, map, base, zIdx, r2, state);
   const gap = r2((evts[last].bal - base) - cur);
   state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
   state.balGapOut = gap > 0;
@@ -2175,6 +2221,11 @@ function renderBalance() {
     // عملية واحدة بكمية غير معقولة تفسد العمود كله — نسمّيها بدل تنبيه النقص العام
     const a = state.balAbsurd;
     gap = ` · ⚠ توجد عملية بتاريخ ${fmtDT(a.t)} كميتها ${fmt2(Math.abs(a.d))} USDT — رقم غير معقول (غالبًا مبلغ بالعملة المحلية كُتب في خانة الكمية). صحّح كميتها أو احذفها، فهي تُفسد عمود «الباقي» كله.`;
+  } else if (state.balBroke) {
+    /* أهمُّ من فرق النهاية: السلسلة نفسها انقطعت، وما بعد الانقطاع فارغ («—»).
+       نقول أين انقطعت وكم ينقصها، فالمستخدم يعرف ماذا يبحث عنه في Binance. */
+    const when = state.balBrokeAt ? ` عند ${fmtDT(state.balBrokeAt)}` : '';
+    gap = ` · ⚠ ينقص السجلَّ دخلٌ (إيداع أو شراء أو استلام Pay) لا يقلّ عن ${fmt2(state.balBrokeMissing)} USDT${when} — والرصيد لا ينزل تحت الصفر، فما بعد تلك اللحظة لا يُعرف باقيه: تُرك فارغًا («—») بدل رقمٍ مخترَع (${fmt0(state.balBrokeRows)} صفوف). ابحث عنه في تطبيق Binance وأضفه من «الإضافة اليدوية»، أو جرّب «🔍 فحص المزامنة» لذلك اليوم.`;
   } else if (state.balFloating) {
     // العمود بلا نقطة تصفير يتبع الرصيد الحالي، فأرقامه تتغيّر مع كل عملية جديدة
     gap = ' · ℹ أرقام عمود «الباقي من USDT» مثبَّتة على رصيدك الحالي مؤقتًا، فتتغيّر كلّما دخلت عملية جديدة. أول قراءة ناجحة للرصيد تُسجَّل لقطةً لهذا اليوم، وبمجرّد دخول يومٍ جديد تثبت أرقام اليوم الماضي ولا تعود تتحرّك.';
