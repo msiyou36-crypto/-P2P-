@@ -134,8 +134,16 @@ async function loadMaintenance(req) {
  */
 const SYNC_QUOTA_DEFAULT = 3;
 const SYNC_USAGE_KEY = 'syncusage';
-/* اليوم بتوقيت السودان (UTC+2) — حدُّ اليوم منتصف الليل محليًا لا بتوقيت غرينتش */
-const dayKey = (ms) => new Date((ms || Date.now()) + 2 * 3600000).toISOString().slice(0, 10);
+/* ===== اليوم المحاسبي =====
+ * لا يُقفل اليوم منتصف الليل بل الساعة الثانية ليلًا بتوقيت ليبيا (UTC+2)،
+ * فالعمل يمتدّ إلى ما بعد منتصف الليل وحسابُه على يومه لا على اليوم التالي.
+ * فما وقع قبل الثانية ليلًا يُحسب على اليوم السابق. */
+const TZ_OFFSET_H = 2;      // ليبيا UTC+2 (بلا توقيت صيفي)
+const DAY_CLOSE_H = 2;      // الإقفال الساعة ٢ ليلًا محليًا
+const DAY_SHIFT_MS = (TZ_OFFSET_H - DAY_CLOSE_H) * 3600000;
+const dayKey = (ms) => new Date((ms || Date.now()) + DAY_SHIFT_MS).toISOString().slice(0, 10);
+/** بداية اليوم المحاسبي «YYYY-MM-DD» بالتوقيت العالمي */
+const dayStartMs = (y, mo, d) => Date.UTC(y, mo - 1, d, 0, 0, 0) - DAY_SHIFT_MS;
 const syncDayKey = () => dayKey();
 const syncQuotaValue = () => {
   const n = Number(config.syncQuota);
@@ -1326,8 +1334,8 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const m = String(body.day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (!m) { sendJSON(res, 400, { error: 'حدّد اليوم بصيغة YYYY-MM-DD' }); return; }
-      // حدود اليوم بتوقيت السودان (UTC+2) — نفس ما يعرضه الجدول
-      const s = Date.UTC(+m[1], +m[2] - 1, +m[3], 0, 0, 0) - 2 * 3600000;
+      // حدود اليوم المحاسبي: من الثانية ليلًا إلى الثانية ليلًا — نفس ما يعرضه الجدول
+      const s = dayStartMs(+m[1], +m[2], +m[3]);
       const e = s + 86400000 - 1;
       if (s > Date.now()) { sendJSON(res, 400, { error: 'هذا اليوم لم يأتِ بعد' }); return; }
       const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');

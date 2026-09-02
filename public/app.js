@@ -906,15 +906,28 @@ async function saveMaintenance() {
 
 /* ============================ الفلترة ============================ */
 
+/* اليوم المحاسبي يُقفل الساعة الثانية ليلًا لا منتصف الليل، فالعمل يمتدّ بعد
+   منتصف الليل ويُحسب على يومه. فلْيتبع فلترُ الجدول الإقفالَ نفسه، وإلّا اختفت
+   عمليةُ الواحدة ليلًا من «اليوم» بينما الحساب لا يزال يعدّها عليه. */
+const DAY_CLOSE_H = 2;
+/** بداية اليوم المحاسبي الذي تقع فيه اللحظة ms (بالتوقيت المحلي للمتصفّح) */
+function bizDayStart(ms) {
+  const d = new Date(ms);
+  d.setHours(DAY_CLOSE_H, 0, 0, 0);
+  if (d.getTime() > ms) d.setDate(d.getDate() - 1);
+  return d.getTime();
+}
+/** بداية اليوم المحاسبي المسمّى «YYYY-MM-DD» */
+const bizDayFrom = (s) => new Date(s + 'T00:00:00').setHours(DAY_CLOSE_H, 0, 0, 0);
+
 function rangeBounds() {
   const f = state.filters;
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfToday = bizDayStart(Date.now());
   if (f.range === 'all') return [0, Infinity];
   if (f.range === '1') return [startOfToday, Infinity];
   if (f.range === 'custom') {
-    const from = f.from ? new Date(f.from + 'T00:00:00').getTime() : 0;
-    const to = f.to ? new Date(f.to + 'T23:59:59.999').getTime() : Infinity;
+    const from = f.from ? bizDayFrom(f.from) : 0;
+    const to = f.to ? bizDayFrom(f.to) + 86400000 - 1 : Infinity;
     return [from, to];
   }
   const days = Number(f.range);
