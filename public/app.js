@@ -832,14 +832,21 @@ async function runDiag() {
   box.textContent = '';
 
   const total = d.fromPlatform.length;
-  // الخلاصة أولًا: أي الاحتمالين هو الواقع
+  /* عمليةٌ وقعت بعد آخر مزامنة ليست خللًا في الحفظ — لم يأتِ دورها بعد. الخلط
+     بينهما يُرسل المستخدم يبحث عن عطبٍ لا وجود له بعد كل بيعةٍ جديدة. */
+  const ls = Number(state.settings.lastSync) || 0;
+  const unsaved = d.fromPlatform.filter((x) => !x.stored);
+  const fresh = ls ? unsaved.filter((x) => x.time > ls).length : 0;
+  const stale = unsaved.length - fresh;
   box.append(diagLine(
-    total === 0 || d.notStored > 0 ? 'diag-bad' : 'diag-ok',
+    total === 0 || stale > 0 ? 'diag-bad' : 'diag-ok',
     total === 0
       ? `المنصة لم تُرجع أي عملية P2P في آخر ${days} يوم — العمليات المفقودة ليست على هذا المفتاح.`
-      : (d.notStored > 0
-        ? `المنصة أرجعت ${fmt0(total)} عملية، منها ${fmt0(d.notStored)} غير محفوظة عندك — الخلل في الحفظ، والمزامنة القادمة تُصلحه.`
-        : `المنصة أرجعت ${fmt0(total)} عملية وكلها محفوظة عندك — فما لا تجده في الجدول لا تُرجعه المنصة أصلًا لهذا المفتاح.`)));
+      : stale > 0
+        ? `المنصة أرجعت ${fmt0(total)} عملية، منها ${fmt0(stale)} وقعت قبل آخر مزامنة ولم تُحفظ — هذه هي المشكلة، والمزامنة القادمة تُصلحها.`
+        : fresh > 0
+          ? `المنصة أرجعت ${fmt0(total)} عملية، وكلُّ ما ليس عندك (${fmt0(fresh)}) وقع بعد آخر مزامنة — لا خلل، اضغط «⟳ مزامنة» ليصل.`
+          : `المنصة أرجعت ${fmt0(total)} عملية وكلها محفوظة عندك — فما لا تجده في الجدول لا تُرجعه المنصة أصلًا لهذا المفتاح.`));
 
   if (total) {
     const t = document.createElement('table');
