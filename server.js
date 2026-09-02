@@ -668,6 +668,11 @@ async function signedGet(base, endpoint, params, offset, method = 'GET') {
 
 const dayLabel = (ms) => new Date(ms).toISOString().slice(0, 10);
 
+/* حدُّ نقطة Binance Pay: ١٠٠ سجلًّا للطلب بلا ترقيم صفحات، فالشطرُ الزمني هو
+   الوسيلة الوحيدة لتجاوزه. والسقفُ يمنع نافذةً مزدحمة من إطالة المزامنة بلا نهاية. */
+const PAY_PAGE = 100;
+const PAY_MAX_CALLS = 120;
+
 /**
  * مزامنة شاملة: طلبات P2P (بيع/شراء) + سجل الإيداع + سجل السحب، على نوافذ زمنية،
  * وتبثّ تقدّم العملية سطرًا-بسطر (NDJSON). أي بيانات جُلبت تُحفظ حتى لو فشلت
@@ -765,20 +770,40 @@ async function* syncGenerator() {
 
     /* ---- عمليات Binance Pay (إرسال/استلام) ----
        نقطة /sapi/v1/pay/transactions: الحد الأقصى للفترة 90 يومًا، وأقصى 100 سجل
-       لكل طلب دون ترقيم صفحات، ووزنها على حساب المستخدم (UID) 3000 وهو ضمن الحد.
+       لكل طلب ولا ترقيم صفحات لها، ووزنها على حساب المستخدم (UID) 3000 وهو ضمن الحد.
        نغلّفها بـ try/catch حتى لا يوقف فشلُها (صلاحية/منطقة) بقيةَ المزامنة. */
     try {
-      for (const [s, e] of txWindows) {
-        yield prog(`جلب عمليات Binance Pay: ${dayLabel(s)} ← ${dayLabel(e)}`);
-        const j = await signedGet(base, '/sapi/v1/pay/transactions',
-          { startTime: s, endTime: e, limit: 100 }, offset);
-        const rows = Array.isArray(j.data) ? j.data : [];
-        for (const raw of rows) {
-          const r = upsertTransfer(normalizePay(raw));
-          if (r === 'added') payAdded++;
-          else if (r === 'updated') txUpdated++;
+      for (const [ws, we] of txWindows) {
+        yield prog(`جلب عمليات Binance Pay: ${dayLabel(ws)} ← ${dayLabel(we)}`);
+        /* نافذةٌ عادت ممتلئة (١٠٠ سجلًّا) معناها أن ما زاد سقط صامتًا — ولا
+           ترقيم صفحات نطلب به البقية. وسقوطُ عملية دخلٍ واحدة يجعل عمود
+           «الباقي من USDT» ينزل تحت الصفر بلا سببٍ ظاهر، فتضيع أرقام ما بعدها.
+           لذلك نشطر النافذة الممتلئة نصفين ونعيد السؤال، حتى تعود ناقصةً
+           فنعلم يقينًا أننا استوعبنا كل ما فيها. */
+        const parts = [[ws, we]];
+        let calls = 0;
+        while (parts.length && calls < PAY_MAX_CALLS) {
+          const [s, e] = parts.pop();
+          calls++;
+          const j = await signedGet(base, '/sapi/v1/pay/transactions',
+            { startTime: s, endTime: e, limit: PAY_PAGE }, offset);
+          const rows = Array.isArray(j.data) ? j.data : [];
+          for (const raw of rows) {
+            const r = upsertTransfer(normalizePay(raw));
+            if (r === 'added') payAdded++;
+            else if (r === 'updated') txUpdated++;
+          }
+          // نافذة دقيقة واحدة لا تُشطر أكثر — لو امتلأت فالسقوط أصغر من أن نلاحقه
+          if (rows.length >= PAY_PAGE && e - s > 60000) {
+            const mid = Math.floor((s + e) / 2);
+            parts.push([mid + 1, e], [s, mid]);
+            yield prog(`تكثيف Binance Pay (${dayLabel(s)} ← ${dayLabel(e)}): السجل ممتلئ، نشطر الفترة`);
+          }
+          await sleep(1000);
         }
-        await sleep(1000);
+        if (parts.length) {
+          yield { msg: '⚠ عمليات Binance Pay كثيرة جدًّا في هذه الفترة — جُلب أقصى ما يسمح به الحد، وقد تبقى عمليات لم تصل.', pct: 97 };
+        }
       }
     } catch (err) {
       // فشل غير قاتل — نُبلّغ المستخدم ونكمل بما جُلب
@@ -1339,9 +1364,29 @@ const server = http.createServer(async (req, res) => {
         ['convert', '/sapi/v1/convert/tradeFlow', 'list', normalizeConvert],
       ]) {
         try {
-          const j = await signedGet(base, path, { startTime: s, endTime: e, limit: kind === 'pay' ? 100 : 1000 }, offset);
-          take(kind, rowsOf(j, key), norm, false);
-          await sleep(500);
+          if (kind === 'pay') {
+            /* نفس حدّ المئة بلا ترقيم صفحات (انظر المزامنة الشاملة): يومٌ مزدحم
+               يمتلئ فيسقط باقيه صامتًا، فنشطر اليوم زمنيًّا حتى تعود ناقصة. */
+            const parts = [[s, e]];
+            let calls = 0;
+            while (parts.length && calls < 24) {
+              const [ps, pe] = parts.pop();
+              calls++;
+              const rows = rowsOf(await signedGet(base, path,
+                { startTime: ps, endTime: pe, limit: PAY_PAGE }, offset), key);
+              take(kind, rows, norm, false);
+              if (rows.length >= PAY_PAGE && pe - ps > 60000) {
+                const mid = Math.floor((ps + pe) / 2);
+                parts.push([mid + 1, pe], [ps, mid]);
+              }
+              await sleep(500);
+            }
+            if (parts.length) skipped.push('pay: عمليات كثيرة جدًّا في هذا اليوم — قد تبقى عمليات لم تصل');
+          } else {
+            const j = await signedGet(base, path, { startTime: s, endTime: e, limit: 1000 }, offset);
+            take(kind, rowsOf(j, key), norm, false);
+            await sleep(500);
+          }
         } catch (err) { skipped.push(kind + ': ' + (err && err.message ? err.message : 'خطأ')); }
       }
       try { await saveOrders(); await saveTransfers(); } catch (err) { console.error(err.message); }
