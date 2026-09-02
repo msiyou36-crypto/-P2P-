@@ -15,6 +15,7 @@ const state = {
   balGapAt: 0,        // وقت أحدث نقطة تصفير — العملية الناقصة وقعت بعده
   balGapOut: true,    // هل الناقص حركة خرج (بيع/سحب) أم دخل (إيداع/شراء)
   balNeedsWallet: false, // العمود فارغ لأن الرصيد لم يُجلب ولا توجد نقطة تصفير
+  balAnchorOld: false, // المرساة الوحيدة أقدم من نافذة الحساب — نُمدّها إليها وننبّه
   balFloating: false, // العمود مثبَّت على الرصيد الحالي فيتغيّر مع كل عملية جديدة
   balSnaps: [],       // لقطات الرصيد اليومية — تُثبّت أرقام الأيام الماضية تلقائيًا
   balAbsurd: null,    // عملية بكمية غير معقولة تُفسد حساب «الباقي» (قيمة محلية في خانة USDT غالبًا)
@@ -124,8 +125,22 @@ function fillChain(evts, last, map, off, ai, r2, st) {
   st.balBrokeRows = (last - hi) + lo;
 }
 
+const anchorValue = (x) => (x.balanceAt != null ? x.balanceAt : (x.zeroPoint ? 0 : null));
+
 function computeBalanceMap() {
-  const cutoff = Date.now() - CHAIN_WINDOW_MS;
+  /* نافذة التسعين يومًا تحمي من سجلٍّ قديمٍ ناقص، لكنها كانت تبتلع مرساة المستخدم
+     إن كانت أقدم منها: يرى الدبوس في الجدول والعمود فارغ ولا يفهم لماذا. فإن
+     وُجدت مرساةٌ أقدم، نمدّ النافذة إليها — وما لا تفسّره السلسلة يبقى «—». */
+  let cutoff = Date.now() - CHAIN_WINDOW_MS;
+  let anchorT = 0;
+  for (const o of state.orders) {
+    if (o.orderStatus === 'COMPLETED' && anchorValue(o) != null) anchorT = Math.max(anchorT, o.createTime);
+  }
+  for (const t of state.transfers) {
+    if (t.status === 'COMPLETED' && anchorValue(t) != null && !isInternalKind(t.kind)) anchorT = Math.max(anchorT, t.time);
+  }
+  if (anchorT && anchorT < cutoff) cutoff = anchorT;
+  state.balAnchorOld = !!(anchorT && anchorT < Date.now() - CHAIN_WINDOW_MS);
   const evts = [];
   for (const o of state.orders) {
     if (o.orderStatus !== 'COMPLETED') continue;
@@ -2222,9 +2237,13 @@ function renderBalance() {
   if (state.balanceLoading) { subEl.textContent = 'جارٍ جلب الرصيد من المنصة…'; return; }
   /* لماذا عمود «الباقي» فارغ: بلا رصيدٍ ولا نقطة تصفير لا يوجد ما نُثبّت عليه.
      نقولها هنا لأن المستخدم يرى «—» في العمود ولا يعرف أن سببها هذه البطاقة. */
-  const colHint = state.balNeedsWallet
-    ? ' عمود «الباقي من USDT» فارغ لهذا السبب — أول قراءة ناجحة للرصيد تُسجَّل لقطةً لليوم، وبها يشتغل العمود ويثبت تلقائيًا بعدها.'
-    : '';
+  /* سببُ فراغ العمود يُقال هنا أيضًا، لا في تنبيه الفرق وحده: من لم يُجلب رصيده
+     لا يصل إلى ذلك التنبيه أصلًا، فيرى عمودًا فارغًا بلا تفسير. */
+  const colHint = state.balAnchorOld
+    ? ' ونقطة التثبيت (📌) عندك على عملية قديمة جدًّا؛ ما بعدها لا تفسّره السلسلة فيبقى «—». الحل: افتح أحدث عملية واكتب رصيدك الحقيقي بعدها في «تثبيت الباقي».'
+    : (state.balNeedsWallet
+      ? ' عمود «الباقي من USDT» فارغ لهذا السبب — أول قراءة ناجحة للرصيد تُسجَّل لقطةً لليوم، وبها يشتغل العمود ويثبت تلقائيًا بعدها.'
+      : '');
   if (state.balanceError) {
     valEl.textContent = '—'; subEl.textContent = '⚠ ' + state.balanceError + colHint; extraEl.textContent = ''; updEl.textContent = '';
     return;
@@ -2254,6 +2273,10 @@ function renderBalance() {
        نقول أين انقطعت وكم ينقصها، فالمستخدم يعرف ماذا يبحث عنه في Binance. */
     const when = state.balBrokeAt ? ` عند ${fmtDT(state.balBrokeAt)}` : '';
     gap = ` · ⚠ ينقص السجلَّ دخلٌ (إيداع أو شراء أو استلام Pay) لا يقلّ عن ${fmt2(state.balBrokeMissing)} USDT${when} — والرصيد لا ينزل تحت الصفر، فما بعد تلك اللحظة لا يُعرف باقيه: تُرك فارغًا («—») بدل رقمٍ مخترَع (${fmt0(state.balBrokeRows)} صفوف). ابحث عنه في تطبيق Binance وأضفه من «الإضافة اليدوية»، أو جرّب «🔍 فحص المزامنة» لذلك اليوم.`;
+  } else if (state.balAnchorOld) {
+    /* مرساةٌ قديمة جدًّا: السلسلة تمتدّ شهورًا، والمنصة لا تُرجع مبيعات P2P
+       الأقدم من نحو ستة أشهر — فالأرجح أن أكثر العمود سيبقى «—». */
+    gap = ' · ℹ نقطة التثبيت (📌) عندك على عملية قديمة جدًّا، فالحساب يمتدّ شهورًا وسجلُّ المنصة البعيد ناقص. الأفضل: افتح أحدث عملية واكتب رصيدك الحقيقي بعدها في «تثبيت الباقي» — يُحسب العمود منها ويستقيم.';
   } else if (state.balFloating) {
     // العمود بلا نقطة تصفير يتبع الرصيد الحالي، فأرقامه تتغيّر مع كل عملية جديدة
     gap = ' · ℹ أرقام عمود «الباقي من USDT» مثبَّتة على رصيدك الحالي مؤقتًا، فتتغيّر كلّما دخلت عملية جديدة. أول قراءة ناجحة للرصيد تُسجَّل لقطةً لهذا اليوم، وبمجرّد دخول يومٍ جديد تثبت أرقام اليوم الماضي ولا تعود تتحرّك.';
