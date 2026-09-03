@@ -397,9 +397,15 @@ th.col-idx { width: 46px; text-align: center; }
 }
 .copy-btn:hover { color: var(--ink); background: var(--surface-3); }
 
+/* المعرّف مختصرٌ إلى ٤+٤، فلا يحتاج عرضًا — وما يوفّره يذهب إلى الملاحظة */
+th.col-id, #ledgerTable td.col-id { width: 96px; max-width: 96px; white-space: nowrap; }
+
 /* خانات «الإشاري» و«الملاحظة» القابلة للتحرير داخل الجدول */
 th.col-note { min-width: 120px; }
 td.col-note { padding: 6px 8px; }
+/* الملاحظة جملةٌ لا رقم، فلها أوسع ما وفّره اختصارُ المعرّف */
+th.col-note.is-note { min-width: 220px; }
+td.col-note.is-note .note-input { min-width: 200px; }
 .note-input {
   width: 100%;
   min-width: 92px;

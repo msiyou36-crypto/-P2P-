@@ -181,7 +181,9 @@ function computeBalanceMap() {
   // رصيدُ حسابٍ لا يُقاس بأكثر من قرشين؛ وبعض الكميات تصل بثماني خانات عشرية
   // (صفقات السوق الفوري) فيتراكم كسرٌ طويل على كل الصفوف — نُقرّبه هنا لا عند
   // العرض وحده، ليخرج نظيفًا في الجدول وملف التصدير معًا.
-  const r2 = (v) => Math.round(v * 100) / 100;
+  /* الرصيد يُعرض بدقّته الكاملة ليطابق ما في المحفظة تمامًا؛ والتقريب إلى ثماني
+     خانات (أقصى ما تُرجعه المنصة) يمحو ضجيج الفاصلة العائمة دون أن يبتر رقمًا. */
+  const r2 = (v) => Math.round(v * 1e8) / 1e8;
 
   /* أرقامٌ مثبَّتة لا يفسّرها الدفتر — من نسخةٍ سابقة كانت تُرسي كل يومٍ وحده
      فتبتلع أثر عملية ويتساوى صفّان. الفرق بين كل مثبَّتين يجب أن يساوي مجموع
@@ -402,6 +404,9 @@ const TX_STATUS = {
 const txStatusInfo = (s) => TX_STATUS[s] || { ar: s, color: 'var(--warn)' };
 const WALLET_AR = { 0: 'الحساب الفوري (Spot)', 1: 'محفظة التمويل (Funding)' };
 const shortId = (s) => { s = String(s || ''); return s.length > 18 ? s.slice(0, 10) + '…' + s.slice(-6) : s; };
+/* معرّفات المنصة عشرون رقمًا تسرق عرض الجدول من الملاحظة، وأولها متشابهٌ في
+   كل الطلبات. أربعةٌ من كل طرف تكفي للتمييز، والكامل في التلميح وفي التفاصيل. */
+const tinyId = (s) => { s = String(s || ''); return s.length > 10 ? s.slice(0, 4) + '…' + s.slice(-4) : s; };
 
 /* العملات المحلية */
 const FIAT_INFO = {
@@ -1538,7 +1543,7 @@ function sortLedger() {
 
 function annotCell(entity, field, kind) {
   const td = document.createElement('td');
-  td.className = 'col-note';
+  td.className = 'col-note ' + (field === 'note' ? 'is-note' : 'is-ref');
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'note-input';
@@ -1740,8 +1745,10 @@ function renderTable() {
     tr.append(annotCell(it, 'note', isP2P ? 'order' : 'transfer'));
 
     const tdId = document.createElement('td');
-    tdId.className = 'mono';
-    tdId.textContent = isP2P ? it.orderNumber : (it.txId ? shortId(it.txId) : it.id);
+    tdId.className = 'mono col-id';
+    const fullId = isP2P ? it.orderNumber : (it.txId || it.id);
+    tdId.textContent = tinyId(fullId);
+    tdId.title = fullId;   // الكامل بالمرور بالمؤشر، ونسخُه من نافذة التفاصيل
     tr.append(tdId);
 
     tr.addEventListener('click', () => (isP2P ? openDetails(it) : openTransferDetails(it)));

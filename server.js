@@ -1215,7 +1215,7 @@ const server = http.createServer(async (req, res) => {
       if ('balanceAt' in body) {
         const v = Number(body.balanceAt);
         if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete o.balanceAt; delete o.zeroPoint; }
-        else { o.balanceAt = Math.round(v * 100) / 100; delete o.zeroPoint; }
+        else { o.balanceAt = Math.round(v * 1e8) / 1e8; delete o.zeroPoint; }
       }
       await saveOrders();
       sendJSON(res, 200, { ok: true, order: o });
@@ -1265,7 +1265,7 @@ const server = http.createServer(async (req, res) => {
       if ('balanceAt' in body) {
         const v = Number(body.balanceAt);
         if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete t.balanceAt; delete t.zeroPoint; }
-        else { t.balanceAt = Math.round(v * 100) / 100; delete t.zeroPoint; }
+        else { t.balanceAt = Math.round(v * 1e8) / 1e8; delete t.zeroPoint; }
       }
       await saveTransfers();
       sendJSON(res, 200, { ok: true, transfer: t });
@@ -1440,7 +1440,7 @@ const server = http.createServer(async (req, res) => {
         if (!rec || rec.balAfter != null) return;
         const x = Number(v);
         if (!Number.isFinite(x)) return;
-        rec.balAfter = Math.round(x * 100) / 100;
+        rec.balAfter = Math.round(x * 1e8) / 1e8;
         n++;
       };
       for (const [id, v] of Object.entries(body.orders || {})) put(orders, id, v);
