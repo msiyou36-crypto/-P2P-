@@ -1037,7 +1037,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
       ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'], ['POST', '/api/sync/day'],
     ];
-    // للمسؤول و«مستخدم 2» (الكتابة في الإشاري/الملاحظة فقط)
+    // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
     const ANNOTATE_ROUTES = [
       ['POST', '/api/orders/annotate'], ['POST', '/api/transfers/annotate'],
     ];
@@ -1052,7 +1052,7 @@ const server = http.createServer(async (req, res) => {
       ['GET', '/api/account'], ['POST', '/api/account'],
     ];
     if (gate(ADMIN_ROUTES) && role !== 'admin') { sendJSON(res, 403, { error: 'هذه العملية للمسؤول فقط' }); return; }
-    if (gate(ANNOTATE_ROUTES) && role !== 'admin' && role !== 'user2') { sendJSON(res, 403, { error: 'لا تملك صلاحية الكتابة في الإشاري/الملاحظة' }); return; }
+    if (gate(ANNOTATE_ROUTES) && role !== 'admin' && role !== 'user2') { sendJSON(res, 403, { error: 'لا تملك صلاحية التعديل في السجل' }); return; }
     if (gate(LOGIN_ROUTES) && !role) { sendJSON(res, 401, { error: 'يلزم تسجيل الدخول' }); return; }
 
     /* ---------- ضبط وضع الصيانة (للمسؤول فقط) ---------- */
@@ -1202,17 +1202,20 @@ const server = http.createServer(async (req, res) => {
         if (s === '') delete o.totalPriceOverride;
         else { const v = Number(s); if (Number.isFinite(v) && v >= 0) o.totalPriceOverride = v; }
       }
-      if ('networkLabel' in body) {
+      /* مرساة الرصيد وتسمية الشبكة تمسّان الدفتر كلّه لا صفًّا واحدًا، فتبقيان
+         للمسؤول. الواجهة تُخفيهما عن «مستخدم 2» أصلًا، وهذا يجعل الخادم يُلزمهما. */
+      const mayAll = role === 'admin';
+      if (mayAll && 'networkLabel' in body) {
         const s = String(body.networkLabel).trim();
         if (s === '') delete o.networkLabelOverride;
         else o.networkLabelOverride = s.slice(0, 40);
       }
       // علامة «الرصيد صفر بعد هذه العملية»: يعرفها المستخدم ولا تعرفها المنصة،
       // وعليها يُثبَّت عمود «الباقي» فتظهر ما بعدها بقيمها الحقيقية
-      if ('zeroPoint' in body) {
+      if (mayAll && 'zeroPoint' in body) {
         if (body.zeroPoint) o.zeroPoint = true; else delete o.zeroPoint;
       }
-      if ('balanceAt' in body) {
+      if (mayAll && 'balanceAt' in body) {
         const v = Number(body.balanceAt);
         if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete o.balanceAt; delete o.zeroPoint; }
         else { o.balanceAt = Math.round(v * 1e8) / 1e8; delete o.zeroPoint; }
@@ -1253,16 +1256,19 @@ const server = http.createServer(async (req, res) => {
         if (s === '') delete t.totalPriceOverride;
         else { const v = Number(s); if (Number.isFinite(v) && v >= 0) t.totalPriceOverride = v; }
       }
-      if ('networkLabel' in body) {
+      /* مرساة الرصيد وتسمية الشبكة تمسّان الدفتر كلّه لا صفًّا واحدًا، فتبقيان
+         للمسؤول. الواجهة تُخفيهما عن «مستخدم 2» أصلًا، وهذا يجعل الخادم يُلزمهما. */
+      const mayAll = role === 'admin';
+      if (mayAll && 'networkLabel' in body) {
         const s = String(body.networkLabel).trim();
         if (s === '') delete t.networkLabelOverride;
         else t.networkLabelOverride = s.slice(0, 40);
       }
       // علامة «الرصيد صفر بعد هذه العملية» (انظر التعليق في annotate الطلبات)
-      if ('zeroPoint' in body) {
+      if (mayAll && 'zeroPoint' in body) {
         if (body.zeroPoint) t.zeroPoint = true; else delete t.zeroPoint;
       }
-      if ('balanceAt' in body) {
+      if (mayAll && 'balanceAt' in body) {
         const v = Number(body.balanceAt);
         if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete t.balanceAt; delete t.zeroPoint; }
         else { t.balanceAt = Math.round(v * 1e8) / 1e8; delete t.zeroPoint; }

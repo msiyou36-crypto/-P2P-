@@ -603,7 +603,8 @@ async function refreshBalance() {
 /* ============================ المصادقة ============================ */
 
 const canEdit = () => state.auth.role === 'admin';
-// «مستخدم 2» يكتب في الإشاري/الملاحظة فقط (كالمستخدم العادي عدا ذلك)
+/* «مستخدم 2» يكتب في الإشاري والملاحظة والسعر والمبلغ — وهي تصحيحاتٌ تخصّ صفًّا
+   واحدًا. ويبقى للمسؤول وحده ما يمسّ الدفتر كلّه: مرساة الرصيد وتسمية الشبكة. */
 const canAnnotate = () => state.auth.role === 'admin' || state.auth.role === 'user2';
 const ROLE_NAMES = { admin: 'مسؤول', user: 'مستخدم', user2: 'مستخدم 2' };
 const ROLE_ICONS = { admin: '👑', user: '👁️', user2: '✏️' };
@@ -1583,7 +1584,7 @@ function priceCell(entity, field, display, kind) {
   td.className = 'num strong editable';
   const overKey = field === 'unitPrice' ? 'unitPriceOverride' : 'totalPriceOverride';
   const edited = entity[overKey] != null;
-  if (state.auth.role !== 'admin') {
+  if (!canAnnotate()) {
     td.textContent = edited ? fmt2p(entity[overKey]) : display;
     if (edited) td.classList.add('is-edited');
     return td;
