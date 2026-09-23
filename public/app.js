@@ -151,11 +151,14 @@ function computeBalanceMap() {
   for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
     if (t.time < cutoff) continue;
-    if (String(t.coin || '').toUpperCase() !== 'USDT') continue; // الرصيد بالـ USDT فقط
+    /* الرصيد بالـUSDT وحده — إلا عمليةً بعملةٍ أخرى قوّمها صاحب الدفتر بالـUSDT
+       يدويًا، فتُحتسب بذلك التقويم (وهو شاملٌ للرسوم، فلا تُضاف إليه). */
+    const uv = t.usdtValue;
+    if (uv == null && String(t.coin || '').toUpperCase() !== 'USDT') continue;
     // التحويل بين الفوري والتمويل لا يغيّر ما نملكه (المحفظتان معًا) — حصانة لو بقي صفٌّ منه
     if (isInternalKind(t.kind)) continue;
     const isOut = OUT_KINDS.has(t.kind);
-    const v = isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0);
+    const v = uv != null ? uv : (isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0));
     evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v, zero: !!t.zeroPoint, at: (t.balanceAt != null ? t.balanceAt : (t.zeroPoint ? 0 : null)), frozen: t.balAfter });
   }
   // عملية بكمية غير معقولة (أكبر عملياتهم الفعلية ~10 آلاف USDT): غالبًا قيمة
@@ -1718,7 +1721,12 @@ function renderTable() {
     else { const ki = TX_KIND[it.kind] || { ar: it.kind, color: 'var(--muted)' }; tdType.append(chip(ki.ar, ki.color)); }
     tr.append(tdType);
 
-    tdText(tr, fmt2(isP2P ? grossUSDT(it) : row._amount), 'num strong');
+    // عمليةٌ قُوّمت بالـUSDT يدويًا تُعرض بقيمتها تلك — فهي ما دخل الدفتر فعلًا
+    const tdAmt = tdText(tr, fmt2(isP2P ? grossUSDT(it) : (it.usdtValue != null ? it.usdtValue : row._amount)), 'num strong');
+    if (!isP2P && it.usdtValue != null) {
+      tdAmt.classList.add('is-edited');
+      tdAmt.title = `قوّمتَها بالـUSDT يدويًا — الأصل ${fmt2(it.amount)} ${it.coin || ''}`;
+    }
     if (isP2P) {
       tr.append(priceCell(it, 'unitPrice', fmt2p(effUnitPrice(it)), 'order'));
       tr.append(priceCell(it, 'totalPrice', mixed ? fmt0(effTotalPrice(it)) + ' ' + fiatSymOf(it) : fmt0(effTotalPrice(it)), 'order'));
@@ -1726,7 +1734,9 @@ function renderTable() {
       tr.append(priceCell(it, 'unitPrice', it.unitPriceOverride != null ? fmt2p(it.unitPriceOverride) : '—', 'transfer'));
       tr.append(priceCell(it, 'totalPrice', it.totalPriceOverride != null ? fmt0(it.totalPriceOverride) : '—', 'transfer'));
     }
-    tr.append(labelCell(it, isP2P ? 'order' : 'transfer', isP2P ? fiatSymOf(it) : (it.network || it.coin || '—')));
+    // المقوَّمة بالـUSDT تُعرض عملتُها USDT، فهي بها دخلت الحساب
+    const coinLabel = !isP2P && it.usdtValue != null ? 'USDT' : (it.network || it.coin || '—');
+    tr.append(labelCell(it, isP2P ? 'order' : 'transfer', isP2P ? fiatSymOf(it) : coinLabel));
     const bal = balOf(it, isP2P);
     const tdBal = tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
     if (it.balAfter != null && tdBal) tdBal.title = 'رقم مثبَّت — تُبِّت ساعة اكتمال العملية ولا يتغيّر';
@@ -1932,6 +1942,56 @@ function openDetails(o) {
   openModal('#mDetails');
 }
 
+/* تقويمُ عمليةٍ بعملةٍ أخرى بالـUSDT: العملة غير USDT لا تحرّك رصيد USDT، فلا
+   تدخل «الباقي» افتراضًا. ومن أراد احتسابها في دفتره كتب قيمتها هنا. */
+function usdtValueRow(t) {
+  const wrap = document.createElement('div');
+  wrap.className = 'zero-toggle';
+  const inp = document.createElement('input');
+  inp.type = 'number';
+  inp.step = 'any';
+  inp.min = '0';
+  inp.dir = 'ltr';
+  inp.className = 'num-input';
+  inp.placeholder = 'مثلًا 309.38743608';
+  inp.disabled = !canEdit();
+  if (t.usdtValue != null) inp.value = String(t.usdtValue);
+  const btn = document.createElement('button');
+  btn.className = 'btn';
+  btn.textContent = 'احتسب';
+  btn.disabled = !canEdit();
+  const clr = document.createElement('button');
+  clr.className = 'btn';
+  clr.textContent = 'لا تحتسب';
+  clr.disabled = !canEdit() || t.usdtValue == null;
+  wrap.append(inp, btn, clr);
+
+  const send = async (val) => {
+    await api('/api/transfers/annotate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: t.id, usdtValue: val }),
+    });
+    if (val == null) delete t.usdtValue; else t.usdtValue = val;
+    renderAll();
+  };
+  btn.addEventListener('click', async () => {
+    const v = Number(inp.value);
+    if (!Number.isFinite(v) || v < 0) { toast('اكتب رقمًا صحيحًا', 'err'); return; }
+    btn.disabled = true;
+    try { await send(v); closeAllModals(); toast(`احتُسبت بـ ${fmt2(v)} USDT ✓`); }
+    catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
+    btn.disabled = false;
+  });
+  clr.addEventListener('click', async () => {
+    clr.disabled = true;
+    try { await send(null); closeAllModals(); toast('لم تعد تُحتسب في «الباقي»'); }
+    catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
+  });
+  return detailRow('احتساب بالـUSDT', wrap, {
+    hint: `هذه العملية بعملة ${t.coin || '—'}، فلا تُغيّر رصيد USDT ولا تدخل «الباقي». اكتب قيمتها بالـUSDT لتُحتسب — وتصير عملتها USDT في الجدول. احذر الازدواج إن كنت قد حوّلت الـUSDT إلى هذه العملة أصلًا، فذلك التحويل خصمها مرّة.`,
+  });
+}
+
 function openTransferDetails(t) {
   const body = $('#txDetailsBody');
   body.textContent = '';
@@ -1974,6 +2034,7 @@ function openTransferDetails(t) {
   wrap.append(detailRow('وقت الإنشاء', fmtDTsec(t.time)));
   if (t.completeTime) wrap.append(detailRow('وقت الاكتمال', fmtDTsec(t.completeTime)));
   wrap.append(detailRow('المصدر', SOURCE_AR[t.source] || t.source || 'من المنصة'));
+  if (String(t.coin || '').toUpperCase() !== 'USDT' || t.usdtValue != null) wrap.append(usdtValueRow(t));
   wrap.append(annotDetailRow(t, 'reference', 'transfer', 'الإشاري'));
   wrap.append(annotDetailRow(t, 'note', 'transfer', 'الملاحظة'));
   if (t.status === 'COMPLETED') wrap.append(zeroPointRow(t, 'transfer'));

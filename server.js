@@ -616,6 +616,7 @@ function upsertTransfer(t) {
   if (prev.totalPriceOverride != null) t.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) t.networkLabelOverride = prev.networkLabelOverride;
   if (prev.zeroPoint) t.zeroPoint = true;
+  if (prev.usdtValue != null) t.usdtValue = prev.usdtValue; // تقويمُ عمليةٍ بعملة أخرى
   if (prev.balanceAt != null) t.balanceAt = prev.balanceAt; // مرساة المستخدم اليدوية
   if (prev.balAfter != null) t.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
   const changed = JSON.stringify(prev) !== JSON.stringify(t);
@@ -1265,6 +1266,14 @@ const server = http.createServer(async (req, res) => {
         else t.networkLabelOverride = s.slice(0, 40);
       }
       // علامة «الرصيد صفر بعد هذه العملية» (انظر التعليق في annotate الطلبات)
+      /* عمليةٌ بعملةٍ غير USDT لا تدخل حساب «الباقي» لأن USDT لم يتحرّك. لكن قد
+         يريد صاحب الدفتر احتسابها بقيمتها بالـUSDT — فيكتبها هنا، وتُعامل
+         عندئذٍ معاملة USDT بمقدارها هذا (الرسوم داخلةٌ فيه، فلا تُضاف ثانية). */
+      if (mayAll && 'usdtValue' in body) {
+        const v = Number(body.usdtValue);
+        if (body.usdtValue == null || String(body.usdtValue).trim() === '' || !Number.isFinite(v) || v < 0) delete t.usdtValue;
+        else t.usdtValue = Math.round(v * 1e8) / 1e8;
+      }
       if (mayAll && 'zeroPoint' in body) {
         if (body.zeroPoint) t.zeroPoint = true; else delete t.zeroPoint;
       }
