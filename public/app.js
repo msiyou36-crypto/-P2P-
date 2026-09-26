@@ -38,6 +38,7 @@ const state = {
   page: 1,
   detailsOrder: null,
   importRows: null,
+  showArchive: false, // عرض المؤرشَف وحده بدل الجدول العادي (للمسؤول)
   syncing: false,
 };
 const PAGE_SIZE = 50;
@@ -673,6 +674,12 @@ function applyRole() {
   const role = state.auth.role;
   const admin = role === 'admin';
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !admin));
+  // الأرشيف للمسؤول وحده: لو تبدّل الدور وهو مفتوح، يُغلق فلا يبقى معروضًا لغيره
+  if (!admin && state.showArchive) {
+    state.showArchive = false;
+    const bar = $('#archiveBar');
+    if (bar) bar.classList.add('hidden');
+  }
   const badge = $('#roleBadge');
   const nm = ROLE_NAMES[role] || 'مستخدم';
   const ic = ROLE_ICONS[role] || '●';
@@ -995,7 +1002,11 @@ function applyFilters() {
   const statusIsTx = f.status === 'PENDING' || f.status === 'FAILED';
   const statusIsOther = f.status === 'other';
 
+  /* الأرشفة فلترُ عرضٍ لا محو: المؤرشَف يخرج من الجدول ويبقى في حساب «الباقي»
+     (انظر computeBalanceMap، فهي تقرأ state.orders كاملةً لا المفلترة). */
+  const arc = state.showArchive;
   state.filtered = state.orders.filter((o) => {
+    if (!!o.archived !== arc) return false;
     if (o.createTime < from || o.createTime > to) return false;
     if (typeIsTx || statusIsTx) return false;
     if (typeIsP2P && o.tradeType !== f.type) return false;
@@ -1006,6 +1017,7 @@ function applyFilters() {
   });
 
   state.filteredTx = state.transfers.filter((t) => {
+    if (!!t.archived !== arc) return false;
     if (t.time < from || t.time > to) return false;
     if (typeIsP2P || statusIsOther) return false;
     if (f.fiat !== 'all') return false; // الحوالات بالـ USDT — لا تندرج تحت عملة محلية بعينها
@@ -1938,8 +1950,48 @@ function openDetails(o) {
   wrap.append(annotDetailRow(o, 'reference', 'order', 'الإشاري'));
   wrap.append(annotDetailRow(o, 'note', 'order', 'الملاحظة'));
   if (o.orderStatus === 'COMPLETED') wrap.append(zeroPointRow(o, 'order'));
+  if (canEdit()) wrap.append(archiveRow(o, 'order'));
   body.append(wrap);
   openModal('#mDetails');
+}
+
+/* وضع الأرشيف: الجدولُ نفسه يعرض المؤرشَف وحده — فتعمل فيه الفلاتر والفرز
+   والتفاصيل كما هي، بلا نافذةٍ ثانية تُكرّر كل ذلك. */
+function setArchiveView(on) {
+  state.showArchive = !!on && canEdit();
+  state.page = 1;
+  $('#archiveBar').classList.toggle('hidden', !state.showArchive);
+  renderAll();
+}
+
+/* الأرشفة: إخفاءُ صفٍّ من الجدول دون محوه ودون إخراجه من حساب «الباقي» —
+   فالمال تحرّك فعلًا. ومَن أراد المحو فزرُّ الحذف موجود. (للمسؤول وحده) */
+function archiveRow(entity, kind) {
+  const wrap = document.createElement('div');
+  wrap.className = 'zero-toggle';
+  const on = !!entity.archived;
+  const btn = document.createElement('button');
+  btn.className = 'btn' + (on ? '' : ' danger');
+  btn.textContent = on ? '↩ إرجاع من الأرشيف' : '🗄 أرشفة (إخفاء من الجدول)';
+  btn.disabled = !canEdit();
+  wrap.append(btn);
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const id = kind === 'transfer' ? entity.id : entity.orderNumber;
+    try {
+      await api(kind === 'transfer' ? '/api/transfers/annotate' : '/api/orders/annotate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, archived: !on }),
+      });
+      if (on) delete entity.archived; else entity.archived = true;
+      closeAllModals();
+      renderAll();
+      toast(on ? 'أُرجعت إلى الجدول ✓' : 'أُرسلت إلى الأرشيف — تجدها في ☰ القائمة ← 🗄 الأرشيف');
+    } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); btn.disabled = false; }
+  });
+  return detailRow('الأرشيف', wrap, {
+    hint: 'الأرشفة تُخفيها من الجدول والأرقام فقط — تبقى محفوظة، وتبقى محسوبة في عمود «الباقي من USDT» لأن المال تحرّك فعلًا. للحذف النهائي استخدم زر الحذف.',
+  });
 }
 
 /* تقويمُ عمليةٍ بعملةٍ أخرى بالـUSDT: العملة غير USDT لا تحرّك رصيد USDT، فلا
@@ -2038,6 +2090,7 @@ function openTransferDetails(t) {
   wrap.append(annotDetailRow(t, 'reference', 'transfer', 'الإشاري'));
   wrap.append(annotDetailRow(t, 'note', 'transfer', 'الملاحظة'));
   if (t.status === 'COMPLETED') wrap.append(zeroPointRow(t, 'transfer'));
+  if (canEdit()) wrap.append(archiveRow(t, 'transfer'));
   body.append(wrap);
   openModal('#mTransfer');
 }
@@ -2673,6 +2726,8 @@ function wireEvents() {
 
   $('#btnSync').addEventListener('click', () => { closeMenu(); runSync(); });
   applySyncCooldown();
+  $('#btnArchive').addEventListener('click', () => { closeMenu(); setArchiveView(true); });
+  $('#btnArchiveBack').addEventListener('click', () => setArchiveView(false));
   $('#btnDiag').addEventListener('click', () => { closeMenu(); openDiag(); });
   $('#btnRunDiag').addEventListener('click', runDiag);
   $('#btnFetchDay').addEventListener('click', fetchOneDay);

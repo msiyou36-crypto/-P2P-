@@ -404,6 +404,7 @@ function upsertOrder(o) {
   if (prev.totalPriceOverride != null) o.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) o.networkLabelOverride = prev.networkLabelOverride;
   if (prev.zeroPoint) o.zeroPoint = true;
+  if (prev.archived) o.archived = true; // الإخفاء من الجدول قرارُ صاحب الدفتر
   if (prev.balanceAt != null) o.balanceAt = prev.balanceAt; // مرساة المستخدم اليدوية
   if (prev.balAfter != null) o.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
   if (prev.source === 'binance' && o.source === 'manual') return 'same';
@@ -616,6 +617,7 @@ function upsertTransfer(t) {
   if (prev.totalPriceOverride != null) t.totalPriceOverride = prev.totalPriceOverride;
   if (prev.networkLabelOverride != null) t.networkLabelOverride = prev.networkLabelOverride;
   if (prev.zeroPoint) t.zeroPoint = true;
+  if (prev.archived) t.archived = true; // الإخفاء من الجدول قرارُ صاحب الدفتر
   if (prev.usdtValue != null) t.usdtValue = prev.usdtValue; // تقويمُ عمليةٍ بعملة أخرى
   if (prev.balanceAt != null) t.balanceAt = prev.balanceAt; // مرساة المستخدم اليدوية
   if (prev.balAfter != null) t.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
@@ -1213,6 +1215,11 @@ const server = http.createServer(async (req, res) => {
       }
       // علامة «الرصيد صفر بعد هذه العملية»: يعرفها المستخدم ولا تعرفها المنصة،
       // وعليها يُثبَّت عمود «الباقي» فتظهر ما بعدها بقيمها الحقيقية
+      /* الأرشفة إخفاءٌ من الجدول لا محوٌ من الدفتر: تبقى العملية محسوبةً في
+         «الباقي» لأن المال تحرّك فعلًا، ومَن أراد المحو فالحذف موجود. */
+      if (mayAll && 'archived' in body) {
+        if (body.archived) o.archived = true; else delete o.archived;
+      }
       if (mayAll && 'zeroPoint' in body) {
         if (body.zeroPoint) o.zeroPoint = true; else delete o.zeroPoint;
       }
@@ -1273,6 +1280,11 @@ const server = http.createServer(async (req, res) => {
         const v = Number(body.usdtValue);
         if (body.usdtValue == null || String(body.usdtValue).trim() === '' || !Number.isFinite(v) || v < 0) delete t.usdtValue;
         else t.usdtValue = Math.round(v * 1e8) / 1e8;
+      }
+      /* الأرشفة إخفاءٌ من الجدول لا محوٌ من الدفتر: تبقى العملية محسوبةً في
+         «الباقي» لأن المال تحرّك فعلًا، ومَن أراد المحو فالحذف موجود. */
+      if (mayAll && 'archived' in body) {
+        if (body.archived) t.archived = true; else delete t.archived;
       }
       if (mayAll && 'zeroPoint' in body) {
         if (body.zeroPoint) t.zeroPoint = true; else delete t.zeroPoint;

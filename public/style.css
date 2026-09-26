@@ -458,6 +458,16 @@ td.col-note.is-note .note-input { min-width: 200px; }
 
 /* نافذة فحص المزامنة */
 #mDiag .modal { max-width: 760px; }
+/* شريط وضع الأرشيف: يُميّز الجدولَ بوضوح فلا يظنّ المستخدم أن عملياته ضاعت */
+.archive-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin: 0 0 10px; padding: 10px 14px; border-radius: 10px;
+  font-size: 13.5px; line-height: 1.7;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .diag-bar { display: flex; align-items: flex-end; gap: 10px; margin: 10px 0 4px; }
 .diag-bar label { flex: 0 0 130px; }
 .diag-bar input { width: 100%; }

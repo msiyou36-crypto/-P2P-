@@ -91,6 +91,7 @@
         <button id="btnSettings" class="menu-item admin-only" role="menuitem">⚙ الإعدادات</button>
         <button id="btnChangePass" class="menu-item admin-only" role="menuitem">🔑 تغيير كلمات السر</button>
         <button id="btnLoginLog" class="menu-item admin-only" role="menuitem">🕒 سجل الدخول</button>
+        <button id="btnArchive" class="menu-item admin-only" role="menuitem">🗄 الأرشيف</button>
         <button id="btnDiag" class="menu-item admin-only" role="menuitem">🔍 فحص المزامنة</button>
         <button id="btnMaintenance" class="menu-item admin-only" role="menuitem">⛔ إيقاف العمل (صيانة)</button>
         <div class="menu-sep"></div>
@@ -189,6 +190,10 @@
         <button id="btnExportXlsx" class="btn accent" title="تنزيل ملف Excel بالعمليات المعروضة">⬇ تصدير Excel</button>
       </div>
       <div class="sub" id="tableCount"></div>
+    </div>
+    <div id="archiveBar" class="archive-bar hidden">
+      <span>🗄 <b>الأرشيف</b> — هذه العمليات مخفيّة من الجدول، وهي محسوبة في عمود «الباقي من USDT». افتح أي صفٍّ لإرجاعه.</span>
+      <button id="btnArchiveBack" class="btn small">↩ رجوع إلى الجدول</button>
     </div>
     <div class="table-wrap">
       <table id="ledgerTable">
