@@ -135,22 +135,24 @@ function computeBalanceMap() {
   let cutoff = Date.now() - CHAIN_WINDOW_MS;
   let anchorT = 0;
   for (const o of state.orders) {
-    if (o.orderStatus === 'COMPLETED' && anchorValue(o) != null) anchorT = Math.max(anchorT, o.createTime);
+    if (o.orderStatus === 'COMPLETED' && !o.archived && anchorValue(o) != null) anchorT = Math.max(anchorT, o.createTime);
   }
   for (const t of state.transfers) {
-    if (t.status === 'COMPLETED' && anchorValue(t) != null && !isInternalKind(t.kind)) anchorT = Math.max(anchorT, t.time);
+    if (t.status === 'COMPLETED' && !t.archived && anchorValue(t) != null && !isInternalKind(t.kind)) anchorT = Math.max(anchorT, t.time);
   }
   if (anchorT && anchorT < cutoff) cutoff = anchorT;
   state.balAnchorOld = !!(anchorT && anchorT < Date.now() - CHAIN_WINDOW_MS);
   const evts = [];
   for (const o of state.orders) {
     if (o.orderStatus !== 'COMPLETED') continue;
+    if (o.archived) continue;   // المؤرشَف خارج الحساب كما هو خارج الجدول
     if (o.createTime < cutoff) continue;
     const v = grossUSDT(o); // نفس الرقم المعروض في عمود USDT
     evts.push({ k: balKey(o, true), t: o.createTime, d: o.tradeType === 'SELL' ? -v : v, zero: !!o.zeroPoint, at: (o.balanceAt != null ? o.balanceAt : (o.zeroPoint ? 0 : null)), frozen: o.balAfter });
   }
   for (const t of state.transfers) {
     if (t.status !== 'COMPLETED') continue;
+    if (t.archived) continue;   // المؤرشَف خارج الحساب كما هو خارج الجدول
     if (t.time < cutoff) continue;
     /* الرصيد بالـUSDT وحده — إلا عمليةً بعملةٍ أخرى قوّمها صاحب الدفتر بالـUSDT
        يدويًا، فتُحتسب بذلك التقويم (وهو شاملٌ للرسوم، فلا تُضاف إليه). */
@@ -1964,8 +1966,8 @@ function setArchiveView(on) {
   renderAll();
 }
 
-/* الأرشفة: إخفاءُ صفٍّ من الجدول دون محوه ودون إخراجه من حساب «الباقي» —
-   فالمال تحرّك فعلًا. ومَن أراد المحو فزرُّ الحذف موجود. (للمسؤول وحده) */
+/* الأرشفة: إخراجُ صفٍّ من الجدول ومن الحساب معًا دون محوه من السجلّ —
+   يُرجَع متى شئت. ومَن أراد المحو فزرُّ الحذف موجود. (للمسؤول وحده) */
 function archiveRow(entity, kind) {
   const wrap = document.createElement('div');
   wrap.className = 'zero-toggle';
@@ -1990,7 +1992,7 @@ function archiveRow(entity, kind) {
     } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); btn.disabled = false; }
   });
   return detailRow('الأرشيف', wrap, {
-    hint: 'الأرشفة تُخفيها من الجدول والأرقام فقط — تبقى محفوظة، وتبقى محسوبة في عمود «الباقي من USDT» لأن المال تحرّك فعلًا. للحذف النهائي استخدم زر الحذف.',
+    hint: 'الأرشفة تُخرجها من الجدول ومن الحساب معًا: لا تدخل الأرقام ولا عمود «الباقي من USDT» وكأنها لم تكن. والسجلّ محفوظ، فتُرجعها متى شئت. للحذف النهائي استخدم زر الحذف.',
   });
 }
 
