@@ -1749,13 +1749,18 @@ function renderTable() {
     // المقوَّمة بالـUSDT تُعرض عملتُها USDT، فهي بها دخلت الحساب
     const coinLabel = !isP2P && it.usdtValue != null ? 'USDT' : (it.network || it.coin || '—');
     tr.append(labelCell(it, isP2P ? 'order' : 'transfer', isP2P ? fiatSymOf(it) : coinLabel));
+    /* العمود يُقرأ لا يُدقَّق: رصيدُ المحفظة ينتهي بكسرٍ طويل (‎.1649529) فيرثه
+       كل صفٍّ عن المرساة، فيصير العمود حائطًا من الأرقام. نعرض قرشين ونُبقي
+       الرقم الكامل في التلميح وفي ملف Excel، فلا تضيع المطابقة مع المحفظة. */
     const bal = balOf(it, isP2P);
-    const tdBal = tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
-    if (it.balAfter != null && tdBal) tdBal.title = 'رقم مثبَّت — تُبِّت ساعة اكتمال العملية ولا يتغيّر';
+    const tdBal = tdText(tr, bal == null ? '—' : fmt2p(bal), 'num col-bal');
+    const exact = bal == null ? '' : `الرقم الكامل: ${fmt2(bal)} USDT`;
+    if (tdBal && exact) tdBal.title = exact;
+    if (it.balAfter != null && tdBal) tdBal.title = exact + '\nرقم مثبَّت — تُبِّت ساعة اكتمال العملية ولا يتغيّر';
     if ((it.balanceAt != null || it.zeroPoint) && tdBal) {
       tdBal.classList.add('is-zeropoint');
       const v = it.balanceAt != null ? it.balanceAt : 0;
-      tdBal.title = `نقطة التثبيت — أنت كتبت أن رصيدك بعد هذه العملية كان ${fmt2(v)} USDT، والعمود كلّه محسوب منها`;
+      tdBal.title = `${exact}\nنقطة التثبيت — أنت كتبت أن رصيدك بعد هذه العملية كان ${fmt2(v)} USDT، والعمود كلّه محسوب منها`;
     }
     tdText(tr, it.counterPart || '—');
 
