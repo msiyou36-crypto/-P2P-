@@ -1953,6 +1953,7 @@ function openDetails(o) {
   wrap.append(annotDetailRow(o, 'note', 'order', 'الملاحظة'));
   if (o.orderStatus === 'COMPLETED') wrap.append(zeroPointRow(o, 'order'));
   if (canEdit()) wrap.append(archiveRow(o, 'order'));
+  if (canEdit()) wrap.append(moveAccountRow(o, 'order'));
   body.append(wrap);
   openModal('#mDetails');
 }
@@ -1964,6 +1965,38 @@ function setArchiveView(on) {
   state.page = 1;
   $('#archiveBar').classList.toggle('hidden', !state.showArchive);
   renderAll();
+}
+
+/* نقلُ عمليةٍ وقعت في الحساب الخطأ إلى الحساب الآخر بكل تعليقاتها — بدل حذفها
+   وإعادة إدخالها. يحدث ذلك إن استُورد ملفٌ والحسابُ غير المقصود مفتوح. */
+function moveAccountRow(entity, kind) {
+  const wrap = document.createElement('div');
+  wrap.className = 'zero-toggle';
+  const other = state.account.list.find((a) => a.id !== state.account.active);
+  const otherName = other ? other.name : 'الحساب الآخر';
+  const btn = document.createElement('button');
+  btn.className = 'btn danger';
+  btn.textContent = `⇄ انقلها إلى ${otherName}`;
+  btn.disabled = !canEdit();
+  wrap.append(btn);
+  btn.addEventListener('click', () => {
+    const id = kind === 'transfer' ? entity.id : entity.orderNumber;
+    openConfirm(`ستُنقل هذه العملية من ${state.account.name} إلى ${otherName} بكل ملاحظاتها. هل أنت متأكد؟`, async () => {
+      try {
+        const j = await api('/api/record/move', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, kind: kind === 'transfer' ? 'transfer' : 'order' }),
+        });
+        closeAllModals();
+        await Promise.all([loadOrders(), loadTransfers()]);
+        renderAll();
+        toast(`نُقلت إلى ${j.name} ✓`);
+      } catch (e) { toast(e.message, 'err'); }
+    });
+  });
+  return detailRow('الحساب', wrap, {
+    hint: `هذه العملية مسجّلة في «${state.account.name}». إن كانت تخصّ الحساب الآخر فانقلها — تنتقل كما هي بملاحظاتها وإشاريها، ولا تُحذف.`,
+  });
 }
 
 /* الأرشفة: إخراجُ صفٍّ من الجدول ومن الحساب معًا دون محوه من السجلّ —
@@ -2093,6 +2126,7 @@ function openTransferDetails(t) {
   wrap.append(annotDetailRow(t, 'note', 'transfer', 'الملاحظة'));
   if (t.status === 'COMPLETED') wrap.append(zeroPointRow(t, 'transfer'));
   if (canEdit()) wrap.append(archiveRow(t, 'transfer'));
+  if (canEdit()) wrap.append(moveAccountRow(t, 'transfer'));
   body.append(wrap);
   openModal('#mTransfer');
 }

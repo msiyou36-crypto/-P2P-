@@ -1063,6 +1063,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/orders/clear'], ['POST', '/api/transfers/clear'],
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
       ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'], ['POST', '/api/sync/day'],
+      ['POST', '/api/record/move'],
     ];
     // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
     const ANNOTATE_ROUTES = [
@@ -1533,6 +1534,12 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/account' && req.method === 'POST') {
       const body = await readBody(req);
       const target = ACCOUNTS.includes(body.active) ? body.active : 'p2p';
+      /* التبديل أثناء مزامنةٍ جارية يُسلّم عملياتِ حسابٍ إلى حسابٍ آخر: المزامنة
+         تكتب في الذاكرة ثم تحفظ تحت config.active — وقد تبدّل تحتها. فنمنعه. */
+      if (syncRunning && target !== config.active) {
+        sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ — انتظر انتهاءها قبل تبديل الحساب، وإلّا حُفظت عملياتها في الحساب الخطأ' });
+        return;
+      }
       if (target !== config.active) {
         await saveOrders();       // احفظ بيانات الحساب الحالي احتياطًا
         await saveTransfers();
@@ -1542,6 +1549,36 @@ const server = http.createServer(async (req, res) => {
         transfers = await loadAccountData('transfers');
       }
       sendJSON(res, 200, { ok: true, active: config.active, name: ACCOUNT_NAMES[config.active] });
+      return;
+    }
+
+    /* ---------- نقل عملية إلى الحساب الآخر (للمسؤول) ----------
+       تقع العملية في الحساب الخطأ إن استُورد ملفٌ والحسابُ غير المقصود مفتوح،
+       أو بُدِّل الحساب أثناء مزامنة. فبدل الحذف وإعادة الإدخال: ننقلها كما هي
+       بكل تعليقاتها. نُضيفها إلى مخزن الحساب الآخر أولًا، فإن فشل لم نحذف. */
+    if (p === '/api/record/move' && req.method === 'POST') {
+      const body = await readBody(req);
+      const isTx = body.kind === 'transfer';
+      const id = String(body.id || '');
+      const mem = isTx ? transfers : orders;
+      if (!Object.prototype.hasOwnProperty.call(mem, id)) { sendJSON(res, 404, { error: 'العملية غير موجودة' }); return; }
+      const other = ACCOUNTS.find((a) => a !== config.active) || 'p2p';
+      const base = isTx ? 'transfers__' : 'orders__';
+      const rec = mem[id];
+      try {
+        const dst = (await loadStore(base + other, null)) || {};
+        if (dst[id]) { sendJSON(res, 409, { error: 'العملية موجودة في الحساب الآخر أصلًا' }); return; }
+        dst[id] = rec;
+        await saveStore(base + other, dst);
+      } catch (e) {
+        sendJSON(res, 500, { error: 'تعذّر النقل: ' + e.message });
+        return;
+      }
+      // الدمج أولًا كي يشمل الحذفُ ما كتبه السستم الآخر، ثم الحفظ بلا دمج
+      await mergeFromStore(base + config.active, mem);
+      delete mem[id];
+      if (isTx) await saveTransfers({ merge: false }); else await saveOrders({ merge: false });
+      sendJSON(res, 200, { ok: true, movedTo: other, name: ACCOUNT_NAMES[other] });
       return;
     }
 
