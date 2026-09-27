@@ -782,9 +782,11 @@ function diagLine(cls, text) {
   return d;
 }
 
-/* حوالات مسجّلة في الحسابين: تُحسب مرّتين في «الباقي»، فنعرضها ثم نؤرشفها في
-   الحساب المفتوح وحده — أرشفةً لا حذفًا، فالرجوع ممكن إن أخطأنا الحساب. */
-const TX_DUP_AR = { deposit: 'إيداع', withdraw: 'سحب', 'pay-in': 'استلام Pay', 'pay-out': 'إرسال Pay', 'convert-in': 'تحويل (→USDT)', 'convert-out': 'تحويل (USDT→)' };
+/* حوالات مسجّلة في الحسابين: تُحسب مرّتين في «الباقي». البرنامج لا يحزر صاحبها،
+   والمنصةُ تعرفه: مفتاحُ كل حساب لا يُرجع إلا حوالاته. فنعرض العدد، ثم بأمر
+   المستخدم نسأل الحسابين ونُبقي كل حوالة حيث أرجعتها المنصة. */
+const TX_DUP_AR = { deposit: 'إيداع', withdraw: 'سحب', 'pay-in': 'استلام Pay', 'pay-out': 'إرسال Pay', 'convert-in': 'تحويل (→USDT)', 'convert-out': 'تحويل (USDT→)', 'spot-buy': 'شراء فوري', 'spot-sell': 'بيع فوري' };
+const kindsLine = (bag) => Object.entries(bag || {}).map(([k, n]) => `${TX_DUP_AR[k] || k} ${fmt0(n)}`).join(' · ');
 async function findDupes() {
   const box = $('#diagResult');
   const btn = $('#btnFindDupes');
@@ -796,42 +798,108 @@ async function findDupes() {
   catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); btn.disabled = false; return; }
   btn.disabled = false;
   box.textContent = '';
+  if (d.sharedKnown) box.append(diagLine('hint', `${fmt0(d.sharedKnown)} حوالة Pay بين حسابيك — تخصّهما معًا بشهادة المنصة، فلا تُعدّ.`));
   if (!d.count) {
     box.append(diagLine('diag-ok', `لا توجد حوالة مسجّلة في «${d.accountName}» و«${d.otherName}» معًا ✓`));
-  } else {
-    box.append(diagLine('diag-bad',
-      `${fmt0(d.count)} حوالة مسجّلة في «${d.accountName}» وفي «${d.otherName}» معًا — كلٌّ منها محسوبة مرّتين في «الباقي من USDT».`));
-    for (const [k, n] of Object.entries(d.byKind || {})) {
-      box.append(diagLine('hint', `${TX_DUP_AR[k] || k}: ${fmt0(n)}`));
-    }
-    box.append(dupeBtn('btn danger', `🧹 أرشفها في «${d.accountName}» وحده (${fmt0(d.count)})`,
-      `ستُؤرشف ${fmt0(d.count)} حوالة في «${d.accountName}» فتخرج من الجدول ومن حساب «الباقي»، وتبقى في «${d.otherName}» كما هي. افتح الحساب الذي لا تريد أن تبقى فيه قبل أن تُتِم — وإن أخطأت فزرُّ التراجع يُرجعها كلها. هل أنت متأكد؟`,
-      '', (j) => `أُرشفت ${fmt0(j.archived)} حوالة في ${j.accountName} ✓`));
+    return;
   }
-  /* التراجع عن الدفعة الأخيرة: لا سبيل للبرنامج أن يعرف أيُّ الحسابين يستحقها،
-     فالخطأ وارد، وإرجاعُ مئاتٍ صفًّا صفًّا ليس علاجًا. */
-  if (d.undo && d.undo.count) {
-    box.append(dupeBtn('btn', `↩ تراجع عن آخر أرشفة في «${d.accountName}» (${fmt0(d.undo.count)})`,
-      `ستعود ${fmt0(d.undo.count)} حوالة من الأرشيف إلى الجدول وإلى حساب «الباقي» في «${d.accountName}». هل أنت متأكد؟`,
-      '?undo=1', (j) => `رجعت ${fmt0(j.restored)} حوالة إلى ${j.accountName} ✓`));
+  box.append(diagLine('diag-bad',
+    `${fmt0(d.count)} حوالة مسجّلة في «${d.accountName}» وفي «${d.otherName}» معًا — كلٌّ منها محسوبة مرّتين في «الباقي من USDT».`));
+  box.append(diagLine('hint', kindsLine(d.byKind)));
+  if (d.from) box.append(diagLine('hint', `من ${fmtDT(d.from)} إلى ${fmtDT(d.to)}`));
+  const missing = ['p2p', 'p3p'].filter((a) => !(d.keys && d.keys[a]));
+  for (const a of missing) {
+    box.append(diagLine('diag-bad', `⚠ «${d.names[a]}» بلا مفتاح API — أدخله في الإعدادات أولًا، وإلّا لم يُسأل عن حوالاته ولم يُحسم ما يخصّه.`));
   }
+  const b = document.createElement('button');
+  b.className = 'btn accent';
+  b.style.cssText = 'display:block; margin-top:10px;';
+  b.textContent = `✔ أعد كل حوالة إلى حسابها الصحيح (${fmt0(d.count)})`;
+  b.addEventListener('click', () => openConfirm(
+    `سيُسأل Binance بمفتاح كل حساب عن حوالاته في هذه الفترة، وتبقى كل حوالة في الحساب الذي أرجعها وتُحذف نسختها من الآخر. ما لم تُرجعه المنصة لأيّ حساب يُترك كما هو. قد يستغرق بضع دقائق — لا تُغلق الصفحة ولا تبدّل الحساب أثناءه. هل أنت متأكد؟`,
+    () => reconcileDupes(b)));
+  box.append(b);
 }
 
-function dupeBtn(cls, label, ask, query, done) {
-  const b = document.createElement('button');
-  b.className = cls;
-  b.style.cssText = 'display:block; margin-top:10px;';
-  b.textContent = label;
-  b.addEventListener('click', () => openConfirm(ask, async () => {
-    try {
-      const j = await api('/api/transfers/dupes' + query, { method: 'POST' });
-      closeAllModals();
-      await loadTransfers();
-      renderAll();
-      toast(done(j));
-    } catch (e) { toast(e.message, 'err'); }
-  }));
-  return b;
+async function reconcileDupes(btn) {
+  const box = $('#diagResult');
+  btn.disabled = true;
+  $('#btnFindDupes').disabled = true;
+  const row = document.createElement('div');
+  row.className = 'syncbar-row';
+  row.style.marginTop = '12px';
+  const spin = document.createElement('span'); spin.className = 'spinner';
+  const msg = document.createElement('span'); msg.textContent = 'جارٍ البدء…';
+  row.append(spin, msg);
+  const track = document.createElement('div'); track.className = 'syncbar-track';
+  const fill = document.createElement('div'); fill.className = 'syncbar-fill'; fill.style.width = '2%';
+  track.append(fill);
+  box.append(row, track);
+  let sawError = null, rep = null;
+  try {
+    const headers = {};
+    if (state.auth.token) headers['X-Auth-Token'] = state.auth.token;
+    const res = await fetch('/api/transfers/reconcile', { method: 'POST', headers });
+    if (res.status === 401) { handleUnauthorized(); throw new Error('انتهت الجلسة — سجّل الدخول'); }
+    if (!res.ok || !res.body) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || 'تعذّر البدء');
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.error) sawError = ev.error;
+        else if (ev.done) rep = ev;
+        else {
+          if (ev.msg && ev.msg.startsWith('⚠')) box.insertBefore(diagLine('diag-bad', ev.msg), row);
+          else if (ev.msg) msg.textContent = ev.msg;
+          if (ev.pct != null) fill.style.width = ev.pct + '%';
+        }
+      }
+    }
+    if (sawError) throw new Error(sawError);
+    fill.style.width = '100%';
+  } catch (e) {
+    box.insertBefore(diagLine('diag-bad', '⚠ ' + e.message), row);
+    if (/HTTP 4(18|29)|حظر/.test(e.message || '')) setSyncCooldown(30 * 60000);
+  } finally {
+    row.remove(); track.remove();
+    $('#btnFindDupes').disabled = false;
+  }
+  if (!rep) { btn.disabled = false; return; }
+  btn.remove(); // انتهى عملها؛ «ابحث» من جديد يعرض الحال الحاضرة
+  const N = rep.names || {};
+  for (const a of ['p2p', 'p3p']) {
+    const n = rep.moved[a] || 0;
+    if (n) box.append(diagLine('diag-ok', `أُعيدت ${fmt0(n)} حوالة إلى «${N[a]}» وحده — ${kindsLine(rep.byKind[a])}`));
+  }
+  if (rep.shared) box.append(diagLine('hint', `${fmt0(rep.shared)} حوالة تخصّ الحسابين معًا (Pay بين حسابيك) — بقيت فيهما: ${kindsLine(rep.byKind.shared)}`));
+  if (rep.unresolved) {
+    const why = [];
+    if (rep.reasons.none) why.push(`${fmt0(rep.reasons.none)} لم تُرجعها المنصة لأيّ حساب`);
+    if (rep.reasons['pay-unsure']) why.push(`${fmt0(rep.reasons['pay-unsure'])} Pay لم يكتمل سؤال الحساب الآخر عنها`);
+    if (rep.reasons.kind) why.push(`${fmt0(rep.reasons.kind)} من نوعٍ لا تُسأل عنه المنصة`);
+    box.append(diagLine('diag-bad', `${fmt0(rep.unresolved)} حوالة تُركت في الحسابين كما هي (${why.join('، ')}) — ${kindsLine(rep.byKind.unresolved)}`));
+  }
+  if ((rep.restored.p2p || 0) + (rep.restored.p3p || 0)) {
+    box.append(diagLine('hint', `أُرجع من الأرشيف ما أرشفته الأداة السابقة: ${fmt0(rep.restored.p2p || 0)} في «${N.p2p}» و${fmt0(rep.restored.p3p || 0)} في «${N.p3p}».`));
+  }
+  if (!rep.dupes) box.append(diagLine('diag-ok', 'لا توجد حوالة مشتركة ✓'));
+  else if (!rep.unresolved && !sawError) box.append(diagLine('diag-ok', 'كل حوالة صارت في حسابها ✓ — أُعيد حساب «الباقي من USDT» في الحسابين.'));
+  await Promise.all([loadOrders(), loadTransfers()]);
+  renderAll();
+  refreshBalance();
 }
 
 /* جلب يومٍ واحد: علاجٌ موضعي لمن ينقصه يوم، بلا كلفة المزامنة الكاملة */

@@ -94,7 +94,47 @@ async function mergeFromStore(key, mem) {
     if (stored && typeof stored === 'object') {
       for (const [id, v] of Object.entries(stored)) if (!(id in mem)) mem[id] = v;
     }
+    await applyGrave(key, mem);
   } catch (e) { console.error('merge ' + key + ': ' + e.message); }
+}
+
+/* ===== مقابرُ المحذوف =====
+ * الدمج أعلاه يحمي ما أُضيف، لكنه لا يحمي ما حُذف: نسخةٌ أخرى تحمل الصفَّ في
+ * ذاكرتها منذ إقلاعها تُعيده عند أول حفظٍ لها كأنّ الحذف لم يقع (هكذا عادت
+ * حوالاتٌ أُخرجت من حسابٍ إلى حسابها). فنقيّد كل حذفٍ في مقبرة المخزن، ويُسقط
+ * الدمجُ والتحميلُ كلَّ مقبور — إلا ما أرجعته المنصةُ في هذه الجلسة، فالدليل
+ * الطازج أقوى من المقبرة ويُخرجه منها. */
+const GRAVE_MAX = 20000;
+const fresh = new Set();          // «key:id» لما أرجعته المنصة في هذه الجلسة
+const storeKeyOf = new WeakMap(); // مخزنٌ في الذاكرة ← مفتاحه (لغير الحساب النشط)
+async function graveOf(key) {
+  try { const g = await loadStore('gone__' + key, null); return Array.isArray(g) ? g.map(String) : []; }
+  catch { return []; }
+}
+async function bury(key, ids) {
+  const list = [...ids].map(String);
+  if (!list.length) return;
+  const g = new Set(await graveOf(key));
+  for (const id of list) { g.add(id); fresh.delete(key + ':' + id); }
+  await saveStore('gone__' + key, [...g].slice(-GRAVE_MAX));
+}
+async function unbury(key, ids) {
+  const drop = new Set([...ids].map(String));
+  if (!drop.size) return;
+  const g = await graveOf(key);
+  const keep = g.filter((id) => !drop.has(id));
+  if (keep.length !== g.length) await saveStore('gone__' + key, keep);
+}
+/** يُسقط المقبورَ من الذاكرة، ويُخرج من المقبرة ما عاد بدليلٍ طازج */
+async function applyGrave(key, mem) {
+  const g = await graveOf(key);
+  if (!g.length) return;
+  const back = [];
+  for (const id of g) {
+    if (fresh.has(key + ':' + id)) { if (id in mem) back.push(id); continue; }
+    delete mem[id];
+  }
+  if (back.length) await unbury(key, back);
 }
 // الحفظ مفصول لكل حساب: orders__p2p / transfers__p3p …
 async function saveOrders(opts) {
@@ -279,7 +319,9 @@ async function loadAccountData(kind) {
     d = await loadStore(kind, {}); // المفتاح القديم قبل نظام الحسابين
     if (d && Object.keys(d).length) { try { await saveStore(kind + '__p2p', d); } catch {} }
   }
-  return d || {};
+  d = d || {};
+  await applyGrave(kind + '__' + config.active, d);
+  return d;
 }
 
 /** تحميل الإعدادات وبيانات الحساب النشط عند الإقلاع + ترحيل + ضبط كلمات السر من البيئة */
@@ -421,6 +463,7 @@ function normalizeOrder(raw, source) {
 
 /** إدراج/تحديث طلب. يُرجع 'added' أو 'updated' أو 'same' */
 function upsertOrder(o) {
+  if (o.source === 'binance') fresh.add('orders__' + config.active + ':' + o.orderNumber);
   const prev = orders[o.orderNumber];
   if (!prev) { orders[o.orderNumber] = o; return 'added'; }
   // بيانات المنصة أوثق من الإدخال اليدوي، مع الحفاظ على الملاحظة والإشاري وتعديلات السعر/المبلغ (إدخال المستخدم)
@@ -630,12 +673,14 @@ function normalizeConvert(raw) {
   };
 }
 
-/** إدراج/تحديث حوالة. يُرجع 'added' أو 'updated' أو 'same' */
-function upsertTransfer(t) {
+/** إدراج/تحديث حوالة. يُرجع 'added' أو 'updated' أو 'same'.
+ *  map: مخزنُ حسابٍ بعينه؛ وبدونه مخزنُ الحساب النشط. */
+function upsertTransfer(t, map = transfers) {
   if (!t.id || t.id === 'D' || t.id === 'W') return 'same';
-  const has = Object.prototype.hasOwnProperty.call(transfers, t.id);
-  const prev = has ? transfers[t.id] : null;
-  if (!prev) { transfers[t.id] = t; return 'added'; }
+  if (t.source === 'binance') fresh.add((storeKeyOf.get(map) || ('transfers__' + config.active)) + ':' + t.id);
+  const has = Object.prototype.hasOwnProperty.call(map, t.id);
+  const prev = has ? map[t.id] : null;
+  if (!prev) { map[t.id] = t; return 'added'; }
   // الحفاظ على إدخال المستخدم (الملاحظة والإشاري وتعديلات السعر/المبلغ) عند إعادة المزامنة
   if (prev.note && !t.note) t.note = prev.note;
   if (prev.reference && !t.reference) t.reference = prev.reference;
@@ -648,7 +693,7 @@ function upsertTransfer(t) {
   if (prev.balanceAt != null) t.balanceAt = prev.balanceAt; // مرساة المستخدم اليدوية
   if (prev.balAfter != null) t.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
   const changed = JSON.stringify(prev) !== JSON.stringify(t);
-  transfers[t.id] = t;
+  map[t.id] = t;
   return changed ? 'updated' : 'same';
 }
 
@@ -674,17 +719,20 @@ async function timeOffset(base) {
   return Number(j.serverTime) - Date.now();
 }
 
-async function signedGet(base, endpoint, params, offset, method = 'GET') {
+/** acct: حسابٌ بعينه بمفاتيحه (إعادةُ الحوالات إلى أصحابها تسأل الحسابين معًا)؛
+ *  وبدونه الحسابُ النشط كالمعتاد. */
+async function signedGet(base, endpoint, params, offset, method = 'GET', acct = null) {
+  const ac = acct || AC();
   const qs = new URLSearchParams({});
   for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
   qs.set('recvWindow', '30000');
   qs.set('timestamp', String(Date.now() + offset));
-  const signature = crypto.createHmac('sha256', AC().apiSecret).update(qs.toString()).digest('hex');
+  const signature = crypto.createHmac('sha256', ac.apiSecret).update(qs.toString()).digest('hex');
   const url = base + endpoint + '?' + qs.toString() + '&signature=' + signature;
 
   let r;
   try {
-    r = await fetch(url, { method, headers: { 'X-MBX-APIKEY': AC().apiKey }, signal: AbortSignal.timeout(30000) });
+    r = await fetch(url, { method, headers: { 'X-MBX-APIKEY': ac.apiKey }, signal: AbortSignal.timeout(30000) });
   } catch {
     throw userError('انقطع الاتصال أثناء الجلب — أعد المحاولة');
   }
@@ -943,6 +991,287 @@ async function* syncGenerator() {
   yield result;
 }
 
+/* ===== إعادة كل حوالة إلى حسابها الصحيح =====
+   تسرّبت حوالاتٌ بين الحسابين (مزامنةٌ حُفظت تحت الحساب الخطأ قبل إصلاح السباق)
+   فصارت الواحدة في المخزنين وتُحسب مرّتين. البرنامج لا يملك أن يحزر صاحبها،
+   لكن المنصة تملك: مفتاحُ كل حساب لا يُرجع إلا حوالاته. فنسأل كلَّ حساب عن
+   الفترة التي تقع فيها الحوالات المشتركة، ونُبقي كل حوالة حيث أرجعتها المنصة
+   ونحذف نسختها من الحساب الآخر. ما أرجعه الحسابان معًا يبقى فيهما (Pay بين
+   حسابيك: معرّفٌ واحد للمُرسِل والمستلِم)، وما لم يُرجعه أحدٌ يُترك كما هو
+   ويُذكر في التقرير — لا نحذف على الظنّ. */
+const TX_GROUP = {
+  deposit: 'deposit', withdraw: 'withdraw', 'pay-in': 'pay', 'pay-out': 'pay',
+  'convert-in': 'convert', 'convert-out': 'convert', 'spot-buy': 'spot', 'spot-sell': 'spot',
+};
+const RECON_PAD_MS = 86400000; // يومٌ قبل أقدم حوالة وبعد أحدثها
+
+async function* reconcileGenerator() {
+  await refreshActive();
+  const active = config.active;
+  const other = ACCOUNTS.find((a) => a !== active) || 'p2p';
+  yield { msg: 'جارٍ قراءة الحسابين…', pct: 1 };
+
+  /* المخزنان طازجَين: النشط من الذاكرة بعد دمج ما كتبته نسخةٌ أخرى، والآخر من
+     القاعدة. نمسك المخزنين بمتغيّرين محلّيين ونحفظهما بمفتاحيهما الصريحين، لا عبر
+     «الحساب النشط»: نسخةٌ أخرى قد تبدّله أثناء الجلب فيذهب الحفظ إلى غير مخزنه. */
+  const mem = transfers, ordMem = orders;
+  await mergeFromStore('transfers__' + active, mem);
+  let far = await loadStore('transfers__' + other, null);
+  if (far == null && other === 'p2p') far = await loadStore('transfers', null);
+  far = far || {};
+  await applyGrave('transfers__' + other, far);
+  storeKeyOf.set(mem, 'transfers__' + active);
+  storeKeyOf.set(far, 'transfers__' + other);
+  const stores = { [active]: mem, [other]: far };
+  const touched = { p2p: false, p3p: false }; // حسابٌ تغيّرت حوالاته المحسوبة
+  const deleted = { p2p: new Set(), p3p: new Set() };
+
+  /* أداةُ الأرشفة السابقة أُلغيت: ما أرشفته يعود أولًا، فنعمل على الحال الأصلية */
+  const restored = { p2p: 0, p3p: 0 };
+  for (const a of ACCOUNTS) {
+    const last = (await loadStore('dupesundo__' + a, null)) || {};
+    for (const id of (Array.isArray(last.ids) ? last.ids : [])) {
+      const t = stores[a][id];
+      if (t && t.archived) { delete t.archived; restored[a]++; touched[a] = true; }
+    }
+  }
+
+  // ما ثبت من قبلُ أنه للحسابين معًا لا يُسأل عنه ثانيةً
+  let sharedOk = [];
+  try { const s = await loadStore('sharedtx', null); if (Array.isArray(s)) sharedOk = s; } catch {}
+  const okSet = new Set(sharedOk);
+  const ids = Object.keys(stores.p2p).filter((id) => stores.p3p[id] && !okSet.has(id));
+  const report = {
+    done: true, dupes: ids.length, moved: { p2p: 0, p3p: 0 }, shared: 0, unresolved: 0,
+    byKind: { p2p: {}, p3p: {}, shared: {}, unresolved: {} }, reasons: {}, noKeys: [],
+    restored, sample: [],
+  };
+  const bump = (bag, k) => { bag[k] = (bag[k] || 0) + 1; };
+
+  // نطاقُ كل مجموعة من الحوالات المشتركة نفسها — لا نجلب أكثر مما يلزم
+  const span = {};
+  const spotSymbols = new Set();
+  for (const id of ids) {
+    const t = stores.p2p[id];
+    const g = TX_GROUP[t.kind];
+    if (!g) continue;
+    const s = span[g] || (span[g] = { min: Infinity, max: -Infinity });
+    s.min = Math.min(s.min, t.time || 0);
+    s.max = Math.max(s.max, t.time || 0);
+    if (g === 'spot' && t.symbol) spotSymbols.add(String(t.symbol).toUpperCase());
+  }
+  const found = { p2p: new Map(), p3p: new Map() };
+  const complete = { p2p: {}, p3p: {} };
+  const wins = (g, win) => span[g] ? makeWindows(span[g].max + RECON_PAD_MS, span[g].min - RECON_PAD_MS, win) : [];
+  const DAY89 = 89 * 86400000, DAY29 = 29 * 86400000;
+  const plan = {
+    deposit: wins('deposit', DAY89), withdraw: wins('withdraw', DAY89),
+    pay: wins('pay', DAY89), convert: wins('convert', DAY29),
+    spot: span.spot ? [...spotSymbols] : [],
+  };
+  const perAcct = Object.values(plan).reduce((n, w) => n + w.length, 0);
+  const totalSteps = Math.max(perAcct * ACCOUNTS.length, 1);
+  let step = 0;
+  const prog = (msg) => { step++; return { msg, pct: Math.min(2 + Math.round((step / totalSteps) * 94), 97) }; };
+  // ما لا فائدة من المضيّ بعده: حظرٌ (والتكرار يُطيله)، أو مفتاحٌ مرفوض، أو منطقةٌ محجوبة
+  const fatal = (e) => /HTTP 4(18|29)|حظر|محجوب|مفتاح API|التوقيع/.test(e && e.message || '');
+
+  try {
+    if (ids.length) {
+      for (const a of ACCOUNTS) {
+        const ac = config.accounts[a];
+        const name = ACCOUNT_NAMES[a];
+        if (!ac || !ac.apiKey || !ac.apiSecret) {
+          report.noKeys.push(a);
+          yield { msg: `⚠ «${name}» بلا مفتاح API — لن يُسأل عن حوالاته`, pct: null };
+          step += perAcct;
+          continue;
+        }
+        const base = (ac.baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
+        yield { msg: `جارٍ الاتصال بالمنصة بمفتاح «${name}»…`, pct: null };
+        const offset = await timeOffset(base);
+        const F = found[a];
+        const done = complete[a];
+
+        /* ---- الإيداع ---- */
+        try {
+          for (const [s, e] of plan.deposit) {
+            yield prog(`«${name}»: الإيداعات ${dayLabel(s)} ← ${dayLabel(e)}`);
+            let off = 0;
+            for (;;) {
+              const arr = await signedGet(base, '/sapi/v1/capital/deposit/hisrec',
+                { startTime: s, endTime: e, offset: off, limit: 1000 }, offset, 'GET', ac);
+              const rows = Array.isArray(arr) ? arr : [];
+              for (const raw of rows) { const t = normalizeTransfer(raw, 'deposit'); F.set(t.id, t); }
+              if (rows.length < 1000) break;
+              off += 1000;
+              await sleep(300);
+            }
+            await sleep(300);
+          }
+          done.deposit = true;
+        } catch (e) { if (fatal(e)) throw e; yield { msg: `⚠ «${name}»: تعذّر جلب الإيداعات — ${e.message}`, pct: null }; }
+
+        /* ---- السحب ---- */
+        try {
+          for (const [s, e] of plan.withdraw) {
+            yield prog(`«${name}»: السحوبات ${dayLabel(s)} ← ${dayLabel(e)}`);
+            let off = 0;
+            for (;;) {
+              const arr = await signedGet(base, '/sapi/v1/capital/withdraw/history',
+                { startTime: s, endTime: e, offset: off, limit: 1000 }, offset, 'GET', ac);
+              await coolIfHeavy(18000);
+              const rows = Array.isArray(arr) ? arr : [];
+              for (const raw of rows) { const t = normalizeTransfer(raw, 'withdraw'); F.set(t.id, t); }
+              if (rows.length < 1000) break;
+              off += 1000;
+              await sleep(400);
+            }
+            await sleep(400);
+          }
+          done.withdraw = true;
+        } catch (e) { if (fatal(e)) throw e; yield { msg: `⚠ «${name}»: تعذّر جلب السحوبات — ${e.message}`, pct: null }; }
+
+        /* ---- Binance Pay: مئةٌ للطلب بلا ترقيم، فالنافذة الممتلئة تُشطر ---- */
+        try {
+          let capped = false;
+          for (const [ws, we] of plan.pay) {
+            yield prog(`«${name}»: Binance Pay ${dayLabel(ws)} ← ${dayLabel(we)}`);
+            const parts = [[ws, we]];
+            let calls = 0;
+            while (parts.length && calls < PAY_MAX_CALLS) {
+              const [s, e] = parts.pop();
+              calls++;
+              const j = await signedGet(base, '/sapi/v1/pay/transactions',
+                { startTime: s, endTime: e, limit: PAY_PAGE }, offset, 'GET', ac);
+              const rows = Array.isArray(j.data) ? j.data : [];
+              for (const raw of rows) { const t = normalizePay(raw); F.set(t.id, t); }
+              if (rows.length >= PAY_PAGE && e - s > 60000) {
+                const mid = Math.floor((s + e) / 2);
+                parts.push([mid + 1, e], [s, mid]);
+              }
+              await sleep(PAY_GAP_MS);
+              await coolIfHeavy(PAY_WEIGHT);
+            }
+            if (parts.length) capped = true;
+          }
+          done.pay = !capped;
+          if (capped) yield { msg: `⚠ «${name}»: عمليات Pay أكثر مما يسمح به الحدّ في مرّة — ما لم يصل يُترك كما هو`, pct: null };
+        } catch (e) { if (fatal(e)) throw e; yield { msg: `⚠ «${name}»: تعذّر جلب Binance Pay — ${e.message}`, pct: null }; }
+
+        /* ---- التحويل Convert ---- */
+        try {
+          for (const [s, e] of plan.convert) {
+            yield prog(`«${name}»: التحويل Convert ${dayLabel(s)} ← ${dayLabel(e)}`);
+            const j = await signedGet(base, '/sapi/v1/convert/tradeFlow',
+              { startTime: s, endTime: e, limit: 1000 }, offset, 'GET', ac);
+            for (const raw of (Array.isArray(j.list) ? j.list : [])) { const t = normalizeConvert(raw); F.set(t.id, t); }
+            await sleep(1000);
+          }
+          done.convert = true;
+        } catch (e) { if (fatal(e)) throw e; yield { msg: `⚠ «${name}»: تعذّر جلب التحويل — ${e.message}`, pct: null }; }
+
+        /* ---- السوق الفوري: أحدث ألف صفقة لكل زوج ---- */
+        for (const symbol of plan.spot) {
+          yield prog(`«${name}»: السوق الفوري ${symbol}`);
+          try {
+            const arr = await signedGet(base, '/api/v3/myTrades', { symbol, limit: 1000 }, offset, 'GET', ac);
+            for (const raw of (Array.isArray(arr) ? arr : [])) { const t = normalizeSpotTrade(raw, symbol); F.set(t.id, t); }
+          } catch (e) { if (fatal(e)) throw e; }
+          await sleep(400);
+        }
+      }
+
+      /* ---- الحكم: حوالةً حوالة ---- */
+      yield { msg: 'جارٍ إعادة كل حوالة إلى حسابها…', pct: 98 };
+      const CARRY = ['note', 'reference', 'networkLabelOverride', 'usdtValue'];
+      const sharedIds = [];
+      const settle = (id, owner) => {
+        const loser = owner === 'p2p' ? 'p3p' : 'p2p';
+        const mine = stores[owner][id];
+        const theirs = stores[loser][id];
+        // ما كتبه المستخدم على النسخة الخاطئة يلحق بالصحيحة إن كانت فارغة
+        for (const f of CARRY) {
+          const v = theirs[f];
+          if (v != null && v !== '' && (mine[f] == null || mine[f] === '')) mine[f] = v;
+        }
+        upsertTransfer(found[owner].get(id), stores[owner]); // ما أرجعته المنصة الآن أصدق مما تسرّب
+        delete stores[loser][id];
+        deleted[loser].add(id);
+        touched[loser] = true;
+        report.moved[owner]++;
+        bump(report.byKind[owner], stores[owner][id].kind);
+      };
+      for (const id of ids) {
+        const t = stores.p2p[id];
+        const g = TX_GROUP[t.kind];
+        const inA = found.p2p.has(id), inB = found.p3p.has(id);
+        let reason = null;
+        if (!g) reason = 'kind';
+        else if (inA && inB) {
+          for (const a of ACCOUNTS) upsertTransfer(found[a].get(id), stores[a]);
+          sharedIds.push(id);
+          report.shared++;
+          bump(report.byKind.shared, t.kind);
+          continue;
+        } else if (inA || inB) {
+          const owner = inA ? 'p2p' : 'p3p';
+          const rival = inA ? 'p3p' : 'p2p';
+          // Pay قد تكون للطرفين معًا، فلا نحذفها من الآخر قبل أن يُسأل ويكتمل جوابه
+          if (g === 'pay' && !complete[rival].pay) reason = 'pay-unsure';
+          else { settle(id, owner); continue; }
+        } else reason = 'none';
+        report.unresolved++;
+        bump(report.byKind.unresolved, t.kind);
+        bump(report.reasons, reason);
+        if (report.sample.length < 10) report.sample.push({ id, kind: t.kind, amount: t.amount, coin: t.coin, time: t.time, reason });
+      }
+
+      /* المحذوف يُقبر في حسابه حتى لا تُعيده نسخةٌ أخرى، ويُخرج من مقبرة الحساب
+         الذي بقي فيه (قد يكون نُقل منه يومًا) */
+      for (const a of ACCOUNTS) {
+        const l = a === 'p2p' ? 'p3p' : 'p2p';
+        await bury('transfers__' + l, deleted[l]);
+        await unbury('transfers__' + a, [...deleted[l], ...sharedIds]);
+      }
+      if (sharedIds.length) {
+        try { await saveStore('sharedtx', [...new Set([...sharedOk, ...sharedIds])].slice(-GRAVE_MAX)); } catch {}
+      }
+    }
+
+    /* «الباقي» المثبَّت حُسب والحوالةُ محسوبةٌ مرّتين، فيُمحى في كل حسابٍ تغيّر
+       ليُعاد حسابه صحيحًا (كما تفعل «إعادة حساب الباقي») */
+    for (const a of ACCOUNTS) {
+      if (!touched[a]) continue;
+      for (const t of Object.values(stores[a])) if (t.balAfter != null) delete t.balAfter;
+      if (a === active) {
+        await mergeFromStore('orders__' + active, ordMem);
+        for (const o of Object.values(ordMem)) if (o.balAfter != null) delete o.balAfter;
+        await saveStore('orders__' + active, ordMem);
+      } else {
+        const oo = (await loadStore('orders__' + other, null)) || {};
+        let n = 0;
+        for (const o of Object.values(oo)) if (o.balAfter != null) { delete o.balAfter; n++; }
+        if (n) await saveStore('orders__' + other, oo);
+      }
+    }
+  } finally {
+    /* الحفظ مهما حدث (فما أُرجع من الأرشيف لا يضيع): دمجٌ يضمّ ما كتبته نسخةٌ
+       أخرى أثناء الجلب، ثم إعادةُ الحذف حتى لا يُعيد الدمجُ ما حذفناه، ثم الكتابة
+       بالمفتاح الصريح */
+    await mergeFromStore('transfers__' + active, mem);
+    for (const id of deleted[active]) delete mem[id];
+    await saveStore('transfers__' + active, mem);
+    await mergeFromStore('transfers__' + other, far);
+    for (const id of deleted[other]) delete far[id];
+    await saveStore('transfers__' + other, far);
+    for (const a of ACCOUNTS) { try { await saveStore('dupesundo__' + a, { at: Date.now(), ids: [] }); } catch {} }
+  }
+  report.activeName = ACCOUNT_NAMES[active];
+  report.names = ACCOUNT_NAMES;
+  yield report;
+}
+
 /* ============================ خادم HTTP ============================ */
 
 function readBody(req) {
@@ -1091,7 +1420,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
       ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'], ['POST', '/api/sync/day'],
       ['POST', '/api/record/move'],
-      ['GET', '/api/transfers/dupes'], ['POST', '/api/transfers/dupes'],
+      ['GET', '/api/transfers/dupes'], ['POST', '/api/transfers/reconcile'],
     ];
     // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
     const ANNOTATE_ROUTES = [
@@ -1228,6 +1557,7 @@ const server = http.createServer(async (req, res) => {
       const id = url.searchParams.get('id') || '';
       if (!orders[id]) { sendJSON(res, 404, { error: 'الطلب غير موجود' }); return; }
       delete orders[id];
+      await bury('orders__' + config.active, [id]); // ولا يعود من ذاكرة نسخةٍ أخرى
       await saveOrders({ merge: false }); // بلا دمج حتى لا يعود المحذوف من المخزَّن
       sendJSON(res, 200, { ok: true, total: Object.keys(orders).length });
       return;
@@ -1587,28 +1917,9 @@ const server = http.createServer(async (req, res) => {
        حوالةُ المحفظة معرّفها فريدٌ في Binance، فلا تكون في حسابين إلا أن تكون
        تسرّبت من أحدهما إلى الآخر. نعرضها هنا، ونؤرشفها في الحساب المفتوح وحده
        بأمرٍ منفصل — أرشفةً لا حذفًا، فتخرج من الجدول والحساب وتبقى قابلة للرجوع. */
-    if (p === '/api/transfers/dupes' && (req.method === 'GET' || req.method === 'POST')) {
+    if (p === '/api/transfers/dupes' && req.method === 'GET') {
       await refreshActive();
       const other = ACCOUNTS.find((a) => a !== config.active) || 'p2p';
-      const undoKey = 'dupesundo__' + config.active;
-
-      /* التراجع: لا نملك الجزم أيُّ الحسابين يستحق الحوالة، فقد تقع الأرشفة على
-         الحساب الخطأ. وإرجاعُ مئاتٍ صفًّا صفًّا عقوبة، فنحفظ معرّفات الدفعة
-         ونُرجعها كلها بضغطة. */
-      if (req.method === 'POST' && url.searchParams.get('undo') === '1') {
-        const last = (await loadStore(undoKey, null)) || {};
-        const ids = Array.isArray(last.ids) ? last.ids : [];
-        let back = 0;
-        for (const id of ids) {
-          const t = transfers[id];
-          if (t && t.archived) { delete t.archived; back++; }
-        }
-        if (back) await saveTransfers();
-        await saveStore(undoKey, { at: Date.now(), ids: [] });
-        sendJSON(res, 200, { ok: true, restored: back, accountName: ACCOUNT_NAMES[config.active] });
-        return;
-      }
-
       let far = {};
       try {
         far = await loadStore('transfers__' + other, null);
@@ -1616,30 +1927,45 @@ const server = http.createServer(async (req, res) => {
         if (far == null && other === 'p2p') far = await loadStore('transfers', null);
         far = far || {};
       } catch (e) { sendJSON(res, 500, { error: 'تعذّر قراءة الحساب الآخر: ' + e.message }); return; }
-      const dupes = Object.values(transfers).filter((t) => t && far[t.id] && !t.archived);
-      if (req.method === 'GET') {
-        const by = {};
-        for (const t of dupes) by[t.kind] = (by[t.kind] || 0) + 1;
-        const last = (await loadStore(undoKey, null)) || {};
-        const undoable = (Array.isArray(last.ids) ? last.ids : [])
-          .filter((id) => transfers[id] && transfers[id].archived).length;
-        sendJSON(res, 200, {
-          account: config.active, accountName: ACCOUNT_NAMES[config.active],
-          otherName: ACCOUNT_NAMES[other], count: dupes.length, byKind: by,
-          undo: undoable ? { count: undoable, at: last.at || 0 } : null,
-          sample: dupes.sort((a, b) => b.time - a.time).slice(0, 10)
-            .map((t) => ({ id: t.id, kind: t.kind, coin: t.coin, amount: t.amount, time: t.time })),
-        });
-        return;
+      // ما أثبتت المنصةُ أنه للحسابين معًا (Pay بين حسابيك) ليس تسرّبًا، فلا يُعدّ
+      let sharedOk = [];
+      try { const s = await loadStore('sharedtx', null); if (Array.isArray(s)) sharedOk = s; } catch {}
+      const okSet = new Set(sharedOk);
+      const dupes = Object.values(transfers).filter((t) => t && far[t.id] && !okSet.has(t.id));
+      const by = {};
+      let span = null;
+      for (const t of dupes) {
+        by[t.kind] = (by[t.kind] || 0) + 1;
+        span = span ? [Math.min(span[0], t.time), Math.max(span[1], t.time)] : [t.time, t.time];
       }
-      const ids = [];
-      for (const t of dupes) { t.archived = true; ids.push(t.id); }
-      if (ids.length) {
-        await saveTransfers();
-        try { await saveStore(undoKey, { at: Date.now(), ids }); }
-        catch (e) { console.error('حفظ دفعة التراجع: ' + e.message); }
+      const hasKey = (a) => !!(config.accounts[a] && config.accounts[a].apiKey && config.accounts[a].apiSecret);
+      sendJSON(res, 200, {
+        account: config.active, accountName: ACCOUNT_NAMES[config.active],
+        otherName: ACCOUNT_NAMES[other], names: ACCOUNT_NAMES, count: dupes.length, byKind: by,
+        sharedKnown: Object.values(transfers).filter((t) => t && far[t.id] && okSet.has(t.id)).length,
+        from: span ? span[0] : null, to: span ? span[1] : null,
+        keys: { p2p: hasKey('p2p'), p3p: hasKey('p3p') },
+      });
+      return;
+    }
+
+    /* ---------- إعادة كل حوالة إلى حسابها الصحيح (بث التقدم NDJSON) ---------- */
+    if (p === '/api/transfers/reconcile' && req.method === 'POST') {
+      if (syncRunning) { sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ — انتظر انتهاءها' }); return; }
+      syncRunning = true;   // يمنع المزامنة وتبديلَ الحساب حتى ننتهي
+      res.writeHead(200, {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Accel-Buffering': 'no',
+      });
+      try {
+        for await (const ev of reconcileGenerator()) res.write(JSON.stringify(ev) + '\n');
+      } catch (e) {
+        res.write(JSON.stringify({ error: e.isUser ? e.message : 'خطأ غير متوقع: ' + e.message }) + '\n');
+      } finally {
+        syncRunning = false;
+        res.end();
       }
-      sendJSON(res, 200, { ok: true, archived: ids.length, accountName: ACCOUNT_NAMES[config.active] });
       return;
     }
 
@@ -1661,6 +1987,7 @@ const server = http.createServer(async (req, res) => {
         if (dst[id]) { sendJSON(res, 409, { error: 'العملية موجودة في الحساب الآخر أصلًا' }); return; }
         dst[id] = rec;
         await saveStore(base + other, dst);
+        await unbury(base + other, [id]); // قد تكون نُقلت من هناك يومًا فقُبرت فيه
       } catch (e) {
         sendJSON(res, 500, { error: 'تعذّر النقل: ' + e.message });
         return;
@@ -1668,6 +1995,7 @@ const server = http.createServer(async (req, res) => {
       // الدمج أولًا كي يشمل الحذفُ ما كتبه السستم الآخر، ثم الحفظ بلا دمج
       await mergeFromStore(base + config.active, mem);
       delete mem[id];
+      await bury(base + config.active, [id]); // ولا تعود من ذاكرة نسخةٍ أخرى
       if (isTx) await saveTransfers({ merge: false }); else await saveOrders({ merge: false });
       sendJSON(res, 200, { ok: true, movedTo: other, name: ACCOUNT_NAMES[other] });
       return;
