@@ -1091,6 +1091,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/settings'], ['GET', '/api/auth/log'],
       ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'], ['POST', '/api/sync/day'],
       ['POST', '/api/record/move'],
+      ['GET', '/api/transfers/dupes'], ['POST', '/api/transfers/dupes'],
     ];
     // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
     const ANNOTATE_ROUTES = [
@@ -1579,6 +1580,66 @@ const server = http.createServer(async (req, res) => {
         transfers = await loadAccountData('transfers');
       }
       sendJSON(res, 200, { ok: true, active: config.active, name: ACCOUNT_NAMES[config.active] });
+      return;
+    }
+
+    /* ---------- حوالات مسجّلة في الحسابين معًا (للمسؤول) ----------
+       حوالةُ المحفظة معرّفها فريدٌ في Binance، فلا تكون في حسابين إلا أن تكون
+       تسرّبت من أحدهما إلى الآخر. نعرضها هنا، ونؤرشفها في الحساب المفتوح وحده
+       بأمرٍ منفصل — أرشفةً لا حذفًا، فتخرج من الجدول والحساب وتبقى قابلة للرجوع. */
+    if (p === '/api/transfers/dupes' && (req.method === 'GET' || req.method === 'POST')) {
+      await refreshActive();
+      const other = ACCOUNTS.find((a) => a !== config.active) || 'p2p';
+      const undoKey = 'dupesundo__' + config.active;
+
+      /* التراجع: لا نملك الجزم أيُّ الحسابين يستحق الحوالة، فقد تقع الأرشفة على
+         الحساب الخطأ. وإرجاعُ مئاتٍ صفًّا صفًّا عقوبة، فنحفظ معرّفات الدفعة
+         ونُرجعها كلها بضغطة. */
+      if (req.method === 'POST' && url.searchParams.get('undo') === '1') {
+        const last = (await loadStore(undoKey, null)) || {};
+        const ids = Array.isArray(last.ids) ? last.ids : [];
+        let back = 0;
+        for (const id of ids) {
+          const t = transfers[id];
+          if (t && t.archived) { delete t.archived; back++; }
+        }
+        if (back) await saveTransfers();
+        await saveStore(undoKey, { at: Date.now(), ids: [] });
+        sendJSON(res, 200, { ok: true, restored: back, accountName: ACCOUNT_NAMES[config.active] });
+        return;
+      }
+
+      let far = {};
+      try {
+        far = await loadStore('transfers__' + other, null);
+        // قبل نظام الحسابين كان مخزن p2p بلا لاحقة؛ لا نكتب شيئًا هنا، نقرأ فقط
+        if (far == null && other === 'p2p') far = await loadStore('transfers', null);
+        far = far || {};
+      } catch (e) { sendJSON(res, 500, { error: 'تعذّر قراءة الحساب الآخر: ' + e.message }); return; }
+      const dupes = Object.values(transfers).filter((t) => t && far[t.id] && !t.archived);
+      if (req.method === 'GET') {
+        const by = {};
+        for (const t of dupes) by[t.kind] = (by[t.kind] || 0) + 1;
+        const last = (await loadStore(undoKey, null)) || {};
+        const undoable = (Array.isArray(last.ids) ? last.ids : [])
+          .filter((id) => transfers[id] && transfers[id].archived).length;
+        sendJSON(res, 200, {
+          account: config.active, accountName: ACCOUNT_NAMES[config.active],
+          otherName: ACCOUNT_NAMES[other], count: dupes.length, byKind: by,
+          undo: undoable ? { count: undoable, at: last.at || 0 } : null,
+          sample: dupes.sort((a, b) => b.time - a.time).slice(0, 10)
+            .map((t) => ({ id: t.id, kind: t.kind, coin: t.coin, amount: t.amount, time: t.time })),
+        });
+        return;
+      }
+      const ids = [];
+      for (const t of dupes) { t.archived = true; ids.push(t.id); }
+      if (ids.length) {
+        await saveTransfers();
+        try { await saveStore(undoKey, { at: Date.now(), ids }); }
+        catch (e) { console.error('حفظ دفعة التراجع: ' + e.message); }
+      }
+      sendJSON(res, 200, { ok: true, archived: ids.length, accountName: ACCOUNT_NAMES[config.active] });
       return;
     }
 

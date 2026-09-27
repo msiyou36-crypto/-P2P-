@@ -782,6 +782,58 @@ function diagLine(cls, text) {
   return d;
 }
 
+/* حوالات مسجّلة في الحسابين: تُحسب مرّتين في «الباقي»، فنعرضها ثم نؤرشفها في
+   الحساب المفتوح وحده — أرشفةً لا حذفًا، فالرجوع ممكن إن أخطأنا الحساب. */
+const TX_DUP_AR = { deposit: 'إيداع', withdraw: 'سحب', 'pay-in': 'استلام Pay', 'pay-out': 'إرسال Pay', 'convert-in': 'تحويل (→USDT)', 'convert-out': 'تحويل (USDT→)' };
+async function findDupes() {
+  const box = $('#diagResult');
+  const btn = $('#btnFindDupes');
+  btn.disabled = true;
+  box.textContent = '';
+  box.append(diagLine('hint', 'جارٍ المقارنة مع الحساب الآخر…'));
+  let d;
+  try { d = await api('/api/transfers/dupes'); }
+  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); btn.disabled = false; return; }
+  btn.disabled = false;
+  box.textContent = '';
+  if (!d.count) {
+    box.append(diagLine('diag-ok', `لا توجد حوالة مسجّلة في «${d.accountName}» و«${d.otherName}» معًا ✓`));
+  } else {
+    box.append(diagLine('diag-bad',
+      `${fmt0(d.count)} حوالة مسجّلة في «${d.accountName}» وفي «${d.otherName}» معًا — كلٌّ منها محسوبة مرّتين في «الباقي من USDT».`));
+    for (const [k, n] of Object.entries(d.byKind || {})) {
+      box.append(diagLine('hint', `${TX_DUP_AR[k] || k}: ${fmt0(n)}`));
+    }
+    box.append(dupeBtn('btn danger', `🧹 أرشفها في «${d.accountName}» وحده (${fmt0(d.count)})`,
+      `ستُؤرشف ${fmt0(d.count)} حوالة في «${d.accountName}» فتخرج من الجدول ومن حساب «الباقي»، وتبقى في «${d.otherName}» كما هي. افتح الحساب الذي لا تريد أن تبقى فيه قبل أن تُتِم — وإن أخطأت فزرُّ التراجع يُرجعها كلها. هل أنت متأكد؟`,
+      '', (j) => `أُرشفت ${fmt0(j.archived)} حوالة في ${j.accountName} ✓`));
+  }
+  /* التراجع عن الدفعة الأخيرة: لا سبيل للبرنامج أن يعرف أيُّ الحسابين يستحقها،
+     فالخطأ وارد، وإرجاعُ مئاتٍ صفًّا صفًّا ليس علاجًا. */
+  if (d.undo && d.undo.count) {
+    box.append(dupeBtn('btn', `↩ تراجع عن آخر أرشفة في «${d.accountName}» (${fmt0(d.undo.count)})`,
+      `ستعود ${fmt0(d.undo.count)} حوالة من الأرشيف إلى الجدول وإلى حساب «الباقي» في «${d.accountName}». هل أنت متأكد؟`,
+      '?undo=1', (j) => `رجعت ${fmt0(j.restored)} حوالة إلى ${j.accountName} ✓`));
+  }
+}
+
+function dupeBtn(cls, label, ask, query, done) {
+  const b = document.createElement('button');
+  b.className = cls;
+  b.style.cssText = 'display:block; margin-top:10px;';
+  b.textContent = label;
+  b.addEventListener('click', () => openConfirm(ask, async () => {
+    try {
+      const j = await api('/api/transfers/dupes' + query, { method: 'POST' });
+      closeAllModals();
+      await loadTransfers();
+      renderAll();
+      toast(done(j));
+    } catch (e) { toast(e.message, 'err'); }
+  }));
+  return b;
+}
+
 /* جلب يومٍ واحد: علاجٌ موضعي لمن ينقصه يوم، بلا كلفة المزامنة الكاملة */
 async function fetchOneDay() {
   const day = $('#diagDay').value;
@@ -2767,6 +2819,7 @@ function wireEvents() {
   $('#btnDiag').addEventListener('click', () => { closeMenu(); openDiag(); });
   $('#btnRunDiag').addEventListener('click', runDiag);
   $('#btnFetchDay').addEventListener('click', fetchOneDay);
+  $('#btnFindDupes').addEventListener('click', findDupes);
   $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
   $('#btnSaveMaint').addEventListener('click', saveMaintenance);
   $('#maintLogout').addEventListener('click', doLogout);
