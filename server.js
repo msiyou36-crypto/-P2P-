@@ -247,6 +247,32 @@ function recordLogin(role, req) {
 }
 
 /** بيانات حساب معيّن (مع ترحيل مفاتيح p2p القديمة غير المُلاحقة) */
+/* ===== الحساب النشط بين عدّة نسخ على قاعدةٍ واحدة =====
+ * config يُقرأ مرّةً عند الإقلاع ويُكتب كاملًا، فنسخةٌ ثانية تكتب "active" القديم
+ * فوق ما بدّلته الأولى — فينقلب الحساب تحت المستخدم وتُحفظ عملياتُ حسابٍ في
+ * آخر. فنقرأه طازجًا قبل كل عملٍ يمسّ بيانات حساب، ونُعيد تحميل البيانات إن
+ * تبدّل، كي لا تبقى في الذاكرة صفوفُ حسابٍ ونحن نكتب تحت اسم آخر.
+ */
+async function refreshActive() {
+  try {
+    const stored = await loadStore('config', null);
+    const a = stored && stored.active;
+    if (ACCOUNTS.includes(a) && a !== config.active) {
+      config.active = a;
+      orders = await loadAccountData('orders');
+      transfers = await loadAccountData('transfers');
+      return true;
+    }
+  } catch (e) { console.error('refreshActive: ' + e.message); }
+  return false;
+}
+
+/** حفظُ الإعدادات دون أن نمحو حسابًا بدّلته نسخةٌ أخرى */
+async function saveConfig() {
+  await refreshActive();
+  await saveStore('config', config);
+}
+
 async function loadAccountData(kind) {
   let d = await loadStore(kind + '__' + config.active, null);
   if (d == null && config.active === 'p2p') {
@@ -714,6 +740,7 @@ async function coolIfHeavy(cost) {
  * المزامنة في منتصفها (بفضل كتلة finally) فلا يضيع ما نزل.
  */
 async function* syncGenerator() {
+  await refreshActive();   // قد تكون نسخةٌ أخرى بدّلت الحساب
   if (!AC().apiKey || !AC().apiSecret) {
     throw userError('لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
   }
@@ -911,7 +938,7 @@ async function* syncGenerator() {
     // نحفظ ما جُلب حتى الآن مهما حدث (نجاح كامل أو فشل جزئي)
     await saveOrders();
     await saveTransfers();
-    await saveStore('config', config);
+    await saveConfig();
   }
   yield result;
 }
@@ -1006,7 +1033,7 @@ const server = http.createServer(async (req, res) => {
       config.auth.admin = makeCredential(ap);
       config.auth.user = up ? makeCredential(up) : {};
       config.auth.user2 = up2 ? makeCredential(up2) : {};
-      await saveStore('config', config);
+      await saveConfig();
       const token = newToken('admin');
       recordLogin('admin', req);
       sendJSON(res, 200, { ok: true, token, role: 'admin' });
@@ -1049,7 +1076,7 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.user2Password === 'string') {
         config.auth.user2 = body.user2Password ? makeCredential(body.user2Password) : {};
       }
-      await saveStore('config', config);
+      await saveConfig();
       sendJSON(res, 200, { ok: true });
       return;
     }
@@ -1180,6 +1207,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/orders/bulk' && req.method === 'POST') {
+      await refreshActive();   // الاستيراد يقع في الحساب المفتوح فعلًا لا المحفوظ في الذاكرة
       const body = await readBody(req);
       const list = Array.isArray(body.orders) ? body.orders : [];
       let added = 0, updated = 0, skipped = 0;
@@ -1384,6 +1412,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const body = await readBody(req);
+      await refreshActive();
       const m = String(body.day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
       if (!m) { sendJSON(res, 400, { error: 'حدّد اليوم بصيغة YYYY-MM-DD' }); return; }
       // حدود اليوم المحاسبي: من الثانية ليلًا إلى الثانية ليلًا — نفس ما يعرضه الجدول
@@ -1520,6 +1549,7 @@ const server = http.createServer(async (req, res) => {
 
     /* ---------- الحسابات (P2P / P3P) ---------- */
     if (p === '/api/account' && req.method === 'GET') {
+      await refreshActive();   // تعرض الواجهة الحسابَ الحقيقي لا نسخةً قديمة
       sendJSON(res, 200, {
         active: config.active,
         accounts: ACCOUNTS.map((id) => ({
@@ -1605,7 +1635,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.rangeHours != null) AC().rangeHours = Math.min(Math.max(Number(body.rangeHours) || 720, 1), 26280);
       if (body.syncQuota != null) config.syncQuota = Math.min(Math.max(Math.floor(Number(body.syncQuota)) || 0, 0), 500);
-      await saveStore('config', config);
+      await saveConfig();
       sendJSON(res, 200, { ok: true });
       return;
     }
