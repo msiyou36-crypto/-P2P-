@@ -662,6 +662,10 @@ async function signedGet(base, endpoint, params, offset, method = 'GET') {
   } catch {
     throw userError('انقطع الاتصال أثناء الجلب — أعد المحاولة');
   }
+  /* المنصة تُخبرنا في كل ردٍّ بما استهلكناه من حدّ الدقيقة. قراءتُه تُغني عن
+     التخمين: نتمهّل قبل بلوغ الحدّ بدل أن نصطدم به فنُحظر (انظر coolIfHeavy). */
+  const uw = Number(r.headers.get('x-sapi-used-uid-weight-1m'));
+  if (Number.isFinite(uw) && uw > 0) lastUidWeight = uw;
   const text = await r.text();
   let j = null;
   try { j = JSON.parse(text); } catch {}
@@ -684,7 +688,25 @@ const dayLabel = (ms) => new Date(ms).toISOString().slice(0, 10);
 /* حدُّ نقطة Binance Pay: ١٠٠ سجلًّا للطلب بلا ترقيم صفحات، فالشطرُ الزمني هو
    الوسيلة الوحيدة لتجاوزه. والسقفُ يمنع نافذةً مزدحمة من إطالة المزامنة بلا نهاية. */
 const PAY_PAGE = 100;
-const PAY_MAX_CALLS = 120;
+/* حدُّ الوزن على حساب المستخدم ١٨٠٠٠٠ في الدقيقة لكل نقطة، ووزنُ نقطة Pay ٣٠٠٠
+ * — أي ستون طلبًا في الدقيقة سقفًا مطلقًا. كان الفاصل ثانيةً واحدة (ستون
+ * بالضبط) وفي «اجلب يومًا» نصفَ ثانية (ضعف الحدّ)، فكان كل تجاوزٍ يُنتج 429 ثم
+ * حظرًا 418 على العنوان — ولهذا كانت كل نسخةٍ جديدة تُحظر فور أول مزامنة، مهما
+ * تبدّلت المنطقة. نمشي الآن على ثلث الحدّ، ونتمهّل إن اقتربت ترويسةُ الوزن منه.
+ */
+const PAY_WEIGHT = 3000;
+const UID_LIMIT = 180000;
+const PAY_GAP_MS = 3000;     // عشرون طلبًا في الدقيقة — ثلث الحدّ
+const PAY_MAX_CALLS = 24;    // ٧٢٠٠٠ وزنًا سقفًا، دون نصف الحدّ
+let lastUidWeight = 0;       // آخر ما أبلغت به المنصة من استهلاك الدقيقة
+
+/** تمهّلٌ قبل بلوغ حدّ الدقيقة: ندع الدقيقة تدور بدل أن نصطدم بالحدّ */
+async function coolIfHeavy(cost) {
+  if (lastUidWeight && lastUidWeight + cost > UID_LIMIT * 0.6) {
+    await sleep(25000);
+    lastUidWeight = 0;
+  }
+}
 
 /**
  * مزامنة شاملة: طلبات P2P (بيع/شراء) + سجل الإيداع + سجل السحب، على نوافذ زمنية،
@@ -768,6 +790,7 @@ async function* syncGenerator() {
       for (;;) {
         const arr = await signedGet(base, '/sapi/v1/capital/withdraw/history',
           { startTime: s, endTime: e, offset: off, limit: 1000 }, offset);
+        await coolIfHeavy(18000); // وزن سجل السحب ١٨٠٠٠: عشرة طلبات في الدقيقة
         const rows = Array.isArray(arr) ? arr : [];
         for (const raw of rows) {
           const r = upsertTransfer(normalizeTransfer(raw, 'withdraw'));
@@ -812,7 +835,8 @@ async function* syncGenerator() {
             parts.push([mid + 1, e], [s, mid]);
             yield prog(`تكثيف Binance Pay (${dayLabel(s)} ← ${dayLabel(e)}): السجل ممتلئ، نشطر الفترة`);
           }
-          await sleep(1000);
+          await sleep(PAY_GAP_MS);
+          await coolIfHeavy(PAY_WEIGHT);
         }
         if (parts.length) {
           yield { msg: '⚠ عمليات Binance Pay كثيرة جدًّا في هذه الفترة — جُلب أقصى ما يسمح به الحد، وقد تبقى عمليات لم تصل.', pct: 97 };
@@ -1416,7 +1440,7 @@ const server = http.createServer(async (req, res) => {
                يمتلئ فيسقط باقيه صامتًا، فنشطر اليوم زمنيًّا حتى تعود ناقصة. */
             const parts = [[s, e]];
             let calls = 0;
-            while (parts.length && calls < 24) {
+            while (parts.length && calls < PAY_MAX_CALLS) {
               const [ps, pe] = parts.pop();
               calls++;
               const rows = rowsOf(await signedGet(base, path,
@@ -1426,7 +1450,8 @@ const server = http.createServer(async (req, res) => {
                 const mid = Math.floor((ps + pe) / 2);
                 parts.push([mid + 1, pe], [ps, mid]);
               }
-              await sleep(500);
+              await sleep(PAY_GAP_MS);
+              await coolIfHeavy(PAY_WEIGHT);
             }
             if (parts.length) skipped.push('pay: عمليات كثيرة جدًّا في هذا اليوم — قد تبقى عمليات لم تصل');
           } else {
