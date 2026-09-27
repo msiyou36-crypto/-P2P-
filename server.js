@@ -88,11 +88,25 @@ let config = Object.assign({}, DEFAULT_CONFIG);
  * (نفس علّة وضع الصيانة سابقًا). قبل كل حفظ نقرأ المخزَّن وندمج ما ليس في
  * ذاكرتنا، ثم نكتب. الحذف والمسح يمرّان بلا دمج وإلا عاد المحذوف من المخزَّن.
  */
+/* حقولُ التعليق (ملاحظة/إشاري/سعر/مبلغ/تسمية/مرساة/أرشفة/تثبيت) يكتبها المستخدم
+ * صفًّا صفًّا وتُحفظ فورًا، فالمخزَّن أحدثُ منها في ذاكرة أي نسخةٍ لم تكتبها
+ * بنفسها. كان الدمج يحمي وجودَ الصفّ لا محتواه: نسخةٌ حفظت ذاكرتها القديمة
+ * فأعادت أسعارًا مُعدَّلة إلى ما قبل تعديلها. فعند الدمج تُؤخذ هذه الحقول من
+ * المخزَّن — إلا ما عدّلته هذه النسخةُ ولمّا تحفظه بعد (dirty)، فهو الأحدث. */
+const ANNOT = ['note', 'reference', 'unitPriceOverride', 'totalPriceOverride', 'networkLabelOverride',
+  'zeroPoint', 'archived', 'usdtValue', 'balanceAt', 'balAfter'];
+const dirty = new Set();   // «key:id» عُدّل هنا ولم يُحفظ بعد
+const touch = (key, id) => dirty.add(key + ':' + id);
+function clearDirty(key) { for (const k of dirty) if (k.startsWith(key + ':')) dirty.delete(k); }
 async function mergeFromStore(key, mem) {
   try {
     const stored = await loadStore(key, null);
     if (stored && typeof stored === 'object') {
-      for (const [id, v] of Object.entries(stored)) if (!(id in mem)) mem[id] = v;
+      for (const [id, v] of Object.entries(stored)) {
+        if (!(id in mem)) { mem[id] = v; continue; }
+        if (dirty.has(key + ':' + id) || !v || typeof v !== 'object' || !mem[id]) continue;
+        for (const f of ANNOT) { if (v[f] != null) mem[id][f] = v[f]; else delete mem[id][f]; }
+      }
     }
     await applyGrave(key, mem);
   } catch (e) { console.error('merge ' + key + ': ' + e.message); }
@@ -140,10 +154,12 @@ async function applyGrave(key, mem) {
 async function saveOrders(opts) {
   if (!opts || opts.merge !== false) await mergeFromStore('orders__' + config.active, orders);
   await saveStore('orders__' + config.active, orders);
+  clearDirty('orders__' + config.active);
 }
 async function saveTransfers(opts) {
   if (!opts || opts.merge !== false) await mergeFromStore('transfers__' + config.active, transfers);
   await saveStore('transfers__' + config.active, transfers);
+  clearDirty('transfers__' + config.active);
 }
 
 /* ===== وضع الصيانة: مفتاح تخزين مستقل لكل سستم (نطاق) =====
@@ -1032,7 +1048,7 @@ async function* reconcileGenerator() {
     const last = (await loadStore('dupesundo__' + a, null)) || {};
     for (const id of (Array.isArray(last.ids) ? last.ids : [])) {
       const t = stores[a][id];
-      if (t && t.archived) { delete t.archived; restored[a]++; touched[a] = true; }
+      if (t && t.archived) { delete t.archived; restored[a]++; touched[a] = true; touch('transfers__' + a, id); }
     }
   }
 
@@ -1184,7 +1200,7 @@ async function* reconcileGenerator() {
 
       /* ---- الحكم: حوالةً حوالة ---- */
       yield { msg: 'جارٍ إعادة كل حوالة إلى حسابها…', pct: 98 };
-      const CARRY = ['note', 'reference', 'networkLabelOverride', 'usdtValue'];
+      const CARRY = ['note', 'reference', 'unitPriceOverride', 'totalPriceOverride', 'networkLabelOverride', 'usdtValue'];
       const sharedIds = [];
       const settle = (id, owner) => {
         const loser = owner === 'p2p' ? 'p3p' : 'p2p';
@@ -1196,6 +1212,7 @@ async function* reconcileGenerator() {
           if (v != null && v !== '' && (mine[f] == null || mine[f] === '')) mine[f] = v;
         }
         upsertTransfer(found[owner].get(id), stores[owner]); // ما أرجعته المنصة الآن أصدق مما تسرّب
+        touch('transfers__' + owner, id); // ما لحق بها هنا أحدثُ من المخزَّن
         delete stores[loser][id];
         deleted[loser].add(id);
         touched[loser] = true;
@@ -1239,15 +1256,16 @@ async function* reconcileGenerator() {
       }
     }
 
-    /* «الباقي» المثبَّت حُسب والحوالةُ محسوبةٌ مرّتين، فيُمحى في كل حسابٍ تغيّر
-       ليُعاد حسابه صحيحًا (كما تفعل «إعادة حساب الباقي») */
+    /* «الباقي» المثبَّت على الطلبات حُسب والحوالةُ محسوبةٌ مرّتين، فيُمحى في كل
+       حسابٍ تغيّر ليُعاد حسابه صحيحًا (كما تفعل «إعادة حساب الباقي»). الحوالات
+       تُمحى في الحفظ أدناه بعد الدمج، وإلّا أعادها الدمجُ من المخزَّن. */
     for (const a of ACCOUNTS) {
       if (!touched[a]) continue;
-      for (const t of Object.values(stores[a])) if (t.balAfter != null) delete t.balAfter;
       if (a === active) {
         await mergeFromStore('orders__' + active, ordMem);
         for (const o of Object.values(ordMem)) if (o.balAfter != null) delete o.balAfter;
         await saveStore('orders__' + active, ordMem);
+        clearDirty('orders__' + active);
       } else {
         const oo = (await loadStore('orders__' + other, null)) || {};
         let n = 0;
@@ -1257,14 +1275,15 @@ async function* reconcileGenerator() {
     }
   } finally {
     /* الحفظ مهما حدث (فما أُرجع من الأرشيف لا يضيع): دمجٌ يضمّ ما كتبته نسخةٌ
-       أخرى أثناء الجلب، ثم إعادةُ الحذف حتى لا يُعيد الدمجُ ما حذفناه، ثم الكتابة
-       بالمفتاح الصريح */
-    await mergeFromStore('transfers__' + active, mem);
-    for (const id of deleted[active]) delete mem[id];
-    await saveStore('transfers__' + active, mem);
-    await mergeFromStore('transfers__' + other, far);
-    for (const id of deleted[other]) delete far[id];
-    await saveStore('transfers__' + other, far);
+       أخرى أثناء الجلب، ثم إعادةُ الحذف حتى لا يُعيد الدمجُ ما حذفناه، ثم محوُ
+       المثبَّت في الحساب المتغيّر، ثم الكتابة بالمفتاح الصريح */
+    for (const [a, key, store] of [[active, 'transfers__' + active, mem], [other, 'transfers__' + other, far]]) {
+      await mergeFromStore(key, store);
+      for (const id of deleted[a]) delete store[id];
+      if (touched[a]) for (const t of Object.values(store)) if (t && t.balAfter != null) delete t.balAfter;
+      await saveStore(key, store);
+      clearDirty(key);
+    }
     for (const a of ACCOUNTS) { try { await saveStore('dupesundo__' + a, { at: Date.now(), ids: [] }); } catch {} }
   }
   report.activeName = ACCOUNT_NAMES[active];
@@ -1547,6 +1566,7 @@ const server = http.createServer(async (req, res) => {
         const r = upsertOrder(o);
         if (r === 'added') added++;
         else if (r === 'updated') updated++;
+        if (r !== 'same') touch('orders__' + config.active, o.orderNumber); // ما جاء في الملف أحدثُ من المخزَّن
       }
       await saveOrders();
       sendJSON(res, 200, { added, updated, skipped, total: Object.keys(orders).length });
@@ -1556,6 +1576,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/orders' && req.method === 'DELETE') {
       const id = url.searchParams.get('id') || '';
       if (!orders[id]) { sendJSON(res, 404, { error: 'الطلب غير موجود' }); return; }
+      await mergeFromStore('orders__' + config.active, orders); // الدمج أولًا، فالحفظ هنا بلا دمج
       delete orders[id];
       await bury('orders__' + config.active, [id]); // ولا يعود من ذاكرة نسخةٍ أخرى
       await saveOrders({ merge: false }); // بلا دمج حتى لا يعود المحذوف من المخزَّن
@@ -1612,6 +1633,7 @@ const server = http.createServer(async (req, res) => {
         if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete o.balanceAt; delete o.zeroPoint; }
         else { o.balanceAt = Math.round(v * 1e8) / 1e8; delete o.zeroPoint; }
       }
+      touch('orders__' + config.active, id); // ما عُدّل هنا أحدثُ من المخزَّن حتى يُحفظ
       await saveOrders();
       sendJSON(res, 200, { ok: true, order: o });
       return;
@@ -1678,6 +1700,7 @@ const server = http.createServer(async (req, res) => {
         if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete t.balanceAt; delete t.zeroPoint; }
         else { t.balanceAt = Math.round(v * 1e8) / 1e8; delete t.zeroPoint; }
       }
+      touch('transfers__' + config.active, id); // ما عُدّل هنا أحدثُ من المخزَّن حتى يُحفظ
       await saveTransfers();
       sendJSON(res, 200, { ok: true, transfer: t });
       return;
@@ -1854,6 +1877,7 @@ const server = http.createServer(async (req, res) => {
         const x = Number(v);
         if (!Number.isFinite(x)) return;
         rec.balAfter = Math.round(x * 1e8) / 1e8;
+        touch((store === orders ? 'orders__' : 'transfers__') + config.active, id);
         n++;
       };
       for (const [id, v] of Object.entries(body.orders || {})) put(orders, id, v);
