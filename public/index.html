@@ -469,6 +469,12 @@
           <input type="number" id="foreignDays" value="90" min="1" max="400" dir="ltr">
         </label>
         <button class="btn" id="btnForeignScan">🧹 اعرض ما لا يخصّ هذا الحساب</button>
+        <button class="btn" id="btnForeignUndo" title="يُعيد كل ما حُذف في آخر عملية حذف من هذه الأداة">↩ استرجاع آخر حذف</button>
+      </div>
+      <p class="hint">حُذفت عمليةٌ بالخطأ؟ ملفُ التصدير (Excel أو CSV) الذي أخذته من النظام نسخةٌ احتياطية: ارفعه هنا فتُعرض صفوفه غير الموجودة الآن، وتختار ما يُعاد. الإيداع والسحب تُعيدهما المزامنةُ من المنصة مباشرة.</p>
+      <div class="diag-bar">
+        <input type="file" id="restoreFile" accept=".xlsx,.csv" dir="ltr">
+        <button class="btn" id="btnRestoreFile">📂 اعرض ما ينقص من هذا الملف</button>
       </div>
       <div id="diagResult" class="diag-result"></div>
     </div>

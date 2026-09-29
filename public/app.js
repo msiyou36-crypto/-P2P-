@@ -1098,6 +1098,87 @@ async function foreignScan() {
   box.append(act);
 }
 
+/* استرجاعُ آخر حذفٍ من أداة «ما لا يخصّ هذا الحساب»: سلّة المحذوف تُعاد كلها */
+async function undoForeignDelete() {
+  openConfirm('سيُعاد كل ما حُذف في آخر عملية حذف من أداة «ما لا يخصّ هذا الحساب»، ويُعاد حساب «الباقي». هل أنت متأكد؟', async () => {
+    try {
+      const j = await api('/api/diag/foreign-ops/undo', { method: 'POST' });
+      closeAllModals();
+      await Promise.all([loadOrders(), loadTransfers()]);
+      renderAll();
+      refreshBalance();
+      toast(j.restored ? `أُعيدت ${fmt0(j.restored)} عملية إلى ${j.accountName} ✓` : 'سلّة المحذوف فارغة — لا شيء يُعاد', j.restored ? 'ok' : 'err');
+    } catch (e) { toast(e.message, 'err'); }
+  });
+}
+
+/* الاستعادة من ملف تصدير: يُرفع الملف، فتُعرض صفوفه غير الموجودة الآن بخانات
+   اختيار، ويُعاد المختار منها. */
+async function restoreFromFile() {
+  const inp = $('#restoreFile');
+  const box = $('#diagResult');
+  const btn = $('#btnRestoreFile');
+  const file = inp.files && inp.files[0];
+  if (!file) { box.textContent = ''; box.append(diagLine('diag-bad', 'اختر ملف التصدير أولًا (Excel أو CSV)')); return; }
+  btn.disabled = true;
+  box.textContent = '';
+  box.append(diagLine('hint', `جارٍ قراءة «${file.name}» ومقارنته بالمحفوظ…`));
+  let d;
+  try {
+    const headers = {};
+    if (state.auth.token) headers['X-Auth-Token'] = state.auth.token;
+    const res = await fetch('/api/restore/preview', { method: 'POST', headers, body: file });
+    const j = await res.json().catch(() => ({}));
+    if (res.status === 401) { handleUnauthorized(); throw new Error('انتهت الجلسة — سجّل الدخول'); }
+    if (!res.ok) throw new Error(j.error || 'تعذّرت قراءة الملف');
+    d = j;
+  } catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); btn.disabled = false; return; }
+  btn.disabled = false;
+  box.textContent = '';
+  box.append(diagLine('hint', `في الملف ${fmt0(d.rows)} صفًّا: ${fmt0(d.inFile.orders)} طلبًا و${fmt0(d.inFile.transfers)} حوالة Pay/تحويل و${fmt0(d.inFile.depwd)} إيداعًا/سحبًا (هذه تُعيدها المزامنة من المنصة إن نقصت).`));
+  const n = d.missingOrders.length + d.missingTransfers.length;
+  if (!n) { box.append(diagLine('diag-ok', `كل طلبات الملف وحوالاته موجودة في «${d.accountName}» ✓ — لا شيء ينقص.`)); return; }
+  box.append(diagLine('diag-bad', `${fmt0(n)} عملية في الملف غير موجودة الآن في «${d.accountName}» — اختر ما يُعاد.`));
+  const list = document.createElement('div');
+  list.className = 'foreign-list';
+  const boxes = [];
+  const addItem = (kind, it, label) => {
+    const lab = document.createElement('label');
+    lab.className = 'foreign-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = true; cb.dataset.kind = kind; cb._rec = it;
+    const span = document.createElement('span'); span.textContent = label;
+    lab.append(cb, span);
+    list.append(lab);
+    boxes.push(cb);
+  };
+  const KIND_AR = { 'pay-in': 'استلام Pay', 'pay-out': 'إرسال Pay', 'convert-in': 'تحويل →USDT', 'convert-out': 'تحويل USDT→', 'spot-buy': 'شراء فوري', 'spot-sell': 'بيع فوري' };
+  for (const o of d.missingOrders) addItem('order', o, `${fmtDT(o.createTime)} — ${o.tradeType === 'SELL' ? 'بيع' : 'شراء'} ${fmt2(o.amount)} USDT @ ${fmt2p(o.unitPrice)} ${o.fiat || ''} = ${fmt2p(o.totalPrice)} — ${o.counterPart || '—'}${o.reference ? ' — إشاري: ' + o.reference : ''}`);
+  for (const t of d.missingTransfers) addItem('transfer', t, `${fmtDT(t.time)} — ${KIND_AR[t.kind] || t.kind} ${fmt2(t.amount)} USDT${t.counterPart ? ' — ' + t.counterPart : ''}${t.reference ? ' — إشاري: ' + t.reference : ''}`);
+  box.append(list);
+  const act = document.createElement('button');
+  act.className = 'btn accent';
+  act.style.cssText = 'display:block; margin-top:10px;';
+  const refresh = () => { const c = boxes.filter((b) => b.checked).length; act.textContent = `↩ أعد المحدّدة (${fmt0(c)}) إلى «${d.accountName}»`; act.disabled = !c; };
+  boxes.forEach((b) => b.addEventListener('change', refresh));
+  refresh();
+  act.addEventListener('click', () => openConfirm(`ستُعاد ${fmt0(boxes.filter((b) => b.checked).length)} عملية إلى «${d.accountName}» من الملف، ويُعاد حساب «الباقي». هل أنت متأكد؟`, async () => {
+    try {
+      const sel = boxes.filter((b) => b.checked);
+      const j = await api('/api/restore/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orders: sel.filter((b) => b.dataset.kind === 'order').map((b) => b._rec), transfers: sel.filter((b) => b.dataset.kind === 'transfer').map((b) => b._rec) }),
+      });
+      closeAllModals();
+      await Promise.all([loadOrders(), loadTransfers()]);
+      renderAll();
+      refreshBalance();
+      toast(`أُعيدت ${fmt0(j.restored)} عملية إلى ${j.accountName} ✓`);
+    } catch (e) { toast(e.message, 'err'); }
+  }));
+  box.append(act);
+}
+
 /* أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ المعرّف UID يظهر في تطبيق Binance،
    فالمقارنة تحسم إن كان المفتاح المحفوظ مفتاحَ الحساب المقصود أو الحساب الآخر. */
 async function whoAmI() {
@@ -3120,6 +3201,8 @@ function wireEvents() {
   $('#btnForeignClean').addEventListener('click', cleanForeign);
   $('#btnWhoAmI').addEventListener('click', whoAmI);
   $('#btnForeignScan').addEventListener('click', foreignScan);
+  $('#btnForeignUndo').addEventListener('click', undoForeignDelete);
+  $('#btnRestoreFile').addEventListener('click', restoreFromFile);
   $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
   $('#btnSaveMaint').addEventListener('click', saveMaintenance);
   $('#maintLogout').addEventListener('click', doLogout);

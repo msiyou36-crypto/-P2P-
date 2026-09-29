@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
+const xlsxread = require('./xlsxread.js'); // قراءة ملفات التصدير (Excel/CSV) للاستعادة
 
 // عند النشر تُضبط PORT من البيئة ونستمع على كل الواجهات؛ محليًا نبقى على 127.0.0.1 فقط.
 const PORT = Number(process.env.PORT) || 3131;
@@ -1540,6 +1541,77 @@ async function* foreignScanGenerator(days) {
 
 /* ============================ خادم HTTP ============================ */
 
+/** جسمُ الطلب خامًا (ملفٌ مرفوع) بنفس حدّ الحجم */
+function readRaw(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > MAX_BODY) { reject(new Error('body too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+/* ===== الاستعادة من ملف تصدير =====
+   ملفُ Excel/CSV الذي صدّره النظام هو نسخةٌ احتياطية طبيعية: كل صفٍّ فيه غير
+   موجود في المخزن يُعاد بناؤه منه. الطلباتُ بمعرّفها، وPay والتحويل بمعرّفهما
+   المشتقّ من TxID؛ أمّا الإيداع والسحب فمعرّفهما الداخلي ليس في الملف والمنصة
+   تُرجعهما كاملَين، فتُعيدهما المزامنةُ (والمقبرةُ تُخلي سبيل ما أرجعته). */
+const AR_TX_KIND = {
+  'إيداع': 'deposit', 'سحب': 'withdraw', 'استلام Pay': 'pay-in', 'إرسال Pay': 'pay-out',
+  'تحويل (→USDT)': 'convert-in', 'تحويل (USDT→)': 'convert-out', 'شراء فوري': 'spot-buy', 'بيع فوري': 'spot-sell',
+};
+const AR_STATUS = { 'مكتمل': 'COMPLETED', 'ملغى': 'CANCELLED', 'ملغي': 'CANCELLED', 'فشل': 'FAILED', 'مرفوض': 'FAILED' };
+function parseExportTime(s) {
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return 0;
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime(); // بتوقيت الجهاز كما صُدِّر
+}
+/** صفوفُ الملف → سجلّات مرشَّحة {orders, transfers, depwd} */
+function rowsToRecords(rows) {
+  if (!rows.length) return { orders: [], transfers: [], depwd: 0 };
+  const hdr = rows[0];
+  const col = (names) => Object.keys(hdr).find((c) => names.some((n) => String(hdr[c] || '').trim().toLowerCase().startsWith(n.toLowerCase())));
+  const C = {
+    date: col(['التاريخ']), type: col(['النوع']), amount: col(['الكمية']), price: col(['السعر']), total: col(['المبلغ']),
+    cur: col(['العملة']), party: col(['الطرف']), status: col(['الحالة']), fee: col(['العمولة']),
+    ref: col(['الإشاري']), note: col(['الملاحظة']), id: col(['المعرّف', 'المعرف']),
+  };
+  if (!C.type || !C.id || !C.date) throw new Error('الملف ليس ملف تصدير من هذا النظام (الأعمدة غير معروفة)');
+  const orders = [], transfers = [];
+  let depwd = 0;
+  for (const r of rows.slice(1)) {
+    const type = String(r[C.type] || '').trim();
+    const id = String(r[C.id] || '').trim();
+    const time = parseExportTime(r[C.date]);
+    if (!id || !time) continue;
+    const status = AR_STATUS[String(r[C.status] || '').trim()] || 'COMPLETED';
+    const g = (c) => (c ? String(r[c] || '').trim() : '');
+    if (type === 'بيع' || type === 'شراء') {
+      orders.push({
+        orderNumber: id, tradeType: type === 'بيع' ? 'SELL' : 'BUY', amount: num(g(C.amount)), unitPrice: num(g(C.price)),
+        totalPrice: num(g(C.total)), fiat: g(C.cur), counterPart: g(C.party), orderStatus: status, commission: num(g(C.fee)),
+        createTime: time, note: g(C.note), reference: g(C.ref),
+      });
+      continue;
+    }
+    const kind = AR_TX_KIND[type];
+    if (!kind) continue;
+    if (kind === 'deposit' || kind === 'withdraw') { depwd++; continue; }
+    const tid = kind.startsWith('pay') ? 'PAY' + id : kind.startsWith('convert') ? 'CVT' + id : id;
+    transfers.push({
+      id: tid, kind, coin: 'USDT', network: kind.startsWith('convert') ? g(C.cur) : '', amount: num(g(C.amount)), fee: num(g(C.fee)),
+      status, statusCode: null, address: '', txId: id, counterPart: kind.startsWith('pay') ? g(C.party) : '',
+      time, completeTime: time, note: g(C.note), reference: g(C.ref), source: 'import',
+    });
+  }
+  return { orders, transfers, depwd };
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -1690,7 +1762,8 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/record/move'],
       ['GET', '/api/transfers/dupes'], ['POST', '/api/transfers/reconcile'],
       ['GET', '/api/system/foreign'], ['DELETE', '/api/system/foreign'], ['GET', '/api/diag/whoami'],
-      ['POST', '/api/diag/foreign-ops'], ['POST', '/api/diag/foreign-ops/delete'],
+      ['POST', '/api/diag/foreign-ops'], ['POST', '/api/diag/foreign-ops/delete'], ['POST', '/api/diag/foreign-ops/undo'],
+      ['POST', '/api/restore/preview'], ['POST', '/api/restore/apply'],
     ];
     // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
     const ANNOTATE_ROUTES = [
@@ -2226,9 +2299,12 @@ const server = http.createServer(async (req, res) => {
       await mergeFromStore('transfers__' + config.active, transfers);
       let n = 0;
       const gone = { orders: [], transfers: [] };
-      for (const id of oIds) if (orders[id]) { delete orders[id]; gone.orders.push(id); n++; }
-      for (const id of tIds) if (transfers[id]) { delete transfers[id]; gone.transfers.push(id); n++; }
+      // سلّةُ المحذوف: نسخةٌ من كل صفٍّ قبل حذفه، فيُسترجع آخرُ حذفٍ بضغطة إن أخطأ الاختيار
+      const trash = { orders: {}, transfers: {}, at: Date.now() };
+      for (const id of oIds) if (orders[id]) { trash.orders[id] = orders[id]; delete orders[id]; gone.orders.push(id); n++; }
+      for (const id of tIds) if (transfers[id]) { trash.transfers[id] = transfers[id]; delete transfers[id]; gone.transfers.push(id); n++; }
       if (n) {
+        try { await saveStore('trash__' + config.active, trash); } catch (e) { console.error('trash: ' + e.message); }
         await bury('orders__' + config.active, gone.orders);
         await bury('transfers__' + config.active, gone.transfers);
         // الدفتر تغيّر، فالمثبَّت لم يعد صحيحًا — يُعاد حسابه من جديد
@@ -2238,6 +2314,81 @@ const server = http.createServer(async (req, res) => {
         await saveTransfers({ merge: false });
       }
       sendJSON(res, 200, { ok: true, deleted: n, accountName: ACCOUNT_NAMES[config.active] });
+      return;
+    }
+
+    /* ---------- الاستعادة من ملف تصدير (للمسؤول) ----------
+       preview: يُرفع ملف Excel/CSV صدّره النظام، فتُعرض صفوفه غير الموجودة في
+       المخزن. apply: تُعاد الصفوف المختارة، وتُخرَج من المقبرة إن كانت قد حُذفت. */
+    if (p === '/api/restore/preview' && req.method === 'POST') {
+      const buf = await readRaw(req);
+      if (!buf.length) { sendJSON(res, 400, { error: 'لم يصل ملف' }); return; }
+      let rows;
+      try {
+        rows = (buf[0] === 0x50 && buf[1] === 0x4b) ? xlsxread.parseXlsx(buf) : xlsxread.parseCsv(buf.toString('utf8'));
+      } catch (e) { sendJSON(res, 400, { error: 'تعذّرت قراءة الملف: ' + e.message }); return; }
+      let rec;
+      try { rec = rowsToRecords(rows); } catch (e) { sendJSON(res, 400, { error: e.message }); return; }
+      await mergeFromStore('orders__' + config.active, orders);
+      await mergeFromStore('transfers__' + config.active, transfers);
+      const missingOrders = rec.orders.filter((o) => !orders[o.orderNumber]);
+      const missingTransfers = rec.transfers.filter((t) => !transfers[t.id]);
+      sendJSON(res, 200, {
+        accountName: ACCOUNT_NAMES[config.active], rows: rows.length - 1,
+        inFile: { orders: rec.orders.length, transfers: rec.transfers.length, depwd: rec.depwd },
+        missingOrders, missingTransfers,
+      });
+      return;
+    }
+    if (p === '/api/restore/apply' && req.method === 'POST') {
+      const body = await readBody(req);
+      const os = Array.isArray(body.orders) ? body.orders : [];
+      const ts = Array.isArray(body.transfers) ? body.transfers : [];
+      await mergeFromStore('orders__' + config.active, orders);
+      await mergeFromStore('transfers__' + config.active, transfers);
+      let n = 0;
+      const oIds = [], tIds = [];
+      for (const raw of os) {
+        const o = normalizeOrder(raw, 'import');
+        if (!o.orderNumber || orders[o.orderNumber]) continue;
+        orders[o.orderNumber] = o; oIds.push(o.orderNumber); touch('orders__' + config.active, o.orderNumber); n++;
+      }
+      for (const raw of ts) {
+        const id = String(raw.id || '');
+        if (!id || transfers[id] || !TX_GROUP[raw.kind]) continue;
+        transfers[id] = Object.assign({}, raw, { id, source: 'import', status: String(raw.status || 'COMPLETED') });
+        tIds.push(id); touch('transfers__' + config.active, id); n++;
+      }
+      if (n) {
+        await unbury('orders__' + config.active, oIds);      // ما استُعيد لا يبقى مقبورًا
+        await unbury('transfers__' + config.active, tIds);
+        for (const o of Object.values(orders)) if (o.balAfter != null) delete o.balAfter;
+        for (const t of Object.values(transfers)) if (t.balAfter != null) delete t.balAfter;
+        await saveOrders({ merge: false });
+        await saveTransfers({ merge: false });
+      }
+      sendJSON(res, 200, { ok: true, restored: n, accountName: ACCOUNT_NAMES[config.active] });
+      return;
+    }
+    /* ---------- استرجاع آخر حذف (سلّة المحذوف من أداة «ما لا يخصّ هذا الحساب») ---------- */
+    if (p === '/api/diag/foreign-ops/undo' && req.method === 'POST') {
+      const trash = (await loadStore('trash__' + config.active, null)) || { orders: {}, transfers: {} };
+      await mergeFromStore('orders__' + config.active, orders);
+      await mergeFromStore('transfers__' + config.active, transfers);
+      let n = 0;
+      const oIds = [], tIds = [];
+      for (const [id, o] of Object.entries(trash.orders || {})) if (!orders[id]) { orders[id] = o; oIds.push(id); touch('orders__' + config.active, id); n++; }
+      for (const [id, t] of Object.entries(trash.transfers || {})) if (!transfers[id]) { transfers[id] = t; tIds.push(id); touch('transfers__' + config.active, id); n++; }
+      if (n) {
+        await unbury('orders__' + config.active, oIds);
+        await unbury('transfers__' + config.active, tIds);
+        for (const o of Object.values(orders)) if (o.balAfter != null) delete o.balAfter;
+        for (const t of Object.values(transfers)) if (t.balAfter != null) delete t.balAfter;
+        await saveOrders({ merge: false });
+        await saveTransfers({ merge: false });
+      }
+      await saveStore('trash__' + config.active, { orders: {}, transfers: {}, at: Date.now() });
+      sendJSON(res, 200, { ok: true, restored: n, accountName: ACCOUNT_NAMES[config.active] });
       return;
     }
 
