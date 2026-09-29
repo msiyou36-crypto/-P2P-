@@ -944,17 +944,20 @@ async function* syncGenerator() {
       for (const [s, e] of p2pWindows) {
         yield prog(`جلب ${label} P2P: ${dayLabel(s)} ← ${dayLabel(e)}`);
         let page = 1;
+        const seenHere = new Set(); // صفحةٌ لا تأتي بطلبٍ جديد: الترقيم متجاهَل، فلا نكرّر الطلب ستين مرة
         for (;;) {
           const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
             { tradeType, startTimestamp: s, endTimestamp: e, page, rows: 100 }, offset);
           const rows = Array.isArray(j.data) ? j.data : [];
+          const before = seenHere.size;
           for (const raw of rows) {
+            seenHere.add(String(raw.orderNumber));
             const r = upsertOrder(normalizeOrder(raw, 'binance'));
             if (r === 'added') added++;
             else if (r === 'updated') updated++;
           }
           fetched += rows.length;
-          if (rows.length < 100 || page >= 60) break;
+          if (rows.length < 100 || page >= 60 || seenHere.size === before) break;
           page++;
           await sleep(250);
         }
@@ -1429,7 +1432,11 @@ async function* foreignScanGenerator(days) {
      بحذر لأن المنصة تُغفل طلبًا أحيانًا */
   let lastO = 0, lastT = 0;
 
-  /* ---- طلبات P2P ---- */
+  /* ---- طلبات P2P ----
+     أثرُ كل طلبٍ (النافذة، الصفحة، عدد الصفوف، المجموع المعلن، الجديد منها) يُرفق
+     بالتقرير: مئةٌ بالضبط في تسعين يومًا لحسابٍ يبيع كل يوم معناها أن الترقيم لا
+     يعمل أو أن النافذة تُتجاهل — ولا يُحكم على شيءٍ قبل رؤية الأثر. */
+  const calls = [];
   for (const tradeType of ['SELL', 'BUY']) {
     for (const [s, e] of p2pWindows) {
       yield prog(`طلبات ${tradeType === 'SELL' ? 'البيع' : 'الشراء'}: ${dayLabel(s)} ← ${dayLabel(e)}`);
@@ -1438,8 +1445,18 @@ async function* foreignScanGenerator(days) {
         const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
           { tradeType, startTimestamp: s, endTimestamp: e, page, rows: 100 }, offset);
         const rows = Array.isArray(j.data) ? j.data : [];
-        for (const raw of rows) { seenO.add(String(raw.orderNumber)); lastO = Math.max(lastO, Number(raw.createTime) || 0); }
-        if (rows.length < 100 || page >= 60) break;
+        const before = seenO.size;
+        let oldest = 0, newest = 0;
+        for (const raw of rows) {
+          seenO.add(String(raw.orderNumber));
+          const t = Number(raw.createTime) || 0;
+          lastO = Math.max(lastO, t);
+          oldest = oldest ? Math.min(oldest, t) : t; newest = Math.max(newest, t);
+        }
+        const fresh = seenO.size - before;
+        calls.push({ type: tradeType, from: s, to: e, page, rows: rows.length, total: j.total != null ? Number(j.total) : null, fresh, oldest, newest });
+        // صفحةٌ لا تأتي بجديد: الترقيم متجاهَل — لا نُعيد الطلب نفسه ستين مرة
+        if (rows.length < 100 || page >= 60 || !fresh) break;
         page++;
         await sleep(250);
       }
@@ -1516,6 +1533,7 @@ async function* foreignScanGenerator(days) {
     done: true, days, accountName: ACCOUNT_NAMES[config.active],
     fetched: { orders: seenO.size, transfers: seenT.size }, warnings,
     lastReturned: { order: lastO, transfer: lastT },
+    calls,
     orders: foreignOrders, transfers: foreignTransfers,
   };
 }

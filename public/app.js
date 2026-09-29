@@ -1010,6 +1010,23 @@ async function foreignScan() {
   const n = rep.orders.length + rep.transfers.length;
   const lastO = (rep.lastReturned && rep.lastReturned.order) || 0;
   box.append(diagLine('hint', `المنصة أرجعت لمفتاح «${rep.accountName}» في آخر ${fmt0(rep.days)} يومًا: ${fmt0(rep.fetched.orders)} طلبًا و${fmt0(rep.fetched.transfers)} حوالة.`));
+  /* أثرُ الجلب: يكشف إن كانت المنصة تُرجع مئةً فقط ثم تتجاهل الصفحات أو النوافذ —
+     وعندها القائمة أدناه ليست حكمًا، فلا يُحذف منها شيء قبل الفهم */
+  const calls = rep.calls || [];
+  const truncated = calls.some((c) => c.rows >= 100 && !calls.some((d) => d !== c && d.type === c.type && d.from === c.from && d.page === c.page + 1 && d.fresh > 0));
+  if (truncated) box.append(diagLine('diag-bad', '⚠ المنصة أرجعت صفحةً ممتلئة (١٠٠ طلب) ولم تأتِ الصفحةُ التالية بجديد — الجلب مبتور، وقائمة الطلبات أدناه ليست موثوقة. لا تحذف منها شيئًا وأرسل «تفاصيل الجلب» لي.'));
+  if (calls.length) {
+    const det = document.createElement('details');
+    det.className = 'danger-zone';
+    const sum = document.createElement('summary'); sum.textContent = 'تفاصيل الجلب (لكل نافذة وصفحة)';
+    det.append(sum);
+    for (const c of calls) {
+      det.append(diagLine('hint', `${c.type === 'SELL' ? 'بيع' : 'شراء'} ${fmtDT(c.from).slice(0, 10)} ← ${fmtDT(c.to).slice(0, 10)} · صفحة ${c.page}: ${fmt0(c.rows)} صف` +
+        (c.total != null ? ` (المجموع المعلن ${fmt0(c.total)})` : '') + ` · جديد ${fmt0(c.fresh)}` +
+        (c.rows ? ` · من ${fmtDT(c.oldest)} إلى ${fmtDT(c.newest)}` : '')));
+    }
+    box.append(det);
+  }
   if (!n) { box.append(diagLine('diag-ok', 'كل ما هو محفوظ هنا في هذه الفترة أرجعته المنصة لهذا الحساب ✓ — لا شيء غريب.')); return; }
   /* آخر طلبٍ أرجعته المنصة هو الحدّ الفاصل: ما بعده محفوظٌ هنا وليس من هذا الحساب
      يقينًا فيُحدَّد تلقائيًا؛ وما قبله قد يكون طلبًا أصليًا أغفلته المنصة فيُترك
