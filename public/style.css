@@ -479,6 +479,10 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .diag-bar label { flex: 0 0 130px; }
 .diag-bar input { width: 100%; }
 .diag-result { max-height: 52vh; overflow: auto; margin-top: 12px; }
+/* قائمة العمليات المرشَّحة للحذف (ما لم تُرجعه المنصة لهذا الحساب) */
+.foreign-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.foreign-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); font-size: 13px; line-height: 1.6; cursor: pointer; }
+.foreign-item input { margin-top: 4px; flex: none; accent-color: var(--critical); }
 .diag-ok, .diag-bad {
   padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.7;
   margin-bottom: 12px; border: 1px solid;

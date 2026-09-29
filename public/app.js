@@ -953,6 +953,114 @@ async function reconcileDupes(btn) {
   refreshBalance();
 }
 
+/* عملياتٌ محفوظة هنا لا يُرجعها مفتاح هذا الحساب: يُسأل Binance عن الفترة، وكل
+   عمليةٍ محفوظة لم تُرجعها تُعرض بخانة اختيار — المسؤول يقرّر ما يُحذف، فالمنصة
+   تُغفل أحيانًا بعض طلبات P2P ولا نحذف على الظنّ. */
+async function foreignScan() {
+  const days = Math.min(Math.max(Number($('#foreignDays').value) || 45, 1), 90);
+  const box = $('#diagResult');
+  const btn = $('#btnForeignScan');
+  btn.disabled = true;
+  box.textContent = '';
+  const row = document.createElement('div');
+  row.className = 'syncbar-row';
+  const spin = document.createElement('span'); spin.className = 'spinner';
+  const msg = document.createElement('span'); msg.textContent = 'جارٍ البدء…';
+  row.append(spin, msg);
+  const track = document.createElement('div'); track.className = 'syncbar-track';
+  const fill = document.createElement('div'); fill.className = 'syncbar-fill'; fill.style.width = '2%';
+  track.append(fill);
+  box.append(row, track);
+  let rep = null, sawError = null;
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (state.auth.token) headers['X-Auth-Token'] = state.auth.token;
+    const res = await fetch('/api/diag/foreign-ops', { method: 'POST', headers, body: JSON.stringify({ days }) });
+    if (res.status === 401) { handleUnauthorized(); throw new Error('انتهت الجلسة — سجّل الدخول'); }
+    if (!res.ok || !res.body) { const j = await res.json().catch(() => ({})); throw new Error(j.error || 'تعذّر البدء'); }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.error) sawError = ev.error;
+        else if (ev.done) rep = ev;
+        else { if (ev.msg) msg.textContent = ev.msg; if (ev.pct != null) fill.style.width = ev.pct + '%'; }
+      }
+    }
+    if (sawError) throw new Error(sawError);
+  } catch (e) {
+    box.insertBefore(diagLine('diag-bad', '⚠ ' + e.message), row);
+    if (/HTTP 4(18|29)|حظر/.test(e.message || '')) setSyncCooldown(30 * 60000);
+  } finally {
+    row.remove(); track.remove();
+    btn.disabled = false;
+  }
+  if (!rep) return;
+  for (const w of rep.warnings || []) box.append(diagLine('diag-bad', '⚠ ' + w));
+  const n = rep.orders.length + rep.transfers.length;
+  box.append(diagLine('hint', `المنصة أرجعت لمفتاح «${rep.accountName}» في آخر ${fmt0(rep.days)} يومًا: ${fmt0(rep.fetched.orders)} طلبًا و${fmt0(rep.fetched.transfers)} حوالة.`));
+  if (!n) { box.append(diagLine('diag-ok', 'كل ما هو محفوظ هنا في هذه الفترة أرجعته المنصة لهذا الحساب ✓ — لا شيء غريب.')); return; }
+  box.append(diagLine('diag-bad', `${fmt0(n)} عملية محفوظة هنا لم تُرجعها المنصة لهذا الحساب — راجعها، وأزل التحديد عمّا تعرف أنه لهذا الحساب فعلًا (المنصة تُغفل أحيانًا طلب P2P)، ثم احذف الباقي.`));
+  const list = document.createElement('div');
+  list.className = 'foreign-list';
+  const boxes = [];
+  const addItem = (kind, it, label) => {
+    const lab = document.createElement('label');
+    lab.className = 'foreign-item';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = true; cb.dataset.kind = kind; cb.dataset.id = it.id;
+    const span = document.createElement('span'); span.textContent = label;
+    lab.append(cb, span);
+    list.append(lab);
+    boxes.push(cb);
+  };
+  const KIND_AR = { deposit: 'إيداع', withdraw: 'سحب', 'pay-in': 'استلام Pay', 'pay-out': 'إرسال Pay', 'convert-in': 'تحويل →USDT', 'convert-out': 'تحويل USDT→' };
+  const SRC_AR = { binance: 'من المزامنة', import: 'من ملف مستورد', manual: 'إضافة يدوية' };
+  for (const o of rep.orders) {
+    addItem('order', o, `${fmtDT(o.time)} — ${o.tradeType === 'SELL' ? 'بيع' : 'شراء'} ${fmt2(o.amount)} USDT @ ${fmt2p(o.unitPrice)} ${o.fiat || ''} = ${fmt2p(o.totalPrice)} — ${o.counterPart || '—'}${o.reference ? ' — إشاري: ' + o.reference : ''} (${SRC_AR[o.source] || o.source || ''})`);
+  }
+  for (const t of rep.transfers) {
+    addItem('transfer', t, `${fmtDT(t.time)} — ${KIND_AR[t.kind] || t.kind} ${fmt2(t.amount)} ${t.coin || 'USDT'} ${t.network ? '(' + t.network + ')' : ''}${t.counterPart ? ' — ' + t.counterPart : ''}${t.reference ? ' — إشاري: ' + t.reference : ''} (${SRC_AR[t.source] || t.source || ''})`);
+  }
+  box.append(list);
+  const act = document.createElement('button');
+  act.className = 'btn danger';
+  act.style.cssText = 'display:block; margin-top:10px;';
+  const refresh = () => { const c = boxes.filter((b) => b.checked).length; act.textContent = `🗑 احذف المحدّدة (${fmt0(c)}) من «${rep.accountName}»`; act.disabled = !c; };
+  boxes.forEach((b) => b.addEventListener('change', refresh));
+  refresh();
+  act.addEventListener('click', () => {
+    const sel = boxes.filter((b) => b.checked);
+    openConfirm(`ستُحذف ${fmt0(sel.length)} عملية من «${rep.accountName}» نهائيًا (لا تعود بالمزامنة، لأن المنصة لا تُرجعها لهذا الحساب أصلًا)، ويُعاد حساب «الباقي من USDT». هل أنت متأكد؟`, async () => {
+      try {
+        const j = await api('/api/diag/foreign-ops/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orders: sel.filter((b) => b.dataset.kind === 'order').map((b) => b.dataset.id),
+            transfers: sel.filter((b) => b.dataset.kind === 'transfer').map((b) => b.dataset.id),
+          }),
+        });
+        closeAllModals();
+        await Promise.all([loadOrders(), loadTransfers()]);
+        renderAll();
+        refreshBalance();
+        toast(`حُذفت ${fmt0(j.deleted)} عملية من ${j.accountName} ✓`);
+      } catch (e) { toast(e.message, 'err'); }
+    });
+  });
+  box.append(act);
+}
+
 /* أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ المعرّف UID يظهر في تطبيق Binance،
    فالمقارنة تحسم إن كان المفتاح المحفوظ مفتاحَ الحساب المقصود أو الحساب الآخر. */
 async function whoAmI() {
@@ -2974,6 +3082,7 @@ function wireEvents() {
   $('#btnFindDupes').addEventListener('click', findDupes);
   $('#btnForeignClean').addEventListener('click', cleanForeign);
   $('#btnWhoAmI').addEventListener('click', whoAmI);
+  $('#btnForeignScan').addEventListener('click', foreignScan);
   $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
   $('#btnSaveMaint').addEventListener('click', saveMaintenance);
   $('#maintLogout').addEventListener('click', doLogout);

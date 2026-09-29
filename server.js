@@ -1399,6 +1399,122 @@ async function* reconcileGenerator() {
   yield report;
 }
 
+/* ===== عملياتٌ محفوظة هنا لا يُرجعها مفتاحُ هذا الحساب =====
+   أيام كان السستمان يتبادلان الحسابَ النشط تسرّبت عملياتُ الحساب الآخر إلى هذا
+   المخزن — طلباتُ P2P أيضًا لا الحوالات وحدها. المرجعُ الوحيد هو ما تُرجعه
+   المنصة لمفتاح هذا السستم في الفترة: كل عمليةٍ محفوظة في الفترة ولم تُرجعها
+   المنصة مرشَّحةٌ للحذف. تُعرض على المسؤول بتفاصيلها ويقرّر هو — فالمنصة
+   تُغفل أحيانًا بعض طلبات P2P، ولا نحذف على الظنّ. */
+async function* foreignScanGenerator(days) {
+  if (!AC().apiKey || !AC().apiSecret) throw userError('لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
+  const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
+  yield { msg: 'جارٍ الاتصال بالمنصة…', pct: 1 };
+  await mergeFromStore('orders__' + config.active, orders);
+  await mergeFromStore('transfers__' + config.active, transfers);
+  const offset = await timeOffset(base);
+  const now = Date.now();
+  const minStart = now - days * 86400000;
+  const p2pWindows = makeWindows(now, minStart, 29 * 86400000);
+  const txWindows = makeWindows(now, minStart, 89 * 86400000);
+  const cvtWindows = makeWindows(now, minStart, 29 * 86400000);
+  const total = Math.max(p2pWindows.length * 2 + txWindows.length * 3 + cvtWindows.length, 1);
+  let step = 0;
+  const prog = (msg) => ({ msg, pct: Math.min(2 + Math.round((++step / total) * 94), 97) });
+  const fatal = (e) => /HTTP 4(18|29)|حظر|محجوب|مفتاح API|التوقيع/.test(e && e.message || '');
+  const seenO = new Set(), seenT = new Set();
+  const complete = { deposit: false, withdraw: false, pay: false, convert: false };
+  const warnings = [];
+
+  /* ---- طلبات P2P ---- */
+  for (const tradeType of ['SELL', 'BUY']) {
+    for (const [s, e] of p2pWindows) {
+      yield prog(`طلبات ${tradeType === 'SELL' ? 'البيع' : 'الشراء'}: ${dayLabel(s)} ← ${dayLabel(e)}`);
+      let page = 1;
+      for (;;) {
+        const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
+          { tradeType, startTimestamp: s, endTimestamp: e, page, rows: 100 }, offset);
+        const rows = Array.isArray(j.data) ? j.data : [];
+        for (const raw of rows) seenO.add(String(raw.orderNumber));
+        if (rows.length < 100 || page >= 60) break;
+        page++;
+        await sleep(250);
+      }
+      await sleep(200);
+    }
+  }
+  /* ---- الإيداع والسحب ---- */
+  try {
+    for (const [s, e] of txWindows) {
+      yield prog(`الإيداعات: ${dayLabel(s)} ← ${dayLabel(e)}`);
+      const arr = await signedGet(base, '/sapi/v1/capital/deposit/hisrec', { startTime: s, endTime: e, limit: 1000 }, offset);
+      for (const raw of (Array.isArray(arr) ? arr : [])) seenT.add(normalizeTransfer(raw, 'deposit').id);
+      await sleep(300);
+    }
+    complete.deposit = true;
+    for (const [s, e] of txWindows) {
+      yield prog(`السحوبات: ${dayLabel(s)} ← ${dayLabel(e)}`);
+      const arr = await signedGet(base, '/sapi/v1/capital/withdraw/history', { startTime: s, endTime: e, limit: 1000 }, offset);
+      await coolIfHeavy(18000);
+      for (const raw of (Array.isArray(arr) ? arr : [])) seenT.add(normalizeTransfer(raw, 'withdraw').id);
+      await sleep(400);
+    }
+    complete.withdraw = true;
+  } catch (e) { if (fatal(e)) throw e; warnings.push('تعذّر جلب الإيداع/السحب: ' + e.message); }
+  /* ---- Binance Pay ---- */
+  try {
+    let capped = false;
+    for (const [ws, we] of txWindows) {
+      yield prog(`Binance Pay: ${dayLabel(ws)} ← ${dayLabel(we)}`);
+      const parts = [[ws, we]];
+      let calls = 0;
+      while (parts.length && calls < PAY_MAX_CALLS) {
+        const [s, e] = parts.pop();
+        calls++;
+        const j = await signedGet(base, '/sapi/v1/pay/transactions', { startTime: s, endTime: e, limit: PAY_PAGE }, offset);
+        const rows = Array.isArray(j.data) ? j.data : [];
+        for (const raw of rows) seenT.add(normalizePay(raw).id);
+        if (rows.length >= PAY_PAGE && e - s > 60000) { const mid = Math.floor((s + e) / 2); parts.push([mid + 1, e], [s, mid]); }
+        await sleep(PAY_GAP_MS);
+        await coolIfHeavy(PAY_WEIGHT);
+      }
+      if (parts.length) capped = true;
+    }
+    complete.pay = !capped;
+    if (capped) warnings.push('عمليات Pay أكثر مما يسمح به الحدّ — لم تُفحص كلها');
+  } catch (e) { if (fatal(e)) throw e; warnings.push('تعذّر جلب Binance Pay: ' + e.message); }
+  /* ---- Convert ---- */
+  try {
+    for (const [s, e] of cvtWindows) {
+      yield prog(`التحويل Convert: ${dayLabel(s)} ← ${dayLabel(e)}`);
+      const j = await signedGet(base, '/sapi/v1/convert/tradeFlow', { startTime: s, endTime: e, limit: 1000 }, offset);
+      for (const raw of (Array.isArray(j.list) ? j.list : [])) seenT.add(normalizeConvert(raw).id);
+      await sleep(1000);
+    }
+    complete.convert = true;
+  } catch (e) { if (fatal(e)) throw e; warnings.push('تعذّر جلب التحويل: ' + e.message); }
+
+  /* ---- المقارنة: ما في الفترة ولم تُرجعه المنصة ---- */
+  const inWin = (t) => t >= minStart && t <= now;
+  const foreignOrders = Object.values(orders)
+    .filter((o) => o && inWin(o.createTime) && !seenO.has(String(o.orderNumber)))
+    .sort((a, b) => b.createTime - a.createTime)
+    .map((o) => ({
+      id: o.orderNumber, tradeType: o.tradeType, amount: o.amount, unitPrice: o.unitPriceOverride != null ? o.unitPriceOverride : o.unitPrice,
+      totalPrice: o.totalPriceOverride != null ? o.totalPriceOverride : o.totalPrice, fiat: o.fiat, counterPart: o.counterPart,
+      status: o.orderStatus, time: o.createTime, source: o.source, note: o.note || '', reference: o.reference || '',
+    }));
+  const foreignTransfers = Object.values(transfers)
+    .filter((t) => t && inWin(t.time) && TX_GROUP[t.kind] && TX_GROUP[t.kind] !== 'spot' && complete[TX_GROUP[t.kind]] && !seenT.has(t.id))
+    .sort((a, b) => b.time - a.time)
+    .map((t) => ({ id: t.id, kind: t.kind, amount: t.amount, coin: t.coin, network: t.network, counterPart: t.counterPart || '',
+      status: t.status, time: t.time, source: t.source, note: t.note || '', reference: t.reference || '' }));
+  yield {
+    done: true, days, accountName: ACCOUNT_NAMES[config.active],
+    fetched: { orders: seenO.size, transfers: seenT.size }, warnings,
+    orders: foreignOrders, transfers: foreignTransfers,
+  };
+}
+
 /* ============================ خادم HTTP ============================ */
 
 function readBody(req) {
@@ -1551,6 +1667,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/record/move'],
       ['GET', '/api/transfers/dupes'], ['POST', '/api/transfers/reconcile'],
       ['GET', '/api/system/foreign'], ['DELETE', '/api/system/foreign'], ['GET', '/api/diag/whoami'],
+      ['POST', '/api/diag/foreign-ops'], ['POST', '/api/diag/foreign-ops/delete'],
     ];
     // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
     const ANNOTATE_ROUTES = [
@@ -2057,6 +2174,50 @@ const server = http.createServer(async (req, res) => {
        حوالةُ المحفظة معرّفها فريدٌ في Binance، فلا تكون في حسابين إلا أن تكون
        تسرّبت من أحدهما إلى الآخر. نعرضها هنا، ونؤرشفها في الحساب المفتوح وحده
        بأمرٍ منفصل — أرشفةً لا حذفًا، فتخرج من الجدول والحساب وتبقى قابلة للرجوع. */
+    /* ---------- عملياتٌ محفوظة هنا لا يُرجعها مفتاح هذا الحساب (للمسؤول) ----------
+       الفحص يبثّ تقدّمه ثم قائمة المرشَّحين؛ والحذفُ طلبٌ منفصل بمعرّفات يختارها
+       المسؤول بعينها — يُقبر المحذوف حتى لا تُعيده نسخةٌ قديمة، ويُمحى المثبَّت
+       ليُعاد حساب «الباقي». */
+    if (p === '/api/diag/foreign-ops' && req.method === 'POST') {
+      const body = await readBody(req);
+      const days = Math.min(Math.max(Math.floor(Number(body.days)) || 45, 1), 90);
+      if (syncRunning) { sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ — انتظر انتهاءها' }); return; }
+      syncRunning = true;
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+      try {
+        for await (const ev of foreignScanGenerator(days)) res.write(JSON.stringify(ev) + '\n');
+      } catch (e) {
+        res.write(JSON.stringify({ error: e.isUser ? e.message : 'خطأ غير متوقع: ' + e.message }) + '\n');
+      } finally {
+        syncRunning = false;
+        res.end();
+      }
+      return;
+    }
+    if (p === '/api/diag/foreign-ops/delete' && req.method === 'POST') {
+      const body = await readBody(req);
+      const oIds = (Array.isArray(body.orders) ? body.orders : []).map(String);
+      const tIds = (Array.isArray(body.transfers) ? body.transfers : []).map(String);
+      // الدمج أولًا كي يشمل الحذفُ ما كتبته نسخةٌ أخرى، ثم الحفظ بلا دمج
+      await mergeFromStore('orders__' + config.active, orders);
+      await mergeFromStore('transfers__' + config.active, transfers);
+      let n = 0;
+      const gone = { orders: [], transfers: [] };
+      for (const id of oIds) if (orders[id]) { delete orders[id]; gone.orders.push(id); n++; }
+      for (const id of tIds) if (transfers[id]) { delete transfers[id]; gone.transfers.push(id); n++; }
+      if (n) {
+        await bury('orders__' + config.active, gone.orders);
+        await bury('transfers__' + config.active, gone.transfers);
+        // الدفتر تغيّر، فالمثبَّت لم يعد صحيحًا — يُعاد حسابه من جديد
+        for (const o of Object.values(orders)) if (o.balAfter != null) delete o.balAfter;
+        for (const t of Object.values(transfers)) if (t.balAfter != null) delete t.balAfter;
+        await saveOrders({ merge: false });
+        await saveTransfers({ merge: false });
+      }
+      sendJSON(res, 200, { ok: true, deleted: n, accountName: ACCOUNT_NAMES[config.active] });
+      return;
+    }
+
     /* ---------- أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ (للمسؤول) ----------
        المعرّف UID يظهر في تطبيق Binance (الصفحة الشخصية)، فالمقارنة تحسم إن كان
        المفتاحُ المحفوظ هنا مفتاحَ الحساب المقصود أو مفتاحَ الحساب الآخر. */
