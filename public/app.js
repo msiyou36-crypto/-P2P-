@@ -576,8 +576,8 @@ async function loadAccount() {
    نظرة لا من قراءة العنوان. السمة تُوضع على الجذر فتقرؤها التنسيقات، وتتبعها
    أيقونة التبويب وبيان التطبيق وخلفية الدخول. */
 const ACCOUNT_THEME = {
-  p2p: { accent: '#a78bfa', ink: '#14121a' },   // بنفسجي — أيقوناته باللاحقة «-p2p»
-  p3p: { accent: '#f0b90b', ink: '#1a1a19' },   // الذهبي الأصلي — الأيقونات الأصلية
+  p2p: { accent: '#8e1f3f', ink: '#fbeef2', bar: '#1a1a19' },   // برغندي (عنّابي) — أيقوناته باللاحقة «-p2p»
+  p3p: { accent: '#f0b90b', ink: '#1a1a19', bar: '#1a1a19' },   // الذهبي الأصلي — الأيقونات الأصلية
 };
 function applyAccountTheme(id) {
   const t = ACCOUNT_THEME[id] || ACCOUNT_THEME.p3p;
@@ -596,7 +596,7 @@ function applyAccountTheme(id) {
   };
   $$('link[rel="icon"], link[rel="apple-touch-icon"], link[rel="manifest"]').forEach(swap);
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = t.ink;
+  if (meta) meta.content = t.bar;   // شريط المتصفح داكنٌ دائمًا، لا لونَ النصّ على الزرّ
 }
 /* لكل سستم حسابٌ واحد وقاعدةٌ واحدة: لا زرّ تبديل ولا نقل بين الحسابين — العنوان
    واللون يقولان أيَّ سستمٍ هذا. */

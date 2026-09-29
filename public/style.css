@@ -14,6 +14,7 @@
   --border: rgba(255, 255, 255, 0.10);
   --accent: #f0b90b;
   --accent-ink: #1a1a19;
+  --accent-text: var(--accent);   /* لون السستم كنصٍّ على الخلفية الداكنة (يختلف حين يكون اللون داكنًا) */
   /* ألوان السلاسل — من اللوحة المعتمدة للوضع الداكن */
   --sell: #3987e5;
   --buy: #008300;
@@ -28,8 +29,11 @@
 /* لكل سستم لونه: P2P بنفسجي، وP3P بالذهبي الافتراضي — فيُعرف الحساب من أول
    نظرة لا من قراءة العنوان. السمة يضعها app.js على الجذر حين يعرف الحساب. */
 :root[data-account="p2p"] {
-  --accent: #a78bfa;
-  --accent-ink: #14121a;
+  /* برغندي (عنّابي) كلون آيفون 18: داكنٌ فلا يصلح نصًّا على الأسود بنفسه — الأزرار
+     والشعار بالبرغندي ونصُّه فاتح، والأرقامُ والنصوص الملوّنة بدرجةٍ أفتح منه تُقرأ */
+  --accent: #8e1f3f;
+  --accent-ink: #fbeef2;
+  --accent-text: #c94b6e;
 }
 
 * { box-sizing: border-box; }
@@ -99,7 +103,7 @@ h3 { font-size: 15px; }
 .spinner {
   width: 14px; height: 14px; flex: none;
   border: 2px solid var(--surface-3);
-  border-top-color: var(--accent);
+  border-top-color: var(--accent-text);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
@@ -258,8 +262,8 @@ th {
 }
 th.sortable { cursor: pointer; }
 th.sortable:hover { color: var(--ink-2); }
-th.sorted-asc::after { content: " ▲"; font-size: 9px; color: var(--accent); }
-th.sorted-desc::after { content: " ▼"; font-size: 9px; color: var(--accent); }
+th.sorted-asc::after { content: " ▲"; font-size: 9px; color: var(--accent-text); }
+th.sorted-desc::after { content: " ▼"; font-size: 9px; color: var(--accent-text); }
 td { border-bottom: 1px solid rgba(255, 255, 255, 0.05); color: var(--ink-2); font-size: 13px; }
 td.num, th.num { font-variant-numeric: tabular-nums; }
 td.strong { color: var(--ink); font-weight: 600; }
@@ -275,8 +279,8 @@ th.col-idx { width: 46px; text-align: center; }
 #ledgerTable td.col-idx { text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; font-weight: 600; }
 
 /* عمود «USDT الباقي»: لون مميّز ليبرز عن بقية الأرقام */
-#ledgerTable th.col-bal { color: var(--accent); }
-#ledgerTable td.col-bal { color: var(--accent); font-weight: 700; }
+#ledgerTable th.col-bal { color: var(--accent-text); }
+#ledgerTable td.col-bal { color: var(--accent-text); font-weight: 700; }
 /* نقطة التثبيت التي علّمها المستخدم: يُحسب العمود تصاعديًا منها */
 #ledgerTable td.col-bal.is-zeropoint { position: relative; }
 #ledgerTable td.col-bal.is-zeropoint::before {
@@ -424,7 +428,7 @@ td.col-note.is-note .note-input { min-width: 200px; }
 }
 .note-input::placeholder { color: var(--muted); opacity: 0.55; }
 .note-input:hover { border-color: var(--border); }
-.note-input:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); }
+.note-input:focus-visible { outline: none; border-color: var(--accent-text); background: var(--surface-3); }
 .note-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
 .note-input.readonly { background: transparent; color: var(--ink-2); cursor: default; }
 .note-input.readonly::placeholder { opacity: 0.3; }
@@ -467,7 +471,7 @@ td.col-note.is-note .note-input { min-width: 200px; }
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   flex-wrap: wrap; margin: 0 0 10px; padding: 10px 14px; border-radius: 10px;
   font-size: 13.5px; line-height: 1.7;
-  color: var(--accent);
+  color: var(--accent-text);
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
@@ -512,9 +516,9 @@ td.editable { padding: 4px 6px; }
   transition: border-color 0.15s, background 0.15s;
 }
 .num-input:hover { border-color: var(--border); background: var(--surface-2); }
-.num-input:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); }
+.num-input:focus-visible { outline: none; border-color: var(--accent-text); background: var(--surface-3); }
 .num-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
-.num-input.is-edited, td.editable.is-edited { color: var(--accent); }
+.num-input.is-edited, td.editable.is-edited { color: var(--accent-text); }
 .num-input.is-edited { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 .label-input {
   width: 100%;
@@ -529,9 +533,9 @@ td.editable { padding: 4px 6px; }
   transition: border-color 0.15s, background 0.15s;
 }
 .label-input:hover { border-color: var(--border); background: var(--surface-2); }
-.label-input:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); }
+.label-input:focus-visible { outline: none; border-color: var(--accent-text); background: var(--surface-3); }
 .label-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
-.label-input.is-edited { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.label-input.is-edited { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 
 /* ============ شاشة تسجيل الدخول ============ */
 .login-screen {
@@ -576,7 +580,7 @@ td.editable { padding: 4px 6px; }
 
 /* ============ القائمة المنسدلة + شارة الدور ============ */
 .role-badge { color: var(--muted); font-size: 12.5px; font-weight: 600; align-self: center; }
-.role-badge.admin { color: var(--accent); }
+.role-badge.admin { color: var(--accent-text); }
 .role-badge.annot { color: #7bd88f; }
 .menu-wrap { position: relative; }
 .menu-dropdown {
@@ -641,7 +645,7 @@ td.editable { padding: 4px 6px; }
   resize: vertical;
   transition: border-color 0.15s;
 }
-.detail-annot:focus-visible { outline: none; border-color: var(--accent); }
+.detail-annot:focus-visible { outline: none; border-color: var(--accent-text); }
 .detail-annot.saved { border-color: var(--good); }
 
 .settings-note {
