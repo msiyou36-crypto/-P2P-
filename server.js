@@ -41,6 +41,16 @@ const DEFAULT_CONFIG = { active: 'p2p', accounts: { p2p: newAccount(), p3p: newA
 // الحساب النشط الحالي (مفاتيحه ومداه)
 const AC = () => (config.accounts[config.active] || (config.accounts[config.active] = newAccount()));
 
+/* ===== سستمٌ لحسابٍ واحد =====
+ * متغيّر البيئة ACCOUNT=p2p أو p3p يقفل هذه النسخة على حسابٍ واحد: مفاتيحه
+ * ومخازنه وإعداداته وحده، بلا زرّ تبديل. سستمان على قاعدةٍ واحدة كانا يتبادلان
+ * الحساب النشط تحت بعضهما فتتسرّب عمليات حسابٍ إلى الآخر؛ والقفلُ يجعل ذلك
+ * مستحيلًا بنيةً لا برمجةً: النسخةُ لا تعرف إلا حسابها. بلا المتغيّر يبقى
+ * السلوك القديم (حسابان وزرّ تبديل) للتشغيل المحلي. */
+const LOCKED = ACCOUNTS.includes(process.env.ACCOUNT) ? process.env.ACCOUNT : null;
+const CONFIG_KEY = LOCKED ? 'config__' + LOCKED : 'config';
+const sysKey = (k) => (LOCKED ? k + '__' + LOCKED : k); // مفاتيح السستم لا الحساب: الحصّة وسجل الدخول
+
 if (!USE_SUPABASE) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 async function sbGet(key, fallback) {
@@ -189,7 +199,7 @@ async function loadMaintenance(req) {
  * والحصّة مشتركة بين السستمين لأن الحظر يقع على الحساب في المنصة لا على السستم.
  */
 const SYNC_QUOTA_DEFAULT = 3;
-const SYNC_USAGE_KEY = 'syncusage';
+const SYNC_USAGE_KEY = sysKey('syncusage'); // لكل سستم حصّته
 /* ===== اليوم المحاسبي =====
  * لا يُقفل اليوم منتصف الليل بل الساعة الثانية ليلًا بتوقيت ليبيا (UTC+2)،
  * فالعمل يمتدّ إلى ما بعد منتصف الليل وحسابُه على يومه لا على اليوم التالي.
@@ -299,7 +309,7 @@ function recordLogin(role, req) {
   loginLog.push({ role, time: Date.now(), ip });
   if (loginLog.length > LOGIN_LOG_MAX) loginLog = loginLog.slice(-LOGIN_LOG_MAX);
   // حفظ غير معطِّل للاستجابة (الدخول نادر)
-  saveStore('loginlog', loginLog).catch(() => {});
+  saveStore(sysKey('loginlog'), loginLog).catch(() => {});
 }
 
 /** بيانات حساب معيّن (مع ترحيل مفاتيح p2p القديمة غير المُلاحقة) */
@@ -310,8 +320,9 @@ function recordLogin(role, req) {
  * تبدّل، كي لا تبقى في الذاكرة صفوفُ حسابٍ ونحن نكتب تحت اسم آخر.
  */
 async function refreshActive() {
+  if (LOCKED) return false;   // السستم المقفول لا يبدّل حسابه أبدًا
   try {
-    const stored = await loadStore('config', null);
+    const stored = await loadStore(CONFIG_KEY, null);
     const a = stored && stored.active;
     if (ACCOUNTS.includes(a) && a !== config.active) {
       config.active = a;
@@ -326,7 +337,23 @@ async function refreshActive() {
 /** حفظُ الإعدادات دون أن نمحو حسابًا بدّلته نسخةٌ أخرى */
 async function saveConfig() {
   await refreshActive();
-  await saveStore('config', config);
+  await saveStore(CONFIG_KEY, config);
+}
+
+/** مفاتيحُ حسابٍ ما: من إعدادات هذه النسخة، أو — في السستم المقفول — من إعدادات
+ *  السستم الآخر للقراءة فقط (إعادةُ الحوالات تسأل الحسابين بمفتاحيهما) */
+async function accountKeysFor(id) {
+  const own = config.accounts && config.accounts[id];
+  if (own && own.apiKey && own.apiSecret) return own;
+  if (!LOCKED || id === LOCKED) return null;
+  try {
+    const c = await loadStore('config__' + id, null);
+    const a = c && c.accounts && c.accounts[id];
+    if (a && a.apiKey && a.apiSecret) return a;
+    const shared = await loadStore('config', null);   // الإعدادات المشتركة قبل الفصل
+    const b = shared && shared.accounts && shared.accounts[id];
+    return b && b.apiKey && b.apiSecret ? b : null;
+  } catch { return null; }
 }
 
 async function loadAccountData(kind) {
@@ -342,7 +369,20 @@ async function loadAccountData(kind) {
 
 /** تحميل الإعدادات وبيانات الحساب النشط عند الإقلاع + ترحيل + ضبط كلمات السر من البيئة */
 async function initStore() {
-  const c = await loadStore('config', {});
+  let c = await loadStore(CONFIG_KEY, null);
+  /* أول إقلاعٍ مقفول: إعداداتُ هذا الحساب وكلماتُ السر تُنسخ من الإعدادات المشتركة
+     القديمة مرّةً واحدة، ثم يمضي السستم بمفتاحه المستقل ولا يمسّ المشترك بعدها */
+  if (c == null && LOCKED) {
+    const shared = (await loadStore('config', null)) || {};
+    c = {
+      active: LOCKED,
+      accounts: { [LOCKED]: (shared.accounts || {})[LOCKED] || {} },
+      auth: shared.auth || {},
+      syncQuota: shared.syncQuota,
+    };
+    console.log('سستم «' + ACCOUNT_NAMES[LOCKED] + '» يبدأ بإعداداته المستقلة (منسوخة من المشتركة)');
+  }
+  c = c || {};
   config = Object.assign({}, DEFAULT_CONFIG, c);
 
   // ترحيل من الحساب الواحد القديم → accounts.p2p
@@ -360,7 +400,9 @@ async function initStore() {
     const a = config.accounts[id];
     if (a && a.months != null) { a.rangeHours = Math.round(Number(a.months) * 720) || 720; delete a.months; }
   }
-  config.active = config.active === 'p3p' ? 'p3p' : 'p2p';
+  config.active = LOCKED || (config.active === 'p3p' ? 'p3p' : 'p2p');
+  // السستم المقفول لا يحمل إلا حسابه، فلا تُكتب مفاتيح الحساب الآخر في إعداداته
+  if (LOCKED) for (const id of ACCOUNTS) if (id !== LOCKED) delete config.accounts[id];
   ['apiKey', 'apiSecret', 'baseUrl', 'months', 'lastSync'].forEach((k) => delete config[k]);
 
   // وضع الصيانة انتقل لمفاتيح مستقلة لكل سستم — يُحذف من config نهائيًا
@@ -378,9 +420,9 @@ async function initStore() {
   if (!config.auth.user.hash && process.env.USER_PASSWORD) config.auth.user = makeCredential(process.env.USER_PASSWORD);
   if (!config.auth.user2.hash && process.env.USER2_PASSWORD) config.auth.user2 = makeCredential(process.env.USER2_PASSWORD);
 
-  try { await saveStore('config', config); } catch (e) { console.error(e.message); }
+  try { await saveStore(CONFIG_KEY, config); } catch (e) { console.error(e.message); }
 
-  const savedLog = await loadStore('loginlog', []);
+  const savedLog = await loadStore(sysKey('loginlog'), []);
   loginLog = Array.isArray(savedLog) ? savedLog : [];
 
   orders = await loadAccountData('orders');
@@ -1095,7 +1137,7 @@ async function* reconcileGenerator() {
   try {
     if (ids.length) {
       for (const a of ACCOUNTS) {
-        const ac = config.accounts[a];
+        const ac = await accountKeysFor(a);
         const name = ACCOUNT_NAMES[a];
         if (!ac || !ac.apiKey || !ac.apiSecret) {
           report.noKeys.push(a);
@@ -1907,7 +1949,8 @@ const server = http.createServer(async (req, res) => {
       await refreshActive();   // تعرض الواجهة الحسابَ الحقيقي لا نسخةً قديمة
       sendJSON(res, 200, {
         active: config.active,
-        accounts: ACCOUNTS.map((id) => ({
+        locked: !!LOCKED,        // سستمٌ لحسابٍ واحد: لا زرّ تبديل
+        accounts: (LOCKED ? [LOCKED] : ACCOUNTS).map((id) => ({
           id, name: ACCOUNT_NAMES[id],
           hasKey: !!(config.accounts[id] && config.accounts[id].apiKey && config.accounts[id].apiSecret),
           lastSync: config.accounts[id] ? config.accounts[id].lastSync : null,
@@ -1917,6 +1960,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/account' && req.method === 'POST') {
+      if (LOCKED) {
+        sendJSON(res, 400, { error: 'هذا السستم مخصّص لـ«' + ACCOUNT_NAMES[LOCKED] + '» وحده — الحساب الآخر له رابطه الخاص' });
+        return;
+      }
       const body = await readBody(req);
       const target = ACCOUNTS.includes(body.active) ? body.active : 'p2p';
       /* التبديل أثناء مزامنةٍ جارية يُسلّم عملياتِ حسابٍ إلى حسابٍ آخر: المزامنة
@@ -1962,13 +2009,12 @@ const server = http.createServer(async (req, res) => {
         by[t.kind] = (by[t.kind] || 0) + 1;
         span = span ? [Math.min(span[0], t.time), Math.max(span[1], t.time)] : [t.time, t.time];
       }
-      const hasKey = (a) => !!(config.accounts[a] && config.accounts[a].apiKey && config.accounts[a].apiSecret);
       sendJSON(res, 200, {
         account: config.active, accountName: ACCOUNT_NAMES[config.active],
         otherName: ACCOUNT_NAMES[other], names: ACCOUNT_NAMES, count: dupes.length, byKind: by,
         sharedKnown: Object.values(transfers).filter((t) => t && far[t.id] && okSet.has(t.id)).length,
         from: span ? span[0] : null, to: span ? span[1] : null,
-        keys: { p2p: hasKey('p2p'), p3p: hasKey('p3p') },
+        keys: { p2p: !!(await accountKeysFor('p2p')), p3p: !!(await accountKeysFor('p3p')) },
       });
       return;
     }
@@ -2122,7 +2168,7 @@ initStore().then(() => {
   server.listen(PORT, HOST, () => {
     const shownHost = HOST === '0.0.0.0' ? 'localhost' : HOST;
     console.log('');
-    console.log('  ✅ سجل حوالات P2P يعمل الآن' + (USE_SUPABASE ? '  (التخزين: Supabase)' : ''));
+    console.log('  ✅ سجل ' + (LOCKED ? ACCOUNT_NAMES[LOCKED] + ' (سستم مقفول على هذا الحساب)' : 'حوالات P2P') + ' يعمل الآن' + (USE_SUPABASE ? '  (التخزين: Supabase)' : ''));
     console.log('  العنوان: http://' + shownHost + ':' + PORT);
     console.log('  لإيقاف النظام أغلق هذه النافذة أو اضغط Ctrl+C');
     console.log('');

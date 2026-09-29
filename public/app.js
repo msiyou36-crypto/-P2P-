@@ -530,10 +530,17 @@ async function loadSyncQuota() {
 async function loadAccount() {
   const j = await api('/api/account');
   state.account.active = j.active;
+  state.account.locked = !!j.locked;   // سستمٌ لحسابٍ واحد: لا تبديل
   state.account.list = j.accounts || [];
   const cur = state.account.list.find((a) => a.id === j.active);
   state.account.name = cur ? cur.name : (j.active === 'p3p' ? 'حوالات P3P' : 'حوالات P2P');
   renderAccount();
+}
+/* اسم الحساب الآخر: من القائمة إن كانت تحمله، وإلّا بالاستنتاج (السستم المقفول
+   لا يعرض إلا حسابه، وقد يحتاج الاسم في نقل عمليةٍ أو فحص الحوالات المشتركة) */
+function otherAccountName() {
+  const other = state.account.list.find((a) => a.id !== state.account.active);
+  return other ? other.name : (state.account.active === 'p2p' ? 'حوالات P3P' : 'حوالات P2P');
 }
 function renderAccount() {
   const el = $('#acctName');
@@ -545,14 +552,20 @@ function renderAccount() {
   document.title = title;
   const btn = $('#btnAccount');
   if (!btn) return;
-  const other = state.account.list.find((a) => a.id !== state.account.active);
-  btn.title = other ? ('التبديل إلى: ' + other.name + ' — لكل حساب مفتاح API وبياناته الخاصة') : 'تبديل الحساب';
+  if (state.account.locked) {
+    // زرُّ التبديل يبقى اسمًا للحساب لا زرًّا: هذا السستم لحسابٍ واحد
+    btn.disabled = true;
+    btn.title = 'هذا السستم مخصّص لـ' + state.account.name + ' وحده — الحساب الآخر له رابطه الخاص';
+    return;
+  }
+  btn.disabled = false;
+  btn.title = 'التبديل إلى: ' + otherAccountName() + ' — لكل حساب مفتاح API وبياناته الخاصة';
 }
 const loadAll = () => Promise.all([loadAccount(), loadOrders(), loadTransfers(), loadSettings(), loadSyncQuota(), loadBalSnaps()]);
 
 // التبديل بين الحسابين (P2P / P3P): يحفظ الخادم بيانات الحساب الحالي ويحمّل الآخر
 async function switchAccount() {
-  if (state.switchingAccount || state.syncing) return;
+  if (state.switchingAccount || state.syncing || state.account.locked) return;
   const other = state.account.list.find((a) => a.id !== state.account.active);
   const target = other ? other.id : (state.account.active === 'p2p' ? 'p3p' : 'p2p');
   state.switchingAccount = true;
@@ -2092,8 +2105,7 @@ function setArchiveView(on) {
 function moveAccountRow(entity, kind) {
   const wrap = document.createElement('div');
   wrap.className = 'zero-toggle';
-  const other = state.account.list.find((a) => a.id !== state.account.active);
-  const otherName = other ? other.name : 'الحساب الآخر';
+  const otherName = otherAccountName();
   const btn = document.createElement('button');
   btn.className = 'btn danger';
   btn.textContent = `⇄ انقلها إلى ${otherName}`;
