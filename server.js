@@ -53,23 +53,42 @@ const sysKey = (k) => (LOCKED ? k + '__' + LOCKED : k); // مفاتيح السس
 
 if (!USE_SUPABASE) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-async function sbGet(key, fallback) {
-  const url = SB_URL + '/rest/v1/kv?key=eq.' + encodeURIComponent(key) + '&select=value';
-  const r = await fetch(url, { headers: { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY } });
+/* عميل Supabase. db: قاعدةٌ بعينها {url, key} — الافتراضية قاعدةُ هذا السستم،
+   وقاعدةٌ أخرى تُقرأ منها مرّةً واحدة عند نقل البيانات (انظر migrateFromSource). */
+const sbHead = (db) => ({ apikey: db ? db.key : SB_KEY, Authorization: 'Bearer ' + (db ? db.key : SB_KEY) });
+const sbBase = (db) => (db ? db.url : SB_URL) + '/rest/v1/kv';
+async function sbGet(key, fallback, db = null) {
+  const r = await fetch(sbBase(db) + '?key=eq.' + encodeURIComponent(key) + '&select=value', { headers: sbHead(db) });
   if (!r.ok) throw new Error('Supabase read ' + r.status);
   const rows = await r.json();
   return (Array.isArray(rows) && rows[0] && rows[0].value != null) ? rows[0].value : fallback;
 }
-async function sbSet(key, value) {
-  const r = await fetch(SB_URL + '/rest/v1/kv', {
+async function sbSet(key, value, db = null) {
+  const r = await fetch(sbBase(db), {
     method: 'POST',
-    headers: {
-      apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY,
-      'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal',
-    },
+    headers: Object.assign({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }, sbHead(db)),
     body: JSON.stringify({ key, value }),
   });
   if (!r.ok) throw new Error('Supabase write ' + r.status + ' ' + (await r.text().catch(() => '')));
+}
+async function sbList(db = null) {
+  const r = await fetch(sbBase(db) + '?select=key&limit=10000', { headers: sbHead(db) });
+  if (!r.ok) throw new Error('Supabase list ' + r.status);
+  const rows = await r.json();
+  return Array.isArray(rows) ? rows.map((x) => String(x.key)) : [];
+}
+async function sbDelete(key) {
+  const r = await fetch(sbBase(null) + '?key=eq.' + encodeURIComponent(key), { method: 'DELETE', headers: sbHead(null) });
+  if (!r.ok) throw new Error('Supabase delete ' + r.status);
+}
+/** كل مفاتيح مخزن هذا السستم (القاعدة أو مجلد data/) */
+async function listStoreKeys() {
+  if (USE_SUPABASE) return sbList();
+  return fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5));
+}
+async function deleteStore(key) {
+  if (USE_SUPABASE) { await sbDelete(key); return; }
+  try { fs.unlinkSync(kvFile(key)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
 }
 
 async function loadStore(key, fallback) {
@@ -85,6 +104,47 @@ async function saveStore(key, obj) {
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 1));
   fs.renameSync(tmp, file);
+}
+
+/* ===== نقلُ بيانات السستم إلى قاعدته المستقلة (مرّةً واحدة) =====
+ * الفصلُ التام: لكل سستم قاعدةُ Supabase خاصة به. عند أول إقلاعٍ على القاعدة
+ * الجديدة (لا config__X فيها) ومع MIGRATE_FROM_URL/MIGRATE_FROM_KEY مضبوطَين
+ * على القاعدة القديمة، تُنسخ مفاتيحُ هذا الحساب وحدها (…__X) وما يخصّ السستم
+ * (sharedtx، الصيانة) ثم يمضي السستم على قاعدته. لا يُحذف شيءٌ من القديمة هنا —
+ * الحذفُ قرارٌ للمسؤول من منطقة الخطر في السستم الآخر، بعد أن يرى النقل تمّ. */
+const MIGRATE_DB = (process.env.MIGRATE_FROM_URL && process.env.MIGRATE_FROM_KEY)
+  ? { url: process.env.MIGRATE_FROM_URL.replace(/\/+$/, ''), key: process.env.MIGRATE_FROM_KEY }
+  : null;
+const mineKey = (k, acct) => k.endsWith('__' + acct) || k === 'sharedtx' || k.startsWith('maintenance__');
+async function migrateFromSource() {
+  if (!LOCKED || !MIGRATE_DB || !USE_SUPABASE) return;
+  if (MIGRATE_DB.url === SB_URL) { console.log('MIGRATE_FROM_URL هي قاعدة السستم نفسها — لا شيء يُنقل'); return; }
+  try {
+    if (await sbGet(CONFIG_KEY, null) != null) return; // القاعدة الجديدة مأهولة: نُقل من قبل
+    const keys = (await sbList(MIGRATE_DB)).filter((k) => mineKey(k, LOCKED));
+    let copied = 0;
+    for (const k of keys) {
+      const v = await sbGet(k, null, MIGRATE_DB);
+      if (v == null) continue;
+      await sbSet(k, v);
+      copied++;
+    }
+    // إعداداتُ الحساب: إن لم تكن مستقلةً في القديمة تُشتقّ من إعداداتها المشتركة
+    if (!keys.includes(CONFIG_KEY)) {
+      const shared = await sbGet('config', null, MIGRATE_DB);
+      if (shared) {
+        await sbSet(CONFIG_KEY, {
+          active: LOCKED, accounts: { [LOCKED]: (shared.accounts || {})[LOCKED] || {} },
+          auth: shared.auth || {}, syncQuota: shared.syncQuota,
+        });
+        copied++;
+      }
+    }
+    console.log(`✅ نُقلت بيانات «${ACCOUNT_NAMES[LOCKED]}» إلى قاعدتها المستقلة: ${copied} مفتاحًا (${keys.join('، ') || 'لا شيء'}) — يمكنك الآن حذف MIGRATE_FROM_URL وMIGRATE_FROM_KEY من البيئة`);
+  } catch (e) {
+    console.error('❌ تعذّر نقل البيانات من القاعدة القديمة: ' + e.message
+      + ' — تحقّق من MIGRATE_FROM_URL وMIGRATE_FROM_KEY، ومن أن جدول kv أُنشئ في القاعدة الجديدة (supabase-schema.sql)');
+  }
 }
 
 /** الحالة في الذاكرة (تُملأ من التخزين عند الإقلاع في initStore) — للحساب النشط */
@@ -369,6 +429,7 @@ async function loadAccountData(kind) {
 
 /** تحميل الإعدادات وبيانات الحساب النشط عند الإقلاع + ترحيل + ضبط كلمات السر من البيئة */
 async function initStore() {
+  await migrateFromSource();   // أول إقلاعٍ على قاعدةٍ مستقلة: تُنقل بيانات هذا الحساب إليها
   let c = await loadStore(CONFIG_KEY, null);
   /* أول إقلاعٍ مقفول: إعداداتُ هذا الحساب وكلماتُ السر تُنسخ من الإعدادات المشتركة
      القديمة مرّةً واحدة، ثم يمضي السستم بمفتاحه المستقل ولا يمسّ المشترك بعدها */
@@ -1484,6 +1545,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'], ['POST', '/api/sync/day'],
       ['POST', '/api/record/move'],
       ['GET', '/api/transfers/dupes'], ['POST', '/api/transfers/reconcile'],
+      ['GET', '/api/system/foreign'], ['DELETE', '/api/system/foreign'],
     ];
     // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
     const ANNOTATE_ROUTES = [
@@ -1990,6 +2052,35 @@ const server = http.createServer(async (req, res) => {
        حوالةُ المحفظة معرّفها فريدٌ في Binance، فلا تكون في حسابين إلا أن تكون
        تسرّبت من أحدهما إلى الآخر. نعرضها هنا، ونؤرشفها في الحساب المفتوح وحده
        بأمرٍ منفصل — أرشفةً لا حذفًا، فتخرج من الجدول والحساب وتبقى قابلة للرجوع. */
+    /* ---------- بيانات الحساب الآخر في قاعدة هذا السستم (للمسؤول، في السستم المقفول) ----------
+       بعد الفصل التام تكون بيانات الحساب الآخر قد نُقلت إلى قاعدته؛ ما بقي منها هنا
+       نسخةٌ ميتة: تُعرض أولًا (المفاتيح وعدد صفوفها) ثم تُحذف بأمرٍ صريح لا تلقائيًا.
+       تشمل المفاتيح المشتركة القديمة التي سبقت الفصل (orders/transfers/config بلا لاحقة). */
+    if (p === '/api/system/foreign' && (req.method === 'GET' || req.method === 'DELETE')) {
+      if (!LOCKED) { sendJSON(res, 400, { error: 'هذا الإجراء للسستم المقفول على حسابٍ واحد (متغيّر ACCOUNT)' }); return; }
+      const other = ACCOUNTS.find((a) => a !== LOCKED) || 'p2p';
+      let keys;
+      try { keys = await listStoreKeys(); }
+      catch (e) { sendJSON(res, 500, { error: 'تعذّر قراءة مفاتيح القاعدة: ' + e.message }); return; }
+      const LEGACY_SHARED = ['orders', 'transfers', 'config', 'loginlog', 'syncusage']; // مفاتيح ما قبل الفصل، بلا لاحقة حساب
+      const foreign = keys.filter((k) => k.endsWith('__' + other) || LEGACY_SHARED.includes(k));
+      if (req.method === 'GET') {
+        const items = [];
+        for (const k of foreign) {
+          const v = await loadStore(k, null);
+          const rows = Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : 1);
+          items.push({ key: k, rows });
+        }
+        sendJSON(res, 200, { otherName: ACCOUNT_NAMES[other], count: foreign.length, items });
+        return;
+      }
+      let n = 0;
+      try { for (const k of foreign) { await deleteStore(k); n++; } }
+      catch (e) { sendJSON(res, 500, { error: `تعذّر الحذف بعد ${n} مفتاحًا: ` + e.message }); return; }
+      sendJSON(res, 200, { ok: true, deleted: n, otherName: ACCOUNT_NAMES[other] });
+      return;
+    }
+
     if (p === '/api/transfers/dupes' && req.method === 'GET') {
       await refreshActive();
       const other = ACCOUNTS.find((a) => a !== config.active) || 'p2p';

@@ -577,6 +577,9 @@ function renderAccount() {
   const h = $('#appTitle');
   if (h) h.textContent = title;
   document.title = title;
+  // حذفُ بيانات الحساب الآخر له معنى في السستم المقفول وحده (لكل سستم قاعدته)
+  const fz = $('#foreignZone');
+  if (fz) fz.classList.toggle('hidden', !state.account.locked);
   const btn = $('#btnAccount');
   if (!btn) return;
   if (state.account.locked) {
@@ -948,6 +951,23 @@ async function reconcileDupes(btn) {
   await Promise.all([loadOrders(), loadTransfers()]);
   renderAll();
   refreshBalance();
+}
+
+/* حذفُ بيانات الحساب الآخر من قاعدة هذا السستم (بعد الفصل التام): معاينةٌ لما
+   سيُحذف بالمفاتيح وعدد صفوفها، ثم تأكيدٌ، ثم كلمةٌ مكتوبة — فالحذف لا رجعة فيه. */
+async function cleanForeign() {
+  let d;
+  try { d = await api('/api/system/foreign'); } catch (e) { toast(e.message, 'err'); return; }
+  if (!d.count) { toast(`لا توجد بيانات لـ«${d.otherName}» في قاعدة هذا السستم ✓`); return; }
+  const list = d.items.map((i) => `${i.key} (${fmt0(i.rows)})`).join('، ');
+  openConfirm(`سيُحذف من قاعدة هذا السستم ${fmt0(d.count)} مفتاحًا يخصّ «${d.otherName}»: ${list}. لا تفعل هذا إلا بعد أن يعمل سستم «${d.otherName}» على قاعدته الجديدة وترى بياناته فيه. هل أنت متأكد؟`, async () => {
+    const w = prompt('للتأكيد اكتب كلمة: حذف');
+    if (w == null || w.trim() !== 'حذف') { toast('أُلغي الحذف'); return; }
+    try {
+      const j = await api('/api/system/foreign', { method: 'DELETE' });
+      toast(`حُذفت بيانات ${j.otherName} من هذه القاعدة (${fmt0(j.deleted)} مفتاحًا) ✓`);
+    } catch (e) { toast(e.message, 'err'); }
+  });
 }
 
 /* جلب يومٍ واحد: علاجٌ موضعي لمن ينقصه يوم، بلا كلفة المزامنة الكاملة */
@@ -2935,6 +2955,7 @@ function wireEvents() {
   $('#btnRunDiag').addEventListener('click', runDiag);
   $('#btnFetchDay').addEventListener('click', fetchOneDay);
   $('#btnFindDupes').addEventListener('click', findDupes);
+  $('#btnForeignClean').addEventListener('click', cleanForeign);
   $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
   $('#btnSaveMaint').addEventListener('click', saveMaintenance);
   $('#maintLogout').addEventListener('click', doLogout);
