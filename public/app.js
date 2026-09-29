@@ -572,12 +572,6 @@ async function loadAccount() {
   state.account.name = cur ? cur.name : (j.active === 'p3p' ? 'حوالات P3P' : 'حوالات P2P');
   renderAccount();
 }
-/* اسم الحساب الآخر: من القائمة إن كانت تحمله، وإلّا بالاستنتاج (السستم المقفول
-   لا يعرض إلا حسابه، وقد يحتاج الاسم في نقل عمليةٍ أو فحص الحوالات المشتركة) */
-function otherAccountName() {
-  const other = state.account.list.find((a) => a.id !== state.account.active);
-  return other ? other.name : (state.account.active === 'p2p' ? 'حوالات P3P' : 'حوالات P2P');
-}
 /* لكل سستم لونه: P3P بالذهبي المعتاد، وP2P بالبنفسجي — فيُعرف الحساب من أول
    نظرة لا من قراءة العنوان. السمة تُوضع على الجذر فتقرؤها التنسيقات، وتتبعها
    أيقونة التبويب وبيان التطبيق وخلفية الدخول. */
@@ -604,11 +598,11 @@ function applyAccountTheme(id) {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = t.ink;
 }
+/* لكل سستم حسابٌ واحد وقاعدةٌ واحدة: لا زرّ تبديل ولا نقل بين الحسابين — العنوان
+   واللون يقولان أيَّ سستمٍ هذا. */
 function renderAccount() {
   applyAccountTheme(state.account.active);
-  const el = $('#acctName');
-  if (el) el.textContent = state.account.name;
-  // عنوان الترويسة وتبويب المتصفح يتبعان الحساب النشط
+  // عنوان الترويسة وتبويب المتصفح يتبعان الحساب
   const title = 'سجل ' + state.account.name; // «سجل حوالات P2P» أو «سجل حوالات P3P»
   const h = $('#appTitle');
   if (h) h.textContent = title;
@@ -616,50 +610,8 @@ function renderAccount() {
   // حذفُ بيانات الحساب الآخر له معنى في السستم المقفول وحده (لكل سستم قاعدته)
   const fz = $('#foreignZone');
   if (fz) fz.classList.toggle('hidden', !state.account.locked);
-  const btn = $('#btnAccount');
-  if (!btn) return;
-  if (state.account.locked) {
-    // زرُّ التبديل يبقى اسمًا للحساب لا زرًّا: هذا السستم لحسابٍ واحد
-    btn.disabled = true;
-    btn.title = 'هذا السستم مخصّص لـ' + state.account.name + ' وحده — الحساب الآخر له رابطه الخاص';
-    return;
-  }
-  btn.disabled = false;
-  btn.title = 'التبديل إلى: ' + otherAccountName() + ' — لكل حساب مفتاح API وبياناته الخاصة';
 }
 const loadAll = () => Promise.all([loadAccount(), loadOrders(), loadTransfers(), loadSettings(), loadSyncQuota(), loadBalSnaps()]);
-
-// التبديل بين الحسابين (P2P / P3P): يحفظ الخادم بيانات الحساب الحالي ويحمّل الآخر
-async function switchAccount() {
-  if (state.switchingAccount || state.syncing || state.account.locked) return;
-  const other = state.account.list.find((a) => a.id !== state.account.active);
-  const target = other ? other.id : (state.account.active === 'p2p' ? 'p3p' : 'p2p');
-  state.switchingAccount = true;
-  const btn = $('#btnAccount');
-  if (btn) btn.disabled = true;
-  try {
-    const j = await api('/api/account', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active: target }),
-    });
-    state.account.active = j.active;
-    state.account.name = j.name;
-    // أعِد تحميل بيانات الحساب الجديد بالكامل
-    state.balance = null; state.balanceError = null;
-    await loadAll();
-    state.page = 1;
-    renderAll();
-    renderBalance();
-    if (state.settings.hasSecret && state.settings.apiKeyMasked) refreshBalance();
-    toast('تم التبديل إلى: ' + j.name, 'ok');
-  } catch (e) {
-    toast(e.message || 'تعذّر تبديل الحساب', 'err');
-  } finally {
-    state.switchingAccount = false;
-    if (btn) btn.disabled = false;
-    renderAccount();
-  }
-}
 
 async function refreshBalance() {
   if (state.balanceLoading) return;
@@ -869,131 +821,11 @@ function diagLine(cls, text) {
   return d;
 }
 
-/* حوالات مسجّلة في الحسابين: تُحسب مرّتين في «الباقي». البرنامج لا يحزر صاحبها،
-   والمنصةُ تعرفه: مفتاحُ كل حساب لا يُرجع إلا حوالاته. فنعرض العدد، ثم بأمر
-   المستخدم نسأل الحسابين ونُبقي كل حوالة حيث أرجعتها المنصة. */
-const TX_DUP_AR = { deposit: 'إيداع', withdraw: 'سحب', 'pay-in': 'استلام Pay', 'pay-out': 'إرسال Pay', 'convert-in': 'تحويل (→USDT)', 'convert-out': 'تحويل (USDT→)', 'spot-buy': 'شراء فوري', 'spot-sell': 'بيع فوري' };
-const kindsLine = (bag) => Object.entries(bag || {}).map(([k, n]) => `${TX_DUP_AR[k] || k} ${fmt0(n)}`).join(' · ');
-async function findDupes() {
-  const box = $('#diagResult');
-  const btn = $('#btnFindDupes');
-  btn.disabled = true;
-  box.textContent = '';
-  box.append(diagLine('hint', 'جارٍ المقارنة مع الحساب الآخر…'));
-  let d;
-  try { d = await api('/api/transfers/dupes'); }
-  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); btn.disabled = false; return; }
-  btn.disabled = false;
-  box.textContent = '';
-  if (d.sharedKnown) box.append(diagLine('hint', `${fmt0(d.sharedKnown)} حوالة Pay بين حسابيك — تخصّهما معًا بشهادة المنصة، فلا تُعدّ.`));
-  if (!d.count) {
-    box.append(diagLine('diag-ok', `لا توجد حوالة مسجّلة في «${d.accountName}» و«${d.otherName}» معًا ✓`));
-    return;
-  }
-  box.append(diagLine('diag-bad',
-    `${fmt0(d.count)} حوالة مسجّلة في «${d.accountName}» وفي «${d.otherName}» معًا — كلٌّ منها محسوبة مرّتين في «الباقي من USDT».`));
-  box.append(diagLine('hint', kindsLine(d.byKind)));
-  if (d.from) box.append(diagLine('hint', `من ${fmtDT(d.from)} إلى ${fmtDT(d.to)}`));
-  const missing = ['p2p', 'p3p'].filter((a) => !(d.keys && d.keys[a]));
-  for (const a of missing) {
-    box.append(diagLine('diag-bad', `⚠ «${d.names[a]}» بلا مفتاح API — أدخله في الإعدادات أولًا، وإلّا لم يُسأل عن حوالاته ولم يُحسم ما يخصّه.`));
-  }
-  const b = document.createElement('button');
-  b.className = 'btn accent';
-  b.style.cssText = 'display:block; margin-top:10px;';
-  b.textContent = `✔ أعد كل حوالة إلى حسابها الصحيح (${fmt0(d.count)})`;
-  b.addEventListener('click', () => openConfirm(
-    `سيُسأل Binance بمفتاح كل حساب عن حوالاته في هذه الفترة، وتبقى كل حوالة في الحساب الذي أرجعها وتُحذف نسختها من الآخر. ما لم تُرجعه المنصة لأيّ حساب يُترك كما هو. قد يستغرق بضع دقائق — لا تُغلق الصفحة ولا تبدّل الحساب أثناءه. هل أنت متأكد؟`,
-    () => reconcileDupes(b)));
-  box.append(b);
-}
-
-async function reconcileDupes(btn) {
-  const box = $('#diagResult');
-  btn.disabled = true;
-  $('#btnFindDupes').disabled = true;
-  const row = document.createElement('div');
-  row.className = 'syncbar-row';
-  row.style.marginTop = '12px';
-  const spin = document.createElement('span'); spin.className = 'spinner';
-  const msg = document.createElement('span'); msg.textContent = 'جارٍ البدء…';
-  row.append(spin, msg);
-  const track = document.createElement('div'); track.className = 'syncbar-track';
-  const fill = document.createElement('div'); fill.className = 'syncbar-fill'; fill.style.width = '2%';
-  track.append(fill);
-  box.append(row, track);
-  let sawError = null, rep = null;
-  try {
-    const headers = {};
-    if (state.auth.token) headers['X-Auth-Token'] = state.auth.token;
-    const res = await fetch('/api/transfers/reconcile', { method: 'POST', headers });
-    if (res.status === 401) { handleUnauthorized(); throw new Error('انتهت الجلسة — سجّل الدخول'); }
-    if (!res.ok || !res.body) {
-      const j = await res.json().catch(() => ({}));
-      throw new Error(j.error || 'تعذّر البدء');
-    }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (!line) continue;
-        let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.error) sawError = ev.error;
-        else if (ev.done) rep = ev;
-        else {
-          if (ev.msg && ev.msg.startsWith('⚠')) box.insertBefore(diagLine('diag-bad', ev.msg), row);
-          else if (ev.msg) msg.textContent = ev.msg;
-          if (ev.pct != null) fill.style.width = ev.pct + '%';
-        }
-      }
-    }
-    if (sawError) throw new Error(sawError);
-    fill.style.width = '100%';
-  } catch (e) {
-    box.insertBefore(diagLine('diag-bad', '⚠ ' + e.message), row);
-    if (/HTTP 4(18|29)|حظر/.test(e.message || '')) setSyncCooldown(30 * 60000);
-  } finally {
-    row.remove(); track.remove();
-    $('#btnFindDupes').disabled = false;
-  }
-  if (!rep) { btn.disabled = false; return; }
-  btn.remove(); // انتهى عملها؛ «ابحث» من جديد يعرض الحال الحاضرة
-  const N = rep.names || {};
-  for (const a of ['p2p', 'p3p']) {
-    const n = rep.moved[a] || 0;
-    if (n) box.append(diagLine('diag-ok', `أُعيدت ${fmt0(n)} حوالة إلى «${N[a]}» وحده — ${kindsLine(rep.byKind[a])}`));
-  }
-  if (rep.shared) box.append(diagLine('hint', `${fmt0(rep.shared)} حوالة تخصّ الحسابين معًا (Pay بين حسابيك) — بقيت فيهما: ${kindsLine(rep.byKind.shared)}`));
-  if (rep.unresolved) {
-    const why = [];
-    if (rep.reasons.none) why.push(`${fmt0(rep.reasons.none)} لم تُرجعها المنصة لأيّ حساب`);
-    if (rep.reasons['pay-unsure']) why.push(`${fmt0(rep.reasons['pay-unsure'])} Pay لم يكتمل سؤال الحساب الآخر عنها`);
-    if (rep.reasons.kind) why.push(`${fmt0(rep.reasons.kind)} من نوعٍ لا تُسأل عنه المنصة`);
-    box.append(diagLine('diag-bad', `${fmt0(rep.unresolved)} حوالة تُركت في الحسابين كما هي (${why.join('، ')}) — ${kindsLine(rep.byKind.unresolved)}`));
-  }
-  if ((rep.restored.p2p || 0) + (rep.restored.p3p || 0)) {
-    box.append(diagLine('hint', `أُرجع من الأرشيف ما أرشفته الأداة السابقة: ${fmt0(rep.restored.p2p || 0)} في «${N.p2p}» و${fmt0(rep.restored.p3p || 0)} في «${N.p3p}».`));
-  }
-  if (!rep.dupes) box.append(diagLine('diag-ok', 'لا توجد حوالة مشتركة ✓'));
-  else if (!rep.unresolved && !sawError) box.append(diagLine('diag-ok', 'كل حوالة صارت في حسابها ✓ — أُعيد حساب «الباقي من USDT» في الحسابين.'));
-  await Promise.all([loadOrders(), loadTransfers()]);
-  renderAll();
-  refreshBalance();
-}
-
 /* عملياتٌ محفوظة هنا لا يُرجعها مفتاح هذا الحساب: يُسأل Binance عن الفترة، وكل
    عمليةٍ محفوظة لم تُرجعها تُعرض بخانة اختيار — المسؤول يقرّر ما يُحذف، فالمنصة
    تُغفل أحيانًا بعض طلبات P2P ولا نحذف على الظنّ. */
 async function foreignScan() {
-  const days = Math.min(Math.max(Number($('#foreignDays').value) || 45, 1), 90);
+  const days = Math.min(Math.max(Number($('#foreignDays').value) || 90, 1), 400);
   const box = $('#diagResult');
   const btn = $('#btnForeignScan');
   btn.disabled = true;
@@ -1078,7 +910,12 @@ async function foreignScan() {
   const bAll = document.createElement('button'); bAll.className = 'btn small'; bAll.textContent = 'حدّد الكل';
   const bNone = document.createElement('button'); bNone.className = 'btn small'; bNone.textContent = 'أزل التحديد';
   const bSure = document.createElement('button'); bSure.className = 'btn small'; bSure.textContent = 'المؤكَّد فقط';
-  ctl.append(bSure, bAll, bNone);
+  /* «ما بعد تاريخ»: حسابٌ توقّف نشاطه في تاريخٍ يعرفه صاحبه — كل طلبٍ محفوظ بعده
+     ليس له، فيُحدَّد دفعةً واحدة بلا الاعتماد على ما أرجعته المنصة */
+  const afterInp = document.createElement('input');
+  afterInp.type = 'datetime-local'; afterInp.dir = 'ltr'; afterInp.className = 'num-input';
+  const bAfter = document.createElement('button'); bAfter.className = 'btn small'; bAfter.textContent = 'حدّد ما بعد التاريخ';
+  ctl.append(bSure, bAll, bNone, afterInp, bAfter);
   box.append(ctl);
   const list = document.createElement('div');
   list.className = 'foreign-list';
@@ -1087,7 +924,7 @@ async function foreignScan() {
     const lab = document.createElement('label');
     lab.className = 'foreign-item';
     const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = checked; cb.dataset.kind = kind; cb.dataset.id = it.id; cb.dataset.sure = checked ? '1' : '';
+    cb.type = 'checkbox'; cb.checked = checked; cb.dataset.kind = kind; cb.dataset.id = it.id; cb.dataset.sure = checked ? '1' : ''; cb.dataset.time = String(it.time || 0);
     const span = document.createElement('span'); span.textContent = label;
     lab.append(cb, span);
     list.append(lab);
@@ -1111,6 +948,12 @@ async function foreignScan() {
   bAll.addEventListener('click', () => { boxes.forEach((b) => { b.checked = true; }); refresh(); });
   bNone.addEventListener('click', () => { boxes.forEach((b) => { b.checked = false; }); refresh(); });
   bSure.addEventListener('click', () => { boxes.forEach((b) => { b.checked = !!b.dataset.sure; }); refresh(); });
+  bAfter.addEventListener('click', () => {
+    const ms = afterInp.value ? new Date(afterInp.value).getTime() : NaN;
+    if (!Number.isFinite(ms)) { toast('حدّد التاريخ أولًا', 'err'); return; }
+    boxes.forEach((b) => { b.checked = Number(b.dataset.time) >= ms; });
+    refresh();
+  });
   refresh();
   act.addEventListener('click', () => {
     const sel = boxes.filter((b) => b.checked);
@@ -1132,6 +975,31 @@ async function foreignScan() {
     });
   });
   box.append(act);
+}
+
+/* أرشفةُ كل ما قبل تاريخ (أو إرجاعُه من الأرشيف): عهدٌ قديم للحساب يُطوى دفعةً
+   واحدة فيخرج من الجدول ومن «الباقي»، ويبقى في الأرشيف يُرجَع متى شئت. */
+async function archiveBefore(undo) {
+  const inp = $('#archiveBefore');
+  const ms = inp.value ? new Date(inp.value).getTime() : NaN;
+  if (!Number.isFinite(ms)) { toast('حدّد التاريخ والوقت أولًا', 'err'); return; }
+  const when = fmtDT(ms);
+  openConfirm(undo
+    ? `سيُرجَع من الأرشيف كل ما قبل ${when} إلى الجدول وإلى حساب «الباقي» في «${state.account.name}». هل أنت متأكد؟`
+    : `ستُؤرشف كل العمليات التي قبل ${when} في «${state.account.name}»: تخرج من الجدول ومن حساب «الباقي من USDT»، وتبقى في الأرشيف. هل أنت متأكد؟`, async () => {
+    try {
+      const j = await api('/api/archive/before', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ before: ms, undo: !!undo }),
+      });
+      closeAllModals();
+      await Promise.all([loadOrders(), loadTransfers()]);
+      renderAll();
+      refreshBalance();
+      const n = (j.orders || 0) + (j.transfers || 0);
+      toast(n ? (undo ? `أُرجع ${fmt0(n)} عملية من الأرشيف ✓` : `أُرشفت ${fmt0(n)} عملية (${fmt0(j.orders)} طلبًا و${fmt0(j.transfers)} حوالة) ✓`) : 'لا شيء قبل هذا التاريخ', n ? 'ok' : 'err');
+    } catch (e) { toast(e.message, 'err'); }
+  });
 }
 
 /* استرجاعُ آخر حذفٍ من أداة «ما لا يخصّ هذا الحساب»: سلّة المحذوف تُعاد كلها */
@@ -2420,7 +2288,6 @@ function openDetails(o) {
   wrap.append(annotDetailRow(o, 'note', 'order', 'الملاحظة'));
   if (o.orderStatus === 'COMPLETED') wrap.append(zeroPointRow(o, 'order'));
   if (canEdit()) wrap.append(archiveRow(o, 'order'));
-  if (canEdit()) wrap.append(moveAccountRow(o, 'order'));
   body.append(wrap);
   openModal('#mDetails');
 }
@@ -2432,37 +2299,6 @@ function setArchiveView(on) {
   state.page = 1;
   $('#archiveBar').classList.toggle('hidden', !state.showArchive);
   renderAll();
-}
-
-/* نقلُ عمليةٍ وقعت في الحساب الخطأ إلى الحساب الآخر بكل تعليقاتها — بدل حذفها
-   وإعادة إدخالها. يحدث ذلك إن استُورد ملفٌ والحسابُ غير المقصود مفتوح. */
-function moveAccountRow(entity, kind) {
-  const wrap = document.createElement('div');
-  wrap.className = 'zero-toggle';
-  const otherName = otherAccountName();
-  const btn = document.createElement('button');
-  btn.className = 'btn danger';
-  btn.textContent = `⇄ انقلها إلى ${otherName}`;
-  btn.disabled = !canEdit();
-  wrap.append(btn);
-  btn.addEventListener('click', () => {
-    const id = kind === 'transfer' ? entity.id : entity.orderNumber;
-    openConfirm(`ستُنقل هذه العملية من ${state.account.name} إلى ${otherName} بكل ملاحظاتها. هل أنت متأكد؟`, async () => {
-      try {
-        const j = await api('/api/record/move', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, kind: kind === 'transfer' ? 'transfer' : 'order' }),
-        });
-        closeAllModals();
-        await Promise.all([loadOrders(), loadTransfers()]);
-        renderAll();
-        toast(`نُقلت إلى ${j.name} ✓`);
-      } catch (e) { toast(e.message, 'err'); }
-    });
-  });
-  return detailRow('الحساب', wrap, {
-    hint: `هذه العملية مسجّلة في «${state.account.name}». إن كانت تخصّ الحساب الآخر فانقلها — تنتقل كما هي بملاحظاتها وإشاريها، ولا تُحذف.`,
-  });
 }
 
 /* الأرشفة: إخراجُ صفٍّ من الجدول ومن الحساب معًا دون محوه من السجلّ —
@@ -2592,7 +2428,6 @@ function openTransferDetails(t) {
   wrap.append(annotDetailRow(t, 'note', 'transfer', 'الملاحظة'));
   if (t.status === 'COMPLETED') wrap.append(zeroPointRow(t, 'transfer'));
   if (canEdit()) wrap.append(archiveRow(t, 'transfer'));
-  if (canEdit()) wrap.append(moveAccountRow(t, 'transfer'));
   body.append(wrap);
   openModal('#mTransfer');
 }
@@ -3233,16 +3068,16 @@ function wireEvents() {
   $('#btnDiag').addEventListener('click', () => { closeMenu(); openDiag(); });
   $('#btnRunDiag').addEventListener('click', runDiag);
   $('#btnFetchDay').addEventListener('click', fetchOneDay);
-  $('#btnFindDupes').addEventListener('click', findDupes);
   $('#btnForeignClean').addEventListener('click', cleanForeign);
   $('#btnWhoAmI').addEventListener('click', whoAmI);
   $('#btnForeignScan').addEventListener('click', foreignScan);
   $('#btnForeignUndo').addEventListener('click', undoForeignDelete);
   $('#btnRestoreFile').addEventListener('click', restoreFromFile);
+  $('#btnArchiveBefore').addEventListener('click', () => archiveBefore(false));
+  $('#btnUnarchiveBefore').addEventListener('click', () => archiveBefore(true));
   $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
   $('#btnSaveMaint').addEventListener('click', saveMaintenance);
   $('#maintLogout').addEventListener('click', doLogout);
-  $('#btnAccount').addEventListener('click', () => { closeMenu(); switchAccount(); });
   $('#btnAdd').addEventListener('click', () => { closeMenu(); openAdd(); });
   $('#btnImport').addEventListener('click', () => {
     closeMenu();

@@ -80,7 +80,6 @@
   <div class="actions">
     <span id="roleBadge" class="role-badge"></span>
     <button id="btnSync" class="btn accent" title="جلب أحدث الطلبات من المنصة">⟳ مزامنة</button>
-    <button id="btnAccount" class="btn ghost acct-btn" title="تبديل الحساب — لكل حساب مفتاح API وبياناته الخاصة">🔀 <span id="acctName">حوالات P2P</span></button>
     <div class="menu-wrap">
       <button id="btnMenu" class="btn ghost" title="القائمة" aria-haspopup="true" aria-expanded="false">☰ القائمة</button>
       <div id="menuDropdown" class="menu-dropdown hidden" role="menu">
@@ -378,6 +377,14 @@
         <button class="btn danger" id="btnClearAll">مسح جميع الطلبات</button>
         <button class="btn danger" id="btnClearTransfers">مسح سجل الإيداع والسحب</button>
         <button class="btn danger" id="btnUnfreezeBal" title="يُلغي تثبيت أرقام عمود «الباقي من USDT» ويُعيد حسابها من جديد">إعادة حساب «الباقي من USDT»</button>
+        <p class="hint">عهدٌ قديم للحساب لا تريده في الجدول ولا في «الباقي»؟ أرشف كل ما قبل تاريخٍ دفعةً واحدة — يبقى في الأرشيف ويُرجَع متى شئت (كلّه بالزر الثاني، أو صفًّا صفًّا من الأرشيف).</p>
+        <div class="diag-bar">
+          <label>قبل تاريخ
+            <input type="datetime-local" id="archiveBefore" dir="ltr">
+          </label>
+          <button class="btn danger" id="btnArchiveBefore">🗄 أرشفة كل ما قبله</button>
+          <button class="btn" id="btnUnarchiveBefore">↩ إرجاع كل ما قبله من الأرشيف</button>
+        </div>
         <div id="foreignZone" class="hidden">
           <p class="hint">بعد نقل الحساب الآخر إلى قاعدته المستقلة تبقى نسخةٌ ميتة من بياناته في قاعدة هذا السستم. احذفها فقط بعد أن ترى بياناته تعمل في سستمه الجديد — الحذف هنا لا رجعة فيه.</p>
           <button class="btn danger" id="btnForeignClean">🧹 حذف بيانات الحساب الآخر من قاعدة هذا السستم</button>
@@ -454,10 +461,6 @@
           <input type="date" id="diagDay" dir="ltr">
         </label>
         <button class="btn" id="btnFetchDay">اجلب هذا اليوم</button>
-      </div>
-      <p class="hint">حوالةُ المحفظة (إيداع/سحب/Pay/تحويل) معرّفها فريد في Binance، فوجودها في الحسابين معًا يعني أنها تسرّبت من أحدهما وتُحسب مرّتين في «الباقي من USDT». الحسابُ الصحيح تعرفه المنصة وحدها: يُسأل كل حساب بمفتاحه، وتبقى الحوالة حيث أرجعها.</p>
-      <div class="diag-bar">
-        <button class="btn" id="btnFindDupes">🔎 ابحث عن حوالات مسجّلة في الحسابين</button>
       </div>
       <p class="hint">أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ يُعرض معرّف الحساب (UID) كما يظهر في تطبيق Binance ← الصفحة الشخصية — فتتأكّد أن المفتاح المحفوظ هنا هو مفتاح الحساب المقصود لا الحساب الآخر.</p>
       <div class="diag-bar">
