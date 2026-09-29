@@ -25,6 +25,13 @@
   --critical: #d03b3b;
 }
 
+/* لكل سستم لونه: P2P بنفسجي، وP3P بالذهبي الافتراضي — فيُعرف الحساب من أول
+   نظرة لا من قراءة العنوان. السمة يضعها app.js على الجذر حين يعرف الحساب. */
+:root[data-account="p2p"] {
+  --accent: #a78bfa;
+  --accent-ink: #14121a;
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -78,7 +85,7 @@ h3 { font-size: 15px; }
 .btn.accent:hover { filter: brightness(1.06); }
 .btn.ghost { background: transparent; }
 .acct-btn { border-color: var(--accent); color: var(--accent); font-weight: 700; }
-.acct-btn:hover { background: rgba(240, 185, 11, 0.12); }
+.acct-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .acct-btn #acctName { font-weight: 700; }
 .btn.danger { background: transparent; color: var(--critical); border-color: var(--critical); }
 .btn.danger:hover { background: rgba(208, 59, 59, 0.12); }
@@ -111,8 +118,8 @@ h3 { font-size: 15px; }
   gap: 16px 24px;
   flex-wrap: wrap;
   padding: 14px 18px;
-  background: linear-gradient(180deg, rgba(240, 185, 11, 0.10), rgba(240, 185, 11, 0.03)), rgba(26, 26, 25, 0.82);
-  border-color: rgba(240, 185, 11, 0.25);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 3%, transparent)), rgba(26, 26, 25, 0.82);
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .wallet-main { display: flex; flex-direction: column; gap: 3px; min-width: 200px; }
 .wallet-label { color: var(--ink-2); font-size: 13px; }
@@ -430,7 +437,7 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .maint-screen {
   position: fixed;
   inset: 0;
-  background: radial-gradient(1200px 600px at 50% -10%, rgba(240, 185, 11, 0.08), transparent), var(--page);
+  background: radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent), var(--page);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -507,7 +514,7 @@ td.editable { padding: 4px 6px; }
 .num-input:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); }
 .num-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
 .num-input.is-edited, td.editable.is-edited { color: var(--accent); }
-.num-input.is-edited { border-color: rgba(240, 185, 11, 0.35); }
+.num-input.is-edited { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 .label-input {
   width: 100%;
   min-width: 60px;
@@ -523,13 +530,13 @@ td.editable { padding: 4px 6px; }
 .label-input:hover { border-color: var(--border); background: var(--surface-2); }
 .label-input:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); }
 .label-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
-.label-input.is-edited { color: var(--accent); border-color: rgba(240, 185, 11, 0.35); }
+.label-input.is-edited { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 
 /* ============ شاشة تسجيل الدخول ============ */
 .login-screen {
   position: fixed;
   inset: 0;
-  background: radial-gradient(1200px 600px at 50% -10%, rgba(240, 185, 11, 0.10), transparent), var(--page);
+  background: radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent) 10%, transparent), transparent), var(--page);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -637,8 +644,8 @@ td.editable { padding: 4px 6px; }
 .detail-annot.saved { border-color: var(--good); }
 
 .settings-note {
-  background: rgba(240, 185, 11, 0.08);
-  border: 1px solid rgba(240, 185, 11, 0.25);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   color: var(--ink-2);
   border-radius: 10px;
   padding: 10px 12px;

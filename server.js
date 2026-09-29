@@ -1409,6 +1409,8 @@ const server = http.createServer(async (req, res) => {
         configured: isConfigured(),
         hasUser: !!(config.auth.user && config.auth.user.hash),
         hasUser2: !!(config.auth.user2 && config.auth.user2.hash),
+        // السستم المقفول يُعلن حسابه قبل الدخول، فتأخذ شاشةُ الدخول لونَه (لكل سستم لونه)
+        account: LOCKED ? { id: LOCKED, name: ACCOUNT_NAMES[LOCKED] } : null,
       });
       return;
     }

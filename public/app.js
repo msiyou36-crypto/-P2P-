@@ -542,7 +542,34 @@ function otherAccountName() {
   const other = state.account.list.find((a) => a.id !== state.account.active);
   return other ? other.name : (state.account.active === 'p2p' ? 'حوالات P3P' : 'حوالات P2P');
 }
+/* لكل سستم لونه: P3P بالذهبي المعتاد، وP2P بالبنفسجي — فيُعرف الحساب من أول
+   نظرة لا من قراءة العنوان. السمة تُوضع على الجذر فتقرؤها التنسيقات، وتتبعها
+   أيقونة التبويب وبيان التطبيق وخلفية الدخول. */
+const ACCOUNT_THEME = {
+  p2p: { accent: '#a78bfa', ink: '#14121a' },   // بنفسجي — أيقوناته باللاحقة «-p2p»
+  p3p: { accent: '#f0b90b', ink: '#1a1a19' },   // الذهبي الأصلي — الأيقونات الأصلية
+};
+function applyAccountTheme(id) {
+  const t = ACCOUNT_THEME[id] || ACCOUNT_THEME.p3p;
+  document.documentElement.dataset.account = ACCOUNT_THEME[id] ? id : '';
+  state.themeAccent = t.accent;
+  const svg = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23" + t.accent.slice(1)
+    + "'/%3E%3Cpath d='M9 20v-8l4 5 3-4 3 4 4-5v8' stroke='%23" + t.ink.slice(1)
+    + "' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E";
+  /* كل ملف أيقونة له نظيرٌ باسمه ولاحقة «-p2p» (favicon.ico → favicon-p2p.ico،
+     icon-192.png → icon-192-p2p.png، وكذلك بيان التطبيق)؛ نحفظ الاسم الأصلي على
+     الوسم مرّةً ونشتقّ منه في كل تبديل، فلا يضيع عند العودة إلى P3P. */
+  const swap = (l) => {
+    if (l.type === 'image/svg+xml') { l.href = svg; return; }
+    const base = l.dataset.base || (l.dataset.base = l.getAttribute('href'));
+    l.href = ACCOUNT_THEME[id] && id !== 'p3p' ? base.replace(/\.(png|ico|webmanifest)$/, '-' + id + '.$1') : base;
+  };
+  $$('link[rel="icon"], link[rel="apple-touch-icon"], link[rel="manifest"]').forEach(swap);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = t.ink;
+}
 function renderAccount() {
+  applyAccountTheme(state.account.active);
   const el = $('#acctName');
   if (el) el.textContent = state.account.name;
   // عنوان الترويسة وتبويب المتصفح يتبعان الحساب النشط
@@ -640,7 +667,7 @@ function stopGlitter() {
 function startLoginGlitter() {
   stopGlitter();
   if (typeof Glitter === 'undefined') return;
-  try { glitterStop = Glitter.mount($('#loginScreen')); } catch {}
+  try { glitterStop = Glitter.mount($('#loginScreen'), { color2: state.themeAccent || '#f0b90b' }); } catch {}
 }
 function startAppGlitter() {
   stopGlitter();
@@ -652,6 +679,7 @@ function startAppGlitter() {
     glitterStop = Glitter.mount(el, {
       particleCount: 90, brightness: 40, trailAmount: 78,
       starSize: 9, speed: 2.5, glitterIntensity: 2, maxDpr: 1,
+      color2: state.themeAccent || '#f0b90b',
     });
   } catch {}
 }
@@ -706,6 +734,13 @@ function applyRole() {
 async function checkAuth() {
   let status;
   try { status = await api('/api/auth/status'); } catch { status = { configured: false }; }
+  // السستم المقفول يُعلن حسابه قبل الدخول، فتأخذ شاشةُ الدخول لونَه واسمه من أول لحظة
+  if (status.account && status.account.id) {
+    applyAccountTheme(status.account.id);
+    const lh = document.querySelector('#loginScreen h1');
+    if (lh) lh.textContent = 'سجل ' + status.account.name;
+    document.title = 'سجل ' + status.account.name;
+  }
   const token = sessionStorage.getItem('p2p_token');
   const role = sessionStorage.getItem('p2p_role');
   if (token && role) {
