@@ -1550,7 +1550,7 @@ const server = http.createServer(async (req, res) => {
       ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'], ['POST', '/api/sync/day'],
       ['POST', '/api/record/move'],
       ['GET', '/api/transfers/dupes'], ['POST', '/api/transfers/reconcile'],
-      ['GET', '/api/system/foreign'], ['DELETE', '/api/system/foreign'],
+      ['GET', '/api/system/foreign'], ['DELETE', '/api/system/foreign'], ['GET', '/api/diag/whoami'],
     ];
     // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
     const ANNOTATE_ROUTES = [
@@ -2057,6 +2057,24 @@ const server = http.createServer(async (req, res) => {
        حوالةُ المحفظة معرّفها فريدٌ في Binance، فلا تكون في حسابين إلا أن تكون
        تسرّبت من أحدهما إلى الآخر. نعرضها هنا، ونؤرشفها في الحساب المفتوح وحده
        بأمرٍ منفصل — أرشفةً لا حذفًا، فتخرج من الجدول والحساب وتبقى قابلة للرجوع. */
+    /* ---------- أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ (للمسؤول) ----------
+       المعرّف UID يظهر في تطبيق Binance (الصفحة الشخصية)، فالمقارنة تحسم إن كان
+       المفتاحُ المحفوظ هنا مفتاحَ الحساب المقصود أو مفتاحَ الحساب الآخر. */
+    if (p === '/api/diag/whoami' && req.method === 'GET') {
+      if (!AC().apiKey || !AC().apiSecret) { sendJSON(res, 400, { error: 'لم يُحفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا' }); return; }
+      const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
+      const offset = await timeOffset(base);
+      const j = await signedGet(base, '/api/v3/account', { omitZeroBalances: 'true' }, offset);
+      const k = AC().apiKey;
+      sendJSON(res, 200, {
+        uid: j.uid != null ? String(j.uid) : '',
+        accountType: String(j.accountType || ''),
+        keyMasked: k.slice(0, 4) + '…' + k.slice(-4),
+        accountName: ACCOUNT_NAMES[config.active],
+      });
+      return;
+    }
+
     /* ---------- بيانات الحساب الآخر في قاعدة هذا السستم (للمسؤول، في السستم المقفول) ----------
        بعد الفصل التام تكون بيانات الحساب الآخر قد نُقلت إلى قاعدته؛ ما بقي منها هنا
        نسخةٌ ميتة: تُعرض أولًا (المفاتيح وعدد صفوفها) ثم تُحذف بأمرٍ صريح لا تلقائيًا.

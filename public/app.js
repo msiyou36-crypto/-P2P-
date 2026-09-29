@@ -953,6 +953,23 @@ async function reconcileDupes(btn) {
   refreshBalance();
 }
 
+/* أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ المعرّف UID يظهر في تطبيق Binance،
+   فالمقارنة تحسم إن كان المفتاح المحفوظ مفتاحَ الحساب المقصود أو الحساب الآخر. */
+async function whoAmI() {
+  const box = $('#diagResult');
+  const btn = $('#btnWhoAmI');
+  btn.disabled = true;
+  box.textContent = '';
+  box.append(diagLine('hint', 'جارٍ سؤال المنصة عن صاحب المفتاح…'));
+  let d;
+  try { d = await api('/api/diag/whoami'); }
+  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); btn.disabled = false; return; }
+  btn.disabled = false;
+  box.textContent = '';
+  box.append(diagLine('diag-ok', `مفتاح هذا السستم («${d.accountName}»، ${d.keyMasked}) يقرأ حساب Binance ذا المعرّف UID: ${d.uid || '—'}`));
+  box.append(diagLine('hint', 'افتح تطبيق Binance ← الصفحة الشخصية (أعلى اليسار) ← UID. إن طابق معرّفَ الحساب المقصود فالمفتاح صحيح؛ وإن طابق الحساب الآخر فالمفتاحان متبادلان.'));
+}
+
 /* حذفُ بيانات الحساب الآخر من قاعدة هذا السستم (بعد الفصل التام): معاينةٌ لما
    سيُحذف بالمفاتيح وعدد صفوفها، ثم تأكيدٌ، ثم كلمةٌ مكتوبة — فالحذف لا رجعة فيه. */
 async function cleanForeign() {
@@ -2956,6 +2973,7 @@ function wireEvents() {
   $('#btnFetchDay').addEventListener('click', fetchOneDay);
   $('#btnFindDupes').addEventListener('click', findDupes);
   $('#btnForeignClean').addEventListener('click', cleanForeign);
+  $('#btnWhoAmI').addEventListener('click', whoAmI);
   $('#btnMaintenance').addEventListener('click', () => { closeMenu(); openMaintenance(); });
   $('#btnSaveMaint').addEventListener('click', saveMaintenance);
   $('#maintLogout').addEventListener('click', doLogout);
