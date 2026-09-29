@@ -126,6 +126,37 @@ function fillChain(evts, last, map, off, ai, r2, st) {
   st.balBrokeRows = (last - hi) + lo;
 }
 
+/* ===== مراسٍ متعدّدة =====
+ * كلُّ مرساةٍ كتبها المستخدم تحكم ما بعدها حتى المرساة التالية: من كل مرساة تُقرأ
+ * السلسلة إلى الأمام بالجمع، ومن أقدمها إلى الوراء بالطرح، وتنقطع عند أول سالبٍ
+ * مستحيل في كل مقطع. مرساتان مختلفتان قد تُظهران قفزةً بينهما — وهي معلومةٌ لا
+ * خلل: فرقٌ لا تفسّره العمليات المحفوظة بينهما. (كان يُحترم أحدثُ مرساةٍ وحدها،
+ * فيضع المستخدم دبّوسًا على صفٍّ ولا يتغيّر شيء لأن دبّوسًا أحدث يحكم — «التثبيت
+ * ما يشتغل».) */
+function fillSegments(evts, last, map, anchors, r2, st) {
+  let unexplained = 0, deepest = 0, brokeAt = 0;
+  const miss = (i, off) => { unexplained++; const v = evts[i].bal - off; if (v < deepest) deepest = v; if (!brokeAt) brokeAt = evts[i].t; };
+  // إلى الوراء من أقدم مرساة
+  const first = anchors[0];
+  let lo = 0;
+  for (let i = first.i; i >= 0; i--) if (evts[i].bal - first.off < -0.02) { lo = i + 1; break; }
+  for (let i = 0; i < lo; i++) miss(i, first.off);
+  for (let i = lo; i < first.i; i++) map.set(evts[i].k, r2(Math.max(evts[i].bal - first.off, 0)));
+  // إلى الأمام من كل مرساة حتى التالية
+  for (let k = 0; k < anchors.length; k++) {
+    const a = anchors[k];
+    const end = k + 1 < anchors.length ? anchors[k + 1].i - 1 : last;
+    let hi = end;
+    for (let i = a.i; i <= end; i++) if (evts[i].bal - a.off < -0.02) { hi = i - 1; break; }
+    for (let i = a.i; i <= hi; i++) map.set(evts[i].k, r2(Math.max(evts[i].bal - a.off, 0)));
+    for (let i = hi + 1; i <= end; i++) miss(i, a.off);
+  }
+  st.balBroke = unexplained > 0;
+  st.balBrokeAt = brokeAt;
+  st.balBrokeMissing = r2(-deepest) || 0;
+  st.balBrokeRows = unexplained;
+}
+
 const anchorValue = (x) => (x.balanceAt != null ? x.balanceAt : (x.zeroPoint ? 0 : null));
 
 function computeBalanceMap() {
@@ -133,12 +164,12 @@ function computeBalanceMap() {
      إن كانت أقدم منها: يرى الدبوس في الجدول والعمود فارغ ولا يفهم لماذا. فإن
      وُجدت مرساةٌ أقدم، نمدّ النافذة إليها — وما لا تفسّره السلسلة يبقى «—». */
   let cutoff = Date.now() - CHAIN_WINDOW_MS;
-  let anchorT = 0;
+  let anchorT = 0;   // أقدمُ مرساة: كل المراسي تُحترم، فالنافذة تمتدّ إلى أقدمها
   for (const o of state.orders) {
-    if (o.orderStatus === 'COMPLETED' && !o.archived && anchorValue(o) != null) anchorT = Math.max(anchorT, o.createTime);
+    if (o.orderStatus === 'COMPLETED' && !o.archived && anchorValue(o) != null) anchorT = anchorT ? Math.min(anchorT, o.createTime) : o.createTime;
   }
   for (const t of state.transfers) {
-    if (t.status === 'COMPLETED' && !t.archived && anchorValue(t) != null && !isInternalKind(t.kind)) anchorT = Math.max(anchorT, t.time);
+    if (t.status === 'COMPLETED' && !t.archived && anchorValue(t) != null && !isInternalKind(t.kind)) anchorT = anchorT ? Math.min(anchorT, t.time) : t.time;
   }
   if (anchorT && anchorT < cutoff) cutoff = anchorT;
   state.balAnchorOld = !!(anchorT && anchorT < Date.now() - CHAIN_WINDOW_MS);
@@ -199,9 +230,11 @@ function computeBalanceMap() {
      وصارت الأصفارُ المثبَّتة قديمًا (صفٌّ كامل منها بعد دخلٍ مفقود) تُكشف
      وتُصلَّح بدل أن تبقى مخلَّدة في القاعدة لا يمسّها شيء. */
   state.balFrozenBroken = false;
+  // زوجٌ يتخلّله دبّوسٌ يدوي لا يُفحص: القفزةُ عند الدبّوس مقصودة لا فاسدة
+  const crossesAnchor = (from, to) => { for (let j = from + 1; j <= to; j++) if (evts[j].at != null) return true; return false; };
   for (let i = 0, pf = -1; i <= last; i++) {
     if (evts[i].frozen == null) continue;
-    if (pf >= 0
+    if (pf >= 0 && !crossesAnchor(pf, i)
       && Math.abs((evts[i].frozen - evts[pf].frozen) - (evts[i].bal - evts[pf].bal)) > 0.02) {
       state.balFrozenBroken = true;
       break;
@@ -235,14 +268,17 @@ function computeBalanceMap() {
     return null;
   };
 
-  let a = null;
-  // ما كتبه المستخدم بيده أوثق من كل شيء: يعرف رصيده، ولا يحتاج منصةً ولا مفتاحًا
-  for (let i = last; i >= 0 && !a; i--) if (evts[i].at != null) a = { i, off: evts[i].bal - evts[i].at };
+  // ما كتبه المستخدم بيده أوثق من كل شيء: يعرف رصيده، ولا يحتاج منصةً ولا مفتاحًا —
+  // وكلُّ دبّوسٍ يُحترم، لا أحدثُها وحده (انظر fillSegments)
+  const anchors = [];
+  for (let i = 0; i <= last; i++) if (evts[i].at != null) anchors.push({ i, off: evts[i].bal - evts[i].at });
+  let a = anchors.length ? anchors[anchors.length - 1] : null;
   for (let i = last; i >= 0 && !a; i--) if (evts[i].frozen != null) a = { i, off: evts[i].bal - evts[i].frozen };
   if (!a) a = snapAnchor(true) || snapAnchor(false);
 
   if (a) {
-    fillChain(evts, last, map, a.off, a.i, r2, state);
+    if (anchors.length) fillSegments(evts, last, map, anchors, r2, state);
+    else fillChain(evts, last, map, a.off, a.i, r2, state);
     /* حدُّ التثبيت: عمليةٌ مضى عليها وقتُ الاستقرار قبل آخر قراءةِ رصيدٍ فقد
        شملتها تلك القراءة يقينًا، فرقمها مؤكَّد ويصلح للتثبيت. وما بعد الحدّ
        امتدادٌ للسلسلة لم تؤكّده قراءة — لا يُثبَّت، وإلّا خلّدنا رقمًا خاطئًا
