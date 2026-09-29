@@ -1424,6 +1424,10 @@ async function* foreignScanGenerator(days) {
   const seenO = new Set(), seenT = new Set();
   const complete = { deposit: false, withdraw: false, pay: false, convert: false };
   const warnings = [];
+  /* آخرُ طلبٍ أرجعته المنصة لهذا الحساب: كل طلبٍ محفوظ بعده ليس من هذا الحساب
+     يقينًا (حسابٌ لم يبع منذ شهرين لا يكون له بيعٌ بالأمس)، وما قبله يُراجَع
+     بحذر لأن المنصة تُغفل طلبًا أحيانًا */
+  let lastO = 0, lastT = 0;
 
   /* ---- طلبات P2P ---- */
   for (const tradeType of ['SELL', 'BUY']) {
@@ -1434,7 +1438,7 @@ async function* foreignScanGenerator(days) {
         const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
           { tradeType, startTimestamp: s, endTimestamp: e, page, rows: 100 }, offset);
         const rows = Array.isArray(j.data) ? j.data : [];
-        for (const raw of rows) seenO.add(String(raw.orderNumber));
+        for (const raw of rows) { seenO.add(String(raw.orderNumber)); lastO = Math.max(lastO, Number(raw.createTime) || 0); }
         if (rows.length < 100 || page >= 60) break;
         page++;
         await sleep(250);
@@ -1447,7 +1451,7 @@ async function* foreignScanGenerator(days) {
     for (const [s, e] of txWindows) {
       yield prog(`الإيداعات: ${dayLabel(s)} ← ${dayLabel(e)}`);
       const arr = await signedGet(base, '/sapi/v1/capital/deposit/hisrec', { startTime: s, endTime: e, limit: 1000 }, offset);
-      for (const raw of (Array.isArray(arr) ? arr : [])) seenT.add(normalizeTransfer(raw, 'deposit').id);
+      for (const raw of (Array.isArray(arr) ? arr : [])) { const t = normalizeTransfer(raw, 'deposit'); seenT.add(t.id); lastT = Math.max(lastT, t.time); }
       await sleep(300);
     }
     complete.deposit = true;
@@ -1455,7 +1459,7 @@ async function* foreignScanGenerator(days) {
       yield prog(`السحوبات: ${dayLabel(s)} ← ${dayLabel(e)}`);
       const arr = await signedGet(base, '/sapi/v1/capital/withdraw/history', { startTime: s, endTime: e, limit: 1000 }, offset);
       await coolIfHeavy(18000);
-      for (const raw of (Array.isArray(arr) ? arr : [])) seenT.add(normalizeTransfer(raw, 'withdraw').id);
+      for (const raw of (Array.isArray(arr) ? arr : [])) { const t = normalizeTransfer(raw, 'withdraw'); seenT.add(t.id); lastT = Math.max(lastT, t.time); }
       await sleep(400);
     }
     complete.withdraw = true;
@@ -1472,7 +1476,7 @@ async function* foreignScanGenerator(days) {
         calls++;
         const j = await signedGet(base, '/sapi/v1/pay/transactions', { startTime: s, endTime: e, limit: PAY_PAGE }, offset);
         const rows = Array.isArray(j.data) ? j.data : [];
-        for (const raw of rows) seenT.add(normalizePay(raw).id);
+        for (const raw of rows) { const t = normalizePay(raw); seenT.add(t.id); lastT = Math.max(lastT, t.time); }
         if (rows.length >= PAY_PAGE && e - s > 60000) { const mid = Math.floor((s + e) / 2); parts.push([mid + 1, e], [s, mid]); }
         await sleep(PAY_GAP_MS);
         await coolIfHeavy(PAY_WEIGHT);
@@ -1487,7 +1491,7 @@ async function* foreignScanGenerator(days) {
     for (const [s, e] of cvtWindows) {
       yield prog(`التحويل Convert: ${dayLabel(s)} ← ${dayLabel(e)}`);
       const j = await signedGet(base, '/sapi/v1/convert/tradeFlow', { startTime: s, endTime: e, limit: 1000 }, offset);
-      for (const raw of (Array.isArray(j.list) ? j.list : [])) seenT.add(normalizeConvert(raw).id);
+      for (const raw of (Array.isArray(j.list) ? j.list : [])) { const t = normalizeConvert(raw); seenT.add(t.id); lastT = Math.max(lastT, t.time); }
       await sleep(1000);
     }
     complete.convert = true;
@@ -1511,6 +1515,7 @@ async function* foreignScanGenerator(days) {
   yield {
     done: true, days, accountName: ACCOUNT_NAMES[config.active],
     fetched: { orders: seenO.size, transfers: seenT.size }, warnings,
+    lastReturned: { order: lastO, transfer: lastT },
     orders: foreignOrders, transfers: foreignTransfers,
   };
 }
@@ -2180,7 +2185,7 @@ const server = http.createServer(async (req, res) => {
        ليُعاد حساب «الباقي». */
     if (p === '/api/diag/foreign-ops' && req.method === 'POST') {
       const body = await readBody(req);
-      const days = Math.min(Math.max(Math.floor(Number(body.days)) || 45, 1), 90);
+      const days = Math.min(Math.max(Math.floor(Number(body.days)) || 45, 1), 400); // حتى سنةٍ ونيّف: التسرّب قد يكون قديمًا
       if (syncRunning) { sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ — انتظر انتهاءها' }); return; }
       syncRunning = true;
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });

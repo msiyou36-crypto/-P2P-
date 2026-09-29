@@ -1008,17 +1008,33 @@ async function foreignScan() {
   if (!rep) return;
   for (const w of rep.warnings || []) box.append(diagLine('diag-bad', '⚠ ' + w));
   const n = rep.orders.length + rep.transfers.length;
+  const lastO = (rep.lastReturned && rep.lastReturned.order) || 0;
   box.append(diagLine('hint', `المنصة أرجعت لمفتاح «${rep.accountName}» في آخر ${fmt0(rep.days)} يومًا: ${fmt0(rep.fetched.orders)} طلبًا و${fmt0(rep.fetched.transfers)} حوالة.`));
   if (!n) { box.append(diagLine('diag-ok', 'كل ما هو محفوظ هنا في هذه الفترة أرجعته المنصة لهذا الحساب ✓ — لا شيء غريب.')); return; }
-  box.append(diagLine('diag-bad', `${fmt0(n)} عملية محفوظة هنا لم تُرجعها المنصة لهذا الحساب — راجعها، وأزل التحديد عمّا تعرف أنه لهذا الحساب فعلًا (المنصة تُغفل أحيانًا طلب P2P)، ثم احذف الباقي.`));
+  /* آخر طلبٍ أرجعته المنصة هو الحدّ الفاصل: ما بعده محفوظٌ هنا وليس من هذا الحساب
+     يقينًا فيُحدَّد تلقائيًا؛ وما قبله قد يكون طلبًا أصليًا أغفلته المنصة فيُترك
+     للمراجعة بلا تحديد. الحوالات تُرجعها المنصة كاملةً فتُحدَّد كلها. */
+  const sureO = rep.orders.filter((o) => o.time > lastO).length;
+  if (lastO) box.append(diagLine('hint', `آخر طلب P2P أرجعته المنصة لهذا الحساب: ${fmtDT(lastO)} — كل طلبٍ محفوظ بعده ليس من هذا الحساب يقينًا (${fmt0(sureO)} طلبًا، محدَّدة تلقائيًا). ما قبله (${fmt0(rep.orders.length - sureO)}) اتركه إلا إن كنت متأكدًا.`));
+  const byMonth = {};
+  for (const x of [...rep.orders, ...rep.transfers]) { const m = fmtDT(x.time).slice(0, 7); byMonth[m] = (byMonth[m] || 0) + 1; }
+  box.append(diagLine('hint', 'توزيعها بالشهر: ' + Object.entries(byMonth).sort((a, b) => b[0].localeCompare(a[0])).map(([m, c]) => `${m} ×${fmt0(c)}`).join(' · ')));
+  box.append(diagLine('diag-bad', `${fmt0(n)} عملية محفوظة هنا لم تُرجعها المنصة لهذا الحساب — راجع القائمة، ثم احذف المحدَّد.`));
+  const ctl = document.createElement('div');
+  ctl.className = 'diag-bar';
+  const bAll = document.createElement('button'); bAll.className = 'btn small'; bAll.textContent = 'حدّد الكل';
+  const bNone = document.createElement('button'); bNone.className = 'btn small'; bNone.textContent = 'أزل التحديد';
+  const bSure = document.createElement('button'); bSure.className = 'btn small'; bSure.textContent = 'المؤكَّد فقط';
+  ctl.append(bSure, bAll, bNone);
+  box.append(ctl);
   const list = document.createElement('div');
   list.className = 'foreign-list';
   const boxes = [];
-  const addItem = (kind, it, label) => {
+  const addItem = (kind, it, label, checked) => {
     const lab = document.createElement('label');
     lab.className = 'foreign-item';
     const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = true; cb.dataset.kind = kind; cb.dataset.id = it.id;
+    cb.type = 'checkbox'; cb.checked = checked; cb.dataset.kind = kind; cb.dataset.id = it.id; cb.dataset.sure = checked ? '1' : '';
     const span = document.createElement('span'); span.textContent = label;
     lab.append(cb, span);
     list.append(lab);
@@ -1027,10 +1043,11 @@ async function foreignScan() {
   const KIND_AR = { deposit: 'إيداع', withdraw: 'سحب', 'pay-in': 'استلام Pay', 'pay-out': 'إرسال Pay', 'convert-in': 'تحويل →USDT', 'convert-out': 'تحويل USDT→' };
   const SRC_AR = { binance: 'من المزامنة', import: 'من ملف مستورد', manual: 'إضافة يدوية' };
   for (const o of rep.orders) {
-    addItem('order', o, `${fmtDT(o.time)} — ${o.tradeType === 'SELL' ? 'بيع' : 'شراء'} ${fmt2(o.amount)} USDT @ ${fmt2p(o.unitPrice)} ${o.fiat || ''} = ${fmt2p(o.totalPrice)} — ${o.counterPart || '—'}${o.reference ? ' — إشاري: ' + o.reference : ''} (${SRC_AR[o.source] || o.source || ''})`);
+    const sure = o.time > lastO;
+    addItem('order', o, `${fmtDT(o.time)} — ${o.tradeType === 'SELL' ? 'بيع' : 'شراء'} ${fmt2(o.amount)} USDT @ ${fmt2p(o.unitPrice)} ${o.fiat || ''} = ${fmt2p(o.totalPrice)} — ${o.counterPart || '—'}${o.reference ? ' — إشاري: ' + o.reference : ''} (${SRC_AR[o.source] || o.source || ''})${sure ? '' : ' — ؟ قبل آخر طلبٍ أرجعته المنصة'}`, sure);
   }
   for (const t of rep.transfers) {
-    addItem('transfer', t, `${fmtDT(t.time)} — ${KIND_AR[t.kind] || t.kind} ${fmt2(t.amount)} ${t.coin || 'USDT'} ${t.network ? '(' + t.network + ')' : ''}${t.counterPart ? ' — ' + t.counterPart : ''}${t.reference ? ' — إشاري: ' + t.reference : ''} (${SRC_AR[t.source] || t.source || ''})`);
+    addItem('transfer', t, `${fmtDT(t.time)} — ${KIND_AR[t.kind] || t.kind} ${fmt2(t.amount)} ${t.coin || 'USDT'} ${t.network ? '(' + t.network + ')' : ''}${t.counterPart ? ' — ' + t.counterPart : ''}${t.reference ? ' — إشاري: ' + t.reference : ''} (${SRC_AR[t.source] || t.source || ''})`, true);
   }
   box.append(list);
   const act = document.createElement('button');
@@ -1038,6 +1055,9 @@ async function foreignScan() {
   act.style.cssText = 'display:block; margin-top:10px;';
   const refresh = () => { const c = boxes.filter((b) => b.checked).length; act.textContent = `🗑 احذف المحدّدة (${fmt0(c)}) من «${rep.accountName}»`; act.disabled = !c; };
   boxes.forEach((b) => b.addEventListener('change', refresh));
+  bAll.addEventListener('click', () => { boxes.forEach((b) => { b.checked = true; }); refresh(); });
+  bNone.addEventListener('click', () => { boxes.forEach((b) => { b.checked = false; }); refresh(); });
+  bSure.addEventListener('click', () => { boxes.forEach((b) => { b.checked = !!b.dataset.sure; }); refresh(); });
   refresh();
   act.addEventListener('click', () => {
     const sel = boxes.filter((b) => b.checked);
