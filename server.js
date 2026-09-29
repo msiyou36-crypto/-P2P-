@@ -1354,12 +1354,61 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
 };
 
-function serveStatic(res, urlPath) {
+/* ===== صفحةُ الدخول بلون السستم من الخادم نفسه =====
+ * معاينةُ الرابط في واتساب وأمثاله تقرأ HTML كما يصل من الخادم بلا تشغيل
+ * JavaScript، فكانت ترى الأيقونة الذهبية والعنوان الافتراضي مهما كان السستم.
+ * فالخادم يكتب في الصفحة عنوانَ السستم وأيقوناته ووسومَ Open Graph (بصورةٍ
+ * برابطٍ مطلق) وسمةَ الحساب على الجذر — فلا وميضَ ذهبي قبل أن يعمل JavaScript. */
+const THEME_HTML = {
+  p2p: { accent: '8e1f3f', ink: 'fbeef2', suffix: '-p2p' },
+  p3p: { accent: 'f0b90b', ink: '1a1a19', suffix: '' },
+};
+function renderIndex(html, req) {
+  const acct = LOCKED || 'p3p';
+  const t = THEME_HTML[acct] || THEME_HTML.p3p;
+  const name = 'سجل ' + ACCOUNT_NAMES[LOCKED || 'p2p'];
+  const proto = String(req.headers['x-forwarded-proto'] || (process.env.PORT ? 'https' : 'http')).split(',')[0].trim();
+  const host = String(req.headers.host || 'localhost');
+  const origin = proto + '://' + host;
+  let out = html
+    .replace('<html lang="ar" dir="rtl">', `<html lang="ar" dir="rtl" data-account="${acct}">`)
+    .replace(/<title>[^<]*<\/title>/, `<title>${name}</title>`)
+    .replace('%23f0b90b', '%23' + t.accent).replace('%231a1a19', '%23' + t.ink);
+  if (t.suffix) {
+    out = out
+      .replace('href="favicon.ico"', `href="favicon${t.suffix}.ico"`)
+      .replace('href="icon-192.png"', `href="icon-192${t.suffix}.png"`)
+      .replace('href="icon-512.png"', `href="icon-512${t.suffix}.png"`)
+      .replace('href="apple-touch-icon.png"', `href="apple-touch-icon${t.suffix}.png"`)
+      .replace('href="manifest.webmanifest"', `href="manifest${t.suffix}.webmanifest"`);
+  }
+  const og = [
+    `<meta property="og:type" content="website">`,
+    `<meta property="og:site_name" content="${name}">`,
+    `<meta property="og:title" content="${name}">`,
+    `<meta property="og:description" content="سجل عمليات Binance P2P والإيداع والسحب">`,
+    `<meta property="og:url" content="${origin}/">`,
+    `<meta property="og:image" content="${origin}/icon-512${t.suffix}.png">`,
+    `<meta property="og:image:width" content="512">`,
+    `<meta property="og:image:height" content="512">`,
+    `<meta name="twitter:card" content="summary">`,
+    `<meta name="twitter:image" content="${origin}/icon-512${t.suffix}.png">`,
+  ].join('\n');
+  return out.replace('<link rel="stylesheet" href="style.css">', og + '\n<link rel="stylesheet" href="style.css">');
+}
+
+function serveStatic(res, urlPath, req) {
   const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
   const file = path.normalize(path.join(PUB, rel));
   if (!file.startsWith(PUB)) { res.writeHead(403); res.end(); return; }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('غير موجود'); return; }
+    if (rel === 'index.html' && req) {
+      // الصفحة تُبنى لكل طلب وبلا تخزين، فيرى المتصفّح والمعاينةُ السستمَ الصحيح دائمًا
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(renderIndex(buf.toString('utf8'), req));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
     res.end(buf);
   });
@@ -1374,7 +1423,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (!p.startsWith('/api/')) {
       if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
-      serveStatic(res, p);
+      serveStatic(res, p, req);
       return;
     }
 
