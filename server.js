@@ -120,7 +120,12 @@ async function migrateFromSource() {
   if (!LOCKED || !MIGRATE_DB || !USE_SUPABASE) return;
   if (MIGRATE_DB.url === SB_URL) { console.log('MIGRATE_FROM_URL هي قاعدة السستم نفسها — لا شيء يُنقل'); return; }
   try {
-    if (await sbGet(CONFIG_KEY, null) != null) return; // القاعدة الجديدة مأهولة: نُقل من قبل
+    /* «مأهولة» تعني فيها حوالات، لا مجرّد إعدادات أو طلبات: إقلاعٌ سابق بلا
+       متغيّرات النقل يزرع config__X فارغًا وطلبَي الإصلاح اليدويَّين في orders__X،
+       فلو اكتفينا بوجود المفتاح لظنّ النقلُ أن عمله تمّ ولم يُنقل شيء. الحوالات
+       لا تُزرع أبدًا، فوجودها هو الدليل الوحيد على نقلٍ سابق. */
+    const t = await sbGet('transfers__' + LOCKED, null);
+    if (t && typeof t === 'object' && Object.keys(t).length) return; // نُقل من قبل
     const keys = (await sbList(MIGRATE_DB)).filter((k) => mineKey(k, LOCKED));
     let copied = 0;
     for (const k of keys) {
