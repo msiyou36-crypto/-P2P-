@@ -891,6 +891,51 @@ async function coolIfHeavy(cost) {
   }
 }
 
+/* ===== جلبُ طلبات P2P بنوافذ تنشطر =====
+ * نقطة listUserOrderHistory تُرجع مئة صفٍّ للطلب، والترقيمُ بالصفحات لا يُعوَّل
+ * عليه: الصفحةُ التالية قد تُعيد الصفحةَ نفسها. كان الجلب يأخذ المئة ويمضي، فتضيع
+ * أيامٌ كاملة من المبيعات ويعيش صاحب الدفتر على ملفات CSV يومية. الآن: إن امتلأت
+ * الصفحة ولم تأتِ التالية بجديد، تُشطر النافذة نصفين ويُعاد السؤال — حتى تعود
+ * الصفحة ناقصةً فنعلم يقينًا أننا استوعبنا كل ما فيها. onRaw يُستدعى لكل طلبٍ
+ * مرّةً واحدة؛ trace (اختياري) يسجّل كل طلبٍ للفحص. */
+const C2C_MIN_WIN = 15 * 60000;
+const C2C_MAX_CALLS = 400;
+async function fetchC2C(base, offset, tradeType, s, e, onRaw, trace) {
+  const stack = [[s, e]];
+  const seen = new Set();
+  let calls = 0, truncated = false;
+  while (stack.length) {
+    if (calls >= C2C_MAX_CALLS) { truncated = true; break; }
+    const [ws, we] = stack.pop();
+    let page = 1, full = false;
+    for (;;) {
+      calls++;
+      const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
+        { tradeType, startTimestamp: ws, endTimestamp: we, page, rows: 100 }, offset);
+      const rows = Array.isArray(j.data) ? j.data : [];
+      let fresh = 0;
+      for (const raw of rows) {
+        const id = String(raw.orderNumber || '');
+        if (!id || seen.has(id)) continue;
+        seen.add(id); fresh++;
+        onRaw(raw);
+      }
+      if (trace) trace.push({ type: tradeType, from: ws, to: we, page, rows: rows.length, total: j.total != null ? Number(j.total) : null, fresh });
+      full = rows.length >= 100;
+      if (!full || !fresh || page >= 60 || calls >= C2C_MAX_CALLS) break;
+      page++;
+      await sleep(250);
+    }
+    // صفحةٌ ممتلئة انتهت بلا جديد: لا نثق أن النافذة استُوعبت — نشطرها
+    if (full) {
+      if (we - ws > C2C_MIN_WIN) { const mid = Math.floor((ws + we) / 2); stack.push([mid + 1, we], [ws, mid]); }
+      else truncated = true;
+    }
+    await sleep(200);
+  }
+  return { count: seen.size, calls, truncated };
+}
+
 /**
  * مزامنة شاملة: طلبات P2P (بيع/شراء) + سجل الإيداع + سجل السحب، على نوافذ زمنية،
  * وتبثّ تقدّم العملية سطرًا-بسطر (NDJSON). أي بيانات جُلبت تُحفظ حتى لو فشلت
@@ -928,25 +973,13 @@ async function* syncGenerator() {
       const label = tradeType === 'SELL' ? 'مبيعات' : 'مشتريات';
       for (const [s, e] of p2pWindows) {
         yield prog(`جلب ${label} P2P: ${dayLabel(s)} ← ${dayLabel(e)}`);
-        let page = 1;
-        const seenHere = new Set(); // صفحةٌ لا تأتي بطلبٍ جديد: الترقيم متجاهَل، فلا نكرّر الطلب ستين مرة
-        for (;;) {
-          const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
-            { tradeType, startTimestamp: s, endTimestamp: e, page, rows: 100 }, offset);
-          const rows = Array.isArray(j.data) ? j.data : [];
-          const before = seenHere.size;
-          for (const raw of rows) {
-            seenHere.add(String(raw.orderNumber));
-            const r = upsertOrder(normalizeOrder(raw, 'binance'));
-            if (r === 'added') added++;
-            else if (r === 'updated') updated++;
-          }
-          fetched += rows.length;
-          if (rows.length < 100 || page >= 60 || seenHere.size === before) break;
-          page++;
-          await sleep(250);
-        }
-        await sleep(200);
+        const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => {
+          const r = upsertOrder(normalizeOrder(raw, 'binance'));
+          if (r === 'added') added++;
+          else if (r === 'updated') updated++;
+        });
+        fetched += got.count;
+        if (got.truncated) yield { msg: `⚠ ${label} P2P ${dayLabel(s)} ← ${dayLabel(e)}: المنصة تُرجع مئةً فقط في كل سؤال ولم تكفِ القسمة — قد تبقى طلبات لم تصل`, pct: null };
       }
     }
 
@@ -1143,30 +1176,15 @@ async function* foreignScanGenerator(days) {
      بالتقرير: مئةٌ بالضبط في تسعين يومًا لحسابٍ يبيع كل يوم معناها أن الترقيم لا
      يعمل أو أن النافذة تُتجاهل — ولا يُحكم على شيءٍ قبل رؤية الأثر. */
   const calls = [];
+  let truncated = false;
   for (const tradeType of ['SELL', 'BUY']) {
     for (const [s, e] of p2pWindows) {
       yield prog(`طلبات ${tradeType === 'SELL' ? 'البيع' : 'الشراء'}: ${dayLabel(s)} ← ${dayLabel(e)}`);
-      let page = 1;
-      for (;;) {
-        const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
-          { tradeType, startTimestamp: s, endTimestamp: e, page, rows: 100 }, offset);
-        const rows = Array.isArray(j.data) ? j.data : [];
-        const before = seenO.size;
-        let oldest = 0, newest = 0;
-        for (const raw of rows) {
-          seenO.add(String(raw.orderNumber));
-          const t = Number(raw.createTime) || 0;
-          lastO = Math.max(lastO, t);
-          oldest = oldest ? Math.min(oldest, t) : t; newest = Math.max(newest, t);
-        }
-        const fresh = seenO.size - before;
-        calls.push({ type: tradeType, from: s, to: e, page, rows: rows.length, total: j.total != null ? Number(j.total) : null, fresh, oldest, newest });
-        // صفحةٌ لا تأتي بجديد: الترقيم متجاهَل — لا نُعيد الطلب نفسه ستين مرة
-        if (rows.length < 100 || page >= 60 || !fresh) break;
-        page++;
-        await sleep(250);
-      }
-      await sleep(200);
+      const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => {
+        seenO.add(String(raw.orderNumber));
+        lastO = Math.max(lastO, Number(raw.createTime) || 0);
+      }, calls);
+      if (got.truncated) truncated = true;
     }
   }
   /* ---- الإيداع والسحب ---- */
@@ -1239,7 +1257,7 @@ async function* foreignScanGenerator(days) {
     done: true, days, accountName: ACCOUNT_NAMES[config.active],
     fetched: { orders: seenO.size, transfers: seenT.size }, warnings,
     lastReturned: { order: lastO, transfer: lastT },
-    calls,
+    calls, truncated,
     orders: foreignOrders, transfers: foreignTransfers,
   };
 }
@@ -1867,17 +1885,8 @@ const server = http.createServer(async (req, res) => {
       };
       try {
         for (const tradeType of ['SELL', 'BUY']) {
-          let page = 1;
-          for (;;) {
-            const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
-              { tradeType, startTimestamp: s, endTimestamp: e, page, rows: 100 }, offset);
-            const rows = rowsOf(j, 'data');
-            take('p2p', rows, (raw) => normalizeOrder(raw, 'binance'), true);
-            if (rows.length < 100 || page >= 20) break;
-            page++;
-            await sleep(250);
-          }
-          await sleep(250);
+          const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => take('p2p', [raw], (r) => normalizeOrder(r, 'binance'), true));
+          if (got.truncated) skipped.push('p2p: المنصة تُرجع مئةً فقط في كل سؤال ولم تكفِ القسمة — قد تبقى طلبات لم تصل');
         }
         take('deposit', rowsOf(await signedGet(base, '/sapi/v1/capital/deposit/hisrec',
           { startTime: s, endTime: e, offset: 0, limit: 1000 }, offset)), (raw) => normalizeTransfer(raw, 'deposit'), false);

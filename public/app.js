@@ -881,8 +881,7 @@ async function foreignScan() {
   /* أثرُ الجلب: يكشف إن كانت المنصة تُرجع مئةً فقط ثم تتجاهل الصفحات أو النوافذ —
      وعندها القائمة أدناه ليست حكمًا، فلا يُحذف منها شيء قبل الفهم */
   const calls = rep.calls || [];
-  const truncated = calls.some((c) => c.rows >= 100 && !calls.some((d) => d !== c && d.type === c.type && d.from === c.from && d.page === c.page + 1 && d.fresh > 0));
-  if (truncated) box.append(diagLine('diag-bad', '⚠ المنصة أرجعت صفحةً ممتلئة (١٠٠ طلب) ولم تأتِ الصفحةُ التالية بجديد — الجلب مبتور، وقائمة الطلبات أدناه ليست موثوقة. لا تحذف منها شيئًا وأرسل «تفاصيل الجلب» لي.'));
+  if (rep.truncated) box.append(diagLine('diag-bad', '⚠ المنصة تُرجع مئة طلب فقط في كل سؤال ولم تكفِ قسمةُ الفترة لاستيعابها كلها — الجلب مبتور، وقائمة الطلبات أدناه ليست موثوقة. لا تحذف منها شيئًا وأرسل «تفاصيل الجلب» لي.'));
   if (calls.length) {
     const det = document.createElement('details');
     det.className = 'danger-zone';
