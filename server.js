@@ -900,41 +900,53 @@ async function coolIfHeavy(cost) {
  * مرّةً واحدة؛ trace (اختياري) يسجّل كل طلبٍ للفحص. */
 const C2C_MIN_WIN = 15 * 60000;
 const C2C_MAX_CALLS = 400;
+const C2C_SLACK = 6 * 3600000;   // هامشٌ لو رتّبت المنصة بوقت الإكمال لا الإنشاء
+/* متى تُعدّ النافذة مستوعَبة؟ حين تنتهي بصفحةٍ ناقصةٍ غير فارغة تأتي بجديد (أو حين
+ * تكون صفحتها الأولى ناقصة). صفحةٌ ممتلئة تلتها صفحةٌ مكرّرة أو فارغة لا تثبت شيئًا:
+ * قد يكون وراءها طلبات لا تُعطيها المنصة — فنشطر النافذة. وإن كانت صفوفها خارج
+ * الفترة المطلوبة فالمنصة تُهمل الفترة أصلًا وتُرجع أحدث مئةٍ دائمًا، فلا تنفع
+ * القسمة ونتوقف بدل أن نستهلك مئات الطلبات بلا طائل (windowsIgnored). */
 async function fetchC2C(base, offset, tradeType, s, e, onRaw, trace) {
   const stack = [[s, e]];
   const seen = new Set();
-  let calls = 0, truncated = false;
+  let calls = 0, truncated = false, windowsIgnored = false;
   while (stack.length) {
     if (calls >= C2C_MAX_CALLS) { truncated = true; break; }
     const [ws, we] = stack.pop();
-    let page = 1, full = false;
+    let page = 1, ended = false;
     for (;;) {
       calls++;
       const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
         { tradeType, startTimestamp: ws, endTimestamp: we, page, rows: 100 }, offset);
       const rows = Array.isArray(j.data) ? j.data : [];
-      let fresh = 0;
+      let fresh = 0, outside = 0;
       for (const raw of rows) {
+        const t = Number(raw.createTime) || 0;
+        if (t && (t < ws - C2C_SLACK || t > we + C2C_SLACK)) outside++;
         const id = String(raw.orderNumber || '');
         if (!id || seen.has(id)) continue;
         seen.add(id); fresh++;
         onRaw(raw);
       }
-      if (trace) trace.push({ type: tradeType, from: ws, to: we, page, rows: rows.length, total: j.total != null ? Number(j.total) : null, fresh });
-      full = rows.length >= 100;
-      if (!full || !fresh || page >= 60 || calls >= C2C_MAX_CALLS) break;
+      if (trace) trace.push({ type: tradeType, from: ws, to: we, page, rows: rows.length, total: j.total != null ? Number(j.total) : null, fresh, outside });
+      if (rows.length >= 20 && outside * 2 > rows.length) { windowsIgnored = true; break; }
+      if (rows.length < 100) { ended = page === 1 || (rows.length > 0 && fresh > 0); break; }
+      if (!fresh || page >= 60 || calls >= C2C_MAX_CALLS) break;
       page++;
       await sleep(250);
     }
-    // صفحةٌ ممتلئة انتهت بلا جديد: لا نثق أن النافذة استُوعبت — نشطرها
-    if (full) {
+    if (windowsIgnored) { truncated = true; break; }
+    if (!ended) {
       if (we - ws > C2C_MIN_WIN) { const mid = Math.floor((ws + we) / 2); stack.push([mid + 1, we], [ws, mid]); }
       else truncated = true;
     }
     await sleep(200);
   }
-  return { count: seen.size, calls, truncated };
+  return { count: seen.size, calls, truncated, windowsIgnored };
 }
+const c2cWarn = (g) => (g.windowsIgnored
+  ? 'المنصة تُهمل الفترة المحدَّدة وتُرجع أحدث ١٠٠ طلب فقط — لا تُجدي القسمة، فزامن قبل أن يتراكم أكثر من مئة طلبٍ بين مزامنتين'
+  : 'المنصة تُرجع مئةً فقط في كل سؤال ولم تكفِ القسمة — قد تبقى طلبات لم تصل');
 
 /**
  * مزامنة شاملة: طلبات P2P (بيع/شراء) + سجل الإيداع + سجل السحب، على نوافذ زمنية،
@@ -979,7 +991,7 @@ async function* syncGenerator() {
           else if (r === 'updated') updated++;
         });
         fetched += got.count;
-        if (got.truncated) yield { msg: `⚠ ${label} P2P ${dayLabel(s)} ← ${dayLabel(e)}: المنصة تُرجع مئةً فقط في كل سؤال ولم تكفِ القسمة — قد تبقى طلبات لم تصل`, pct: null };
+        if (got.truncated) yield { msg: `⚠ ${label} P2P ${dayLabel(s)} ← ${dayLabel(e)}: ${c2cWarn(got)}`, pct: null };
       }
     }
 
@@ -1176,7 +1188,7 @@ async function* foreignScanGenerator(days) {
      بالتقرير: مئةٌ بالضبط في تسعين يومًا لحسابٍ يبيع كل يوم معناها أن الترقيم لا
      يعمل أو أن النافذة تُتجاهل — ولا يُحكم على شيءٍ قبل رؤية الأثر. */
   const calls = [];
-  let truncated = false;
+  let truncated = false, windowsIgnored = false;
   for (const tradeType of ['SELL', 'BUY']) {
     for (const [s, e] of p2pWindows) {
       yield prog(`طلبات ${tradeType === 'SELL' ? 'البيع' : 'الشراء'}: ${dayLabel(s)} ← ${dayLabel(e)}`);
@@ -1185,6 +1197,7 @@ async function* foreignScanGenerator(days) {
         lastO = Math.max(lastO, Number(raw.createTime) || 0);
       }, calls);
       if (got.truncated) truncated = true;
+      if (got.windowsIgnored) windowsIgnored = true;
     }
   }
   /* ---- الإيداع والسحب ---- */
@@ -1257,7 +1270,7 @@ async function* foreignScanGenerator(days) {
     done: true, days, accountName: ACCOUNT_NAMES[config.active],
     fetched: { orders: seenO.size, transfers: seenT.size }, warnings,
     lastReturned: { order: lastO, transfer: lastT },
-    calls, truncated,
+    calls, truncated, windowsIgnored,
     orders: foreignOrders, transfers: foreignTransfers,
   };
 }
@@ -1886,7 +1899,7 @@ const server = http.createServer(async (req, res) => {
       try {
         for (const tradeType of ['SELL', 'BUY']) {
           const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => take('p2p', [raw], (r) => normalizeOrder(r, 'binance'), true));
-          if (got.truncated) skipped.push('p2p: المنصة تُرجع مئةً فقط في كل سؤال ولم تكفِ القسمة — قد تبقى طلبات لم تصل');
+          if (got.truncated) skipped.push('p2p: ' + c2cWarn(got));
         }
         take('deposit', rowsOf(await signedGet(base, '/sapi/v1/capital/deposit/hisrec',
           { startTime: s, endTime: e, offset: 0, limit: 1000 }, offset)), (raw) => normalizeTransfer(raw, 'deposit'), false);
