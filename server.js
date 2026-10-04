@@ -362,17 +362,22 @@ function roleOf(req) {
   return s ? s.role : null;
 }
 
-/** سجل الدخول: آخر عمليات الدخول (الدور + الوقت + IP) — يراه المسؤول فقط */
+/** سجل الدخول: آخر عمليات الدخول (الدور + الوقت + IP) — يراه المسؤول فقط.
+ *  يُسجَّل فيه أيضًا كلُّ ما يُثقل على المنصة (مزامنة كاملة، فحص، جلب يوم) بمن
+ *  شغّله ومتى: حظرٌ «بلا مزامنة» يُفسَّر من هنا — مستخدمٌ آخر زامن، أو جُلب يومٌ
+ *  مرارًا — لا بالتخمين. */
 let loginLog = [];
 const LOGIN_LOG_MAX = 300;
-function recordLogin(role, req) {
+function recordLogin(role, req, kind = 'login') {
   let ip = '';
   try {
     ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
       || (req.socket && req.socket.remoteAddress) || '';
     ip = ip.replace(/^::ffff:/, '');
   } catch {}
-  loginLog.push({ role, time: Date.now(), ip });
+  const ev = { role, time: Date.now(), ip };
+  if (kind !== 'login') ev.kind = kind;
+  loginLog.push(ev);
   if (loginLog.length > LOGIN_LOG_MAX) loginLog = loginLog.slice(-LOGIN_LOG_MAX);
   // حفظ غير معطِّل للاستجابة (الدخول نادر)
   saveStore(sysKey('loginlog'), loginLog).catch(() => {});
@@ -810,7 +815,28 @@ function upsertTransfer(t, map = transfers) {
 
 function userError(message) { const e = new Error(message); e.isUser = true; return e; }
 
+/* ===== بوّابة الحظر =====
+ * ردُّ 429/418 معناه: كفّ عن الطلب حتى يرفع العنوانُ الحظر. الاستمرارُ بعده — ولو
+ * بطلب رصيدٍ عند كل فتح صفحة، أو بمزامنةٍ من مستخدمٍ آخر — هو ما يحوّل 429 إلى
+ * 418 ويُطيل 418 (المنصة تُضاعف مدّة الحظر لمن يُعاود). فبعد أول ردٍّ منهما يُغلق
+ * الخادمُ كلَّ طلبٍ إلى المنصة من كل المستخدمين حتى ينقضي Retry-After الذي
+ * تُرسله المنصة (أو ٣٠ دقيقة لـ418 ودقيقتان لـ429 إن لم تُرسله). */
+let binanceBlockedUntil = 0;
+const banLeft = () => Math.max(0, binanceBlockedUntil - Date.now());
+const banMessage = (left) => `المنصة حظرت هذا العنوان مؤقتًا — أُوقفت كل الطلبات إليها حتى ينقضي الحظر (بقي ${Math.ceil(left / 60000)} دقيقة)؛ التكرار يُطيله`;
+function gateBinance() {
+  const left = banLeft();
+  if (left > 0) throw userError(banMessage(left));
+}
+function noteBan(r) {
+  const ra = Number(r.headers.get('retry-after'));
+  const secs = Number.isFinite(ra) && ra > 0 ? ra : (r.status === 418 ? 1800 : 120);
+  binanceBlockedUntil = Math.max(binanceBlockedUntil, Date.now() + secs * 1000);
+  console.error(`المنصة ردّت HTTP ${r.status} — أُغلقت الطلبات إلى المنصة ${Math.ceil(secs / 60)} دقيقة`);
+}
+
 async function timeOffset(base) {
+  gateBinance();
   let r;
   try {
     r = await fetch(base + '/api/v3/time', { signal: AbortSignal.timeout(15000) });
@@ -821,7 +847,8 @@ async function timeOffset(base) {
     throw userError('الوصول إلى المنصة محجوب من هذه المنطقة (HTTP ' + r.status + ') — جرّب VPN أو غيّر عنوان الخادم من الإعدادات');
   }
   if (r.status === 429 || r.status === 418) {
-    throw userError('المنصة حظرت الطلبات مؤقتًا بسبب كثرتها (HTTP ' + r.status + ') — أوقف المزامنة وانتظر ٣٠ دقيقة على الأقل قبل إعادة المحاولة، ولا تكرّر الضغط فالتكرار يُطيل الحظر');
+    noteBan(r);
+    throw userError('المنصة حظرت الطلبات مؤقتًا بسبب كثرتها (HTTP ' + r.status + ') — أُوقفت كل الطلبات إليها تلقائيًا حتى ينقضي الحظر؛ لا تكرّر الضغط فالتكرار يُطيله');
   }
   if (!r.ok) throw userError('استجابة غير متوقعة من المنصة (HTTP ' + r.status + ')');
   const j = await r.json();
@@ -839,16 +866,21 @@ async function signedGet(base, endpoint, params, offset, method = 'GET', acct = 
   const signature = crypto.createHmac('sha256', ac.apiSecret).update(qs.toString()).digest('hex');
   const url = base + endpoint + '?' + qs.toString() + '&signature=' + signature;
 
+  gateBinance();
   let r;
   try {
     r = await fetch(url, { method, headers: { 'X-MBX-APIKEY': ac.apiKey }, signal: AbortSignal.timeout(30000) });
   } catch {
     throw userError('انقطع الاتصال أثناء الجلب — أعد المحاولة');
   }
-  /* المنصة تُخبرنا في كل ردٍّ بما استهلكناه من حدّ الدقيقة. قراءتُه تُغني عن
-     التخمين: نتمهّل قبل بلوغ الحدّ بدل أن نصطدم به فنُحظر (انظر coolIfHeavy). */
+  /* المنصة تُخبرنا في كل ردٍّ بما استهلكناه من حدّ الدقيقة — على الحساب (UID) وعلى
+     العنوان (IP) معًا. قراءتُهما تُغني عن التخمين: نتمهّل قبل بلوغ أيّ الحدّين بدل
+     أن نصطدم به فنُحظر (انظر coolIfHeavy). */
   const uw = Number(r.headers.get('x-sapi-used-uid-weight-1m'));
   if (Number.isFinite(uw) && uw > 0) lastUidWeight = uw;
+  const iw = Number(r.headers.get('x-sapi-used-ip-weight-1m'));
+  if (Number.isFinite(iw) && iw > 0) lastIpWeight = iw;
+  if (r.status === 429 || r.status === 418) noteBan(r);
   const text = await r.text();
   let j = null;
   try { j = JSON.parse(text); } catch {}
@@ -858,7 +890,7 @@ async function signedGet(base, endpoint, params, offset, method = 'GET', acct = 
     if (code === -2014 || code === -2015) throw userError('المنصة رفضت مفتاح API — تأكّد من صحة المفتاح ومن تفعيل صلاحية «إتاحة القراءة»');
     if (code === -1022) throw userError('التوقيع غير صحيح — تأكّد من المفتاح السري (Secret Key)');
     if (code === -1021) throw userError('فرق توقيت بين جهازك والمنصة — أعد المحاولة، وإن تكرر اضبط ساعة الجهاز');
-    if (r.status === 429 || r.status === 418) throw userError('المنصة حظرت الطلبات مؤقتًا بسبب كثرتها (HTTP ' + r.status + ') — أوقف المزامنة وانتظر ٣٠ دقيقة على الأقل، ولا تكرّر الضغط فالتكرار يُطيل الحظر');
+    if (r.status === 429 || r.status === 418) throw userError('المنصة حظرت الطلبات مؤقتًا بسبب كثرتها (HTTP ' + r.status + ') — أُوقفت كل الطلبات إليها تلقائيًا حتى ينقضي الحظر؛ لا تكرّر الضغط فالتكرار يُطيله');
     if (r.status === 451 || r.status === 403) throw userError('الوصول محجوب من هذه المنطقة — جرّب VPN أو غيّر عنوان الخادم من الإعدادات');
     throw userError('خطأ من المنصة: ' + (j && (j.msg || j.message) ? (j.msg || j.message) : 'HTTP ' + r.status));
   }
@@ -881,13 +913,17 @@ const PAY_WEIGHT = 3000;
 const UID_LIMIT = 180000;
 const PAY_GAP_MS = 3000;     // عشرون طلبًا في الدقيقة — ثلث الحدّ
 const PAY_MAX_CALLS = 24;    // ٧٢٠٠٠ وزنًا سقفًا، دون نصف الحدّ
-let lastUidWeight = 0;       // آخر ما أبلغت به المنصة من استهلاك الدقيقة
+const IP_LIMIT = 12000;      // حدُّ وزن العنوان في الدقيقة لنقاط sapi
+let lastUidWeight = 0;       // آخر ما أبلغت به المنصة من استهلاك الدقيقة على الحساب
+let lastIpWeight = 0;        // … وعلى العنوان (مشتركٌ مع كل ما على هذا العنوان)
 
-/** تمهّلٌ قبل بلوغ حدّ الدقيقة: ندع الدقيقة تدور بدل أن نصطدم بالحدّ */
+/** تمهّلٌ قبل بلوغ حدّ الدقيقة — على الحساب أو على العنوان: ندع الدقيقة تدور بدل أن نصطدم بالحدّ */
 async function coolIfHeavy(cost) {
-  if (lastUidWeight && lastUidWeight + cost > UID_LIMIT * 0.6) {
+  const heavy = (lastUidWeight && lastUidWeight + cost > UID_LIMIT * 0.6) || (lastIpWeight && lastIpWeight > IP_LIMIT * 0.5);
+  if (heavy) {
     await sleep(25000);
     lastUidWeight = 0;
+    lastIpWeight = 0;
   }
 }
 
@@ -900,22 +936,29 @@ async function coolIfHeavy(cost) {
  * مرّةً واحدة؛ trace (اختياري) يسجّل كل طلبٍ للفحص. */
 const C2C_MIN_WIN = 15 * 60000;
 const C2C_MAX_CALLS = 400;
+const C2C_GAP_MS = 600;          // مئةُ طلبٍ في الدقيقة سقفًا — القسمةُ تُكثر الطلبات، والعنوانُ مشترك
 const C2C_SLACK = 6 * 3600000;   // هامشٌ لو رتّبت المنصة بوقت الإكمال لا الإنشاء
 /* متى تُعدّ النافذة مستوعَبة؟ حين تنتهي بصفحةٍ ناقصةٍ غير فارغة تأتي بجديد (أو حين
  * تكون صفحتها الأولى ناقصة). صفحةٌ ممتلئة تلتها صفحةٌ مكرّرة أو فارغة لا تثبت شيئًا:
  * قد يكون وراءها طلبات لا تُعطيها المنصة — فنشطر النافذة. وإن كانت صفوفها خارج
  * الفترة المطلوبة فالمنصة تُهمل الفترة أصلًا وتُرجع أحدث مئةٍ دائمًا، فلا تنفع
- * القسمة ونتوقف بدل أن نستهلك مئات الطلبات بلا طائل (windowsIgnored). */
-async function fetchC2C(base, offset, tradeType, s, e, onRaw, trace) {
+ * القسمة ونتوقف بدل أن نستهلك مئات الطلبات بلا طائل (windowsIgnored).
+ * budget (اختياري): رصيدُ طلباتٍ مشترك بين كل النوافذ والأنواع في العملية الواحدة
+ * ({ left }) — المزامنةُ الكاملة أو الفحصُ قد يمرّان على عشرات النوافذ، ولا بد من
+ * سقفٍ على مجموعها لا على كلٍّ منها وحدها، وإلا كان مجموعُها هو ما يُحظر العنوان. */
+async function fetchC2C(base, offset, tradeType, s, e, onRaw, trace, budget) {
   const stack = [[s, e]];
   const seen = new Set();
   let calls = 0, truncated = false, windowsIgnored = false;
+  const exhausted = () => calls >= C2C_MAX_CALLS || (budget && budget.left <= 0);
   while (stack.length) {
-    if (calls >= C2C_MAX_CALLS) { truncated = true; break; }
+    if (exhausted()) { truncated = true; break; }
     const [ws, we] = stack.pop();
     let page = 1, ended = false;
     for (;;) {
       calls++;
+      if (budget) budget.left--;
+      await coolIfHeavy(1);
       const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
         { tradeType, startTimestamp: ws, endTimestamp: we, page, rows: 100 }, offset);
       const rows = Array.isArray(j.data) ? j.data : [];
@@ -931,16 +974,16 @@ async function fetchC2C(base, offset, tradeType, s, e, onRaw, trace) {
       if (trace) trace.push({ type: tradeType, from: ws, to: we, page, rows: rows.length, total: j.total != null ? Number(j.total) : null, fresh, outside });
       if (rows.length >= 20 && outside * 2 > rows.length) { windowsIgnored = true; break; }
       if (rows.length < 100) { ended = page === 1 || (rows.length > 0 && fresh > 0); break; }
-      if (!fresh || page >= 60 || calls >= C2C_MAX_CALLS) break;
+      if (!fresh || page >= 60 || exhausted()) break;
       page++;
-      await sleep(250);
+      await sleep(C2C_GAP_MS);
     }
     if (windowsIgnored) { truncated = true; break; }
     if (!ended) {
       if (we - ws > C2C_MIN_WIN) { const mid = Math.floor((ws + we) / 2); stack.push([mid + 1, we], [ws, mid]); }
       else truncated = true;
     }
-    await sleep(200);
+    await sleep(C2C_GAP_MS);
   }
   return { count: seen.size, calls, truncated, windowsIgnored };
 }
@@ -981,6 +1024,7 @@ async function* syncGenerator() {
   const result = { done: true };
   try {
     /* ---- طلبات P2P (بيع ثم شراء) ---- */
+    const c2cBudget = { left: 200 }; // مئتا طلبٍ للمزامنة كلها — بيعًا وشراءً وكل النوافذ
     for (const tradeType of ['SELL', 'BUY']) {
       const label = tradeType === 'SELL' ? 'مبيعات' : 'مشتريات';
       for (const [s, e] of p2pWindows) {
@@ -989,7 +1033,7 @@ async function* syncGenerator() {
           const r = upsertOrder(normalizeOrder(raw, 'binance'));
           if (r === 'added') added++;
           else if (r === 'updated') updated++;
-        });
+        }, undefined, c2cBudget);
         fetched += got.count;
         if (got.truncated) yield { msg: `⚠ ${label} P2P ${dayLabel(s)} ← ${dayLabel(e)}: ${c2cWarn(got)}`, pct: null };
       }
@@ -1188,6 +1232,7 @@ async function* foreignScanGenerator(days) {
      بالتقرير: مئةٌ بالضبط في تسعين يومًا لحسابٍ يبيع كل يوم معناها أن الترقيم لا
      يعمل أو أن النافذة تُتجاهل — ولا يُحكم على شيءٍ قبل رؤية الأثر. */
   const calls = [];
+  const c2cBudget = { left: 300 }; // سقفُ الفحص كله — ٤٠٠ يومٍ بنوافذها قد تستدعي المئات
   let truncated = false, windowsIgnored = false;
   for (const tradeType of ['SELL', 'BUY']) {
     for (const [s, e] of p2pWindows) {
@@ -1195,7 +1240,7 @@ async function* foreignScanGenerator(days) {
       const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => {
         seenO.add(String(raw.orderNumber));
         lastO = Math.max(lastO, Number(raw.createTime) || 0);
-      }, calls);
+      }, calls, c2cBudget);
       if (got.truncated) truncated = true;
       if (got.windowsIgnored) windowsIgnored = true;
     }
@@ -1590,33 +1635,30 @@ const server = http.createServer(async (req, res) => {
       const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 3, 1), 29);
       const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
       const offset = await timeOffset(base);
+      recordLogin(role, req, 'scan');
       const end = Date.now();
       const start = end - days * 86400000;
       const list = [];
+      /* نفس آلية الجلب في المزامنة (نوافذ تنشطر) بسقف أربعين طلبًا للفحص كله —
+         كان الفحص يُقلّب ستين صفحة لكل نوعٍ حين تُكرّر المنصةُ الصفحة، فيستهلك
+         مئةً وعشرين طلبًا على مئة صفٍّ ويقرّب الحظر */
+      const c2cBudget = { left: 40 };
+      const warnings = [];
       for (const tradeType of ['SELL', 'BUY']) {
-        let page = 1;
-        for (;;) {
-          const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
-            { tradeType, startTimestamp: start, endTimestamp: end, page, rows: 100 }, offset);
-          const rows = Array.isArray(j.data) ? j.data : [];
-          for (const r of rows) {
-            const n = String(r.orderNumber || '').trim();
-            list.push({
-              orderNumber: n,
-              tail: n.slice(-4),
-              tradeType: String(r.tradeType || ''),
-              amount: num(r.amount),
-              totalPrice: num(r.totalPrice),
-              status: String(r.orderStatus || ''),
-              time: Number(r.createTime) || 0,
-              stored: Object.prototype.hasOwnProperty.call(orders, n),
-            });
-          }
-          if (rows.length < 100 || page >= 60) break;
-          page++;
-          await sleep(250);
-        }
-        await sleep(250);
+        const got = await fetchC2C(base, offset, tradeType, start, end, (r) => {
+          const n = String(r.orderNumber || '').trim();
+          list.push({
+            orderNumber: n,
+            tail: n.slice(-4),
+            tradeType: String(r.tradeType || ''),
+            amount: num(r.amount),
+            totalPrice: num(r.totalPrice),
+            status: String(r.orderStatus || ''),
+            time: Number(r.createTime) || 0,
+            stored: Object.prototype.hasOwnProperty.call(orders, n),
+          });
+        }, undefined, c2cBudget);
+        if (got.truncated) warnings.push((tradeType === 'SELL' ? 'البيع: ' : 'الشراء: ') + c2cWarn(got));
       }
       list.sort((a, b) => b.time - a.time);
       // ما هو محفوظ عندنا في نفس الفترة ولم تُرجعه المنصة (مُدخل يدويًا أو مزروع)
@@ -1635,6 +1677,7 @@ const server = http.createServer(async (req, res) => {
         notStored: list.filter((x) => !x.stored).length,
         onlyOurs,
         storedTotal: Object.keys(orders).length,
+        warnings,
       });
       return;
     }
@@ -1882,6 +1925,7 @@ const server = http.createServer(async (req, res) => {
       if (s > Date.now()) { sendJSON(res, 400, { error: 'هذا اليوم لم يأتِ بعد' }); return; }
       const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
       const offset = await timeOffset(base);
+      recordLogin(role, req, 'day');
       await mergeFromStore('orders__' + config.active, orders);
       await mergeFromStore('transfers__' + config.active, transfers);
 
@@ -1897,8 +1941,9 @@ const server = http.createServer(async (req, res) => {
         }
       };
       try {
+        const c2cBudget = { left: 60 }; // يومٌ واحد: ستون طلبًا تكفي ستة آلاف طلبٍ في اليوم
         for (const tradeType of ['SELL', 'BUY']) {
-          const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => take('p2p', [raw], (r) => normalizeOrder(r, 'binance'), true));
+          const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => take('p2p', [raw], (r) => normalizeOrder(r, 'binance'), true), undefined, c2cBudget);
           if (got.truncated) skipped.push('p2p: ' + c2cWarn(got));
         }
         take('deposit', rowsOf(await signedGet(base, '/sapi/v1/capital/deposit/hisrec',
@@ -2024,6 +2069,7 @@ const server = http.createServer(async (req, res) => {
       const days = Math.min(Math.max(Math.floor(Number(body.days)) || 45, 1), 400); // حتى سنةٍ ونيّف: التسرّب قد يكون قديمًا
       if (syncRunning) { sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ — انتظر انتهاءها' }); return; }
       syncRunning = true;
+      recordLogin(role, req, 'scan');
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
       try {
         for await (const ev of foreignScanGenerator(days)) res.write(JSON.stringify(ev) + '\n');
@@ -2247,12 +2293,15 @@ const server = http.createServer(async (req, res) => {
 
     /* ---------- رصيد مرات المزامنة المتبقية لهذا الدور اليوم ---------- */
     if (p === '/api/sync/quota' && req.method === 'GET') {
-      sendJSON(res, 200, await syncQuotaFor(role));
+      // blockedFor: ثواني الحظر الباقية إن كانت المنصة قد حظرت العنوان — فيُقفل زر المزامنة عند كل من يفتح الصفحة
+      sendJSON(res, 200, Object.assign(await syncQuotaFor(role), { blockedFor: Math.ceil(banLeft() / 1000) }));
       return;
     }
 
     /* ---------- المزامنة (بث التقدم NDJSON) ---------- */
     if (p === '/api/sync' && req.method === 'POST') {
+      // في أثناء الحظر لا تبدأ المزامنة أصلًا — ولا تُخصم من حصّة أحد
+      if (banLeft() > 0) { sendJSON(res, 429, { error: banMessage(banLeft()) }); return; }
       // الحصّة تُفحص قبل أي شيء: المسؤول بلا حد، وغيره بعدد مرات يوميًا
       const q = await syncQuotaFor(role);
       if (!q.unlimited && q.left <= 0) {
@@ -2272,6 +2321,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (!q.unlimited) await bumpSyncUsage(role);
       syncRunning = true;
+      recordLogin(role, req, 'sync');
       res.writeHead(200, {
         'Content-Type': 'application/x-ndjson; charset=utf-8',
         'Cache-Control': 'no-store',

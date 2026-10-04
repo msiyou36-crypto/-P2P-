@@ -561,6 +561,11 @@ async function loadBalSnaps() {
 async function loadSyncQuota() {
   try { state.syncQuota = await api('/api/sync/quota'); }
   catch { state.syncQuota = { unlimited: true, quota: 0, used: 0, left: null }; }
+  // الخادم يعرف إن كانت المنصة قد حظرت العنوان (بأي مستخدمٍ كان) — فيُقفل الزر هنا أيضًا بالمدة الباقية
+  const blocked = Number(state.syncQuota.blockedFor) || 0;
+  if (blocked > 0 && syncCooldownUntil() < Date.now() + blocked * 1000) {
+    try { localStorage.setItem(SYNC_COOLDOWN_KEY, String(Date.now() + blocked * 1000)); } catch {}
+  }
   applySyncCooldown();
 }
 async function loadAccount() {
@@ -1226,6 +1231,7 @@ async function runDiag() {
     box.append(diagLine('hint', `محفوظ عندك ولم تُرجعه المنصة (${fmt0(d.onlyOurs.length)}): `
       + d.onlyOurs.map((o) => o.tail + ' · ' + fmt2(o.amount)).join(' — ')));
   }
+  for (const w of (d.warnings || [])) box.append(diagLine('diag-bad', '⚠ ' + w));
 }
 
 function showMaintenanceScreen(m) {
@@ -2842,11 +2848,14 @@ async function openLoginLog() {
     const j = await api('/api/auth/log');
     const events = j.events || [];
     empty.classList.toggle('hidden', events.length > 0);
+    // ما يُثقل على المنصة يُسجَّل مع الدخول: مَن زامن أو فحص أو جلب يومًا، ومتى — فحظرٌ «بلا مزامنة» يُفسَّر من هنا
+    const KIND_LABELS = { sync: '⟳ مزامنة', scan: '🔎 فحص', day: '📅 جلب يوم' };
     for (const ev of events) {
       const tr = document.createElement('tr');
       const nm = ROLE_NAMES[ev.role] || ev.role || '—';
       const ic = ROLE_ICONS[ev.role] || '';
-      tdText(tr, (ic ? ic + ' ' : '') + nm);
+      const kind = ev.kind && KIND_LABELS[ev.kind] ? ' — ' + KIND_LABELS[ev.kind] : '';
+      tdText(tr, (ic ? ic + ' ' : '') + nm + kind);
       tdText(tr, ev.time ? fmtDTsec(ev.time) : '—');
       tdText(tr, ev.ip || '—', 'mono');
       tbody.append(tr);
