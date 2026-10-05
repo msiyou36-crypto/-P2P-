@@ -940,23 +940,37 @@ const C2C_MIN_WIN = 15 * 60000;
 const C2C_MAX_CALLS = 400;
 const C2C_GAP_MS = 600;          // مئةُ طلبٍ في الدقيقة سقفًا — القسمةُ تُكثر الطلبات، والعنوانُ مشترك
 const C2C_SLACK = 6 * 3600000;   // هامشٌ لو رتّبت المنصة بوقت الإكمال لا الإنشاء
+const C2C_CAP_MIN = 20;          // قبل أن نعرف سقف الصفحة: كلُّ صفحةٍ بعشرين فأكثر تُعامَل على أنها قد تكون مبتورة
 /* متى تُعدّ النافذة مستوعَبة؟ حين تنتهي بصفحةٍ ناقصةٍ غير فارغة تأتي بجديد (أو حين
  * تكون صفحتها الأولى ناقصة). صفحةٌ ممتلئة تلتها صفحةٌ مكرّرة أو فارغة لا تثبت شيئًا:
  * قد يكون وراءها طلبات لا تُعطيها المنصة — فنشطر النافذة. وإن كانت صفوفها خارج
  * الفترة المطلوبة فالمنصة تُهمل الفترة أصلًا وتُرجع أحدث مئةٍ دائمًا، فلا تنفع
  * القسمة ونتوقف بدل أن نستهلك مئات الطلبات بلا طائل (windowsIgnored).
+ *
+ * وما «الصفحة الممتلئة»؟ الوثائق تقول مئة صفٍّ، لكن الدفتر أثبت غير ذلك: كلُّ
+ * مزامنةٍ كانت تحفظ أحدث خمسين طلبًا بالضبط ثم تقف (ساعاتٌ كاملة تضيع بين مزامنتين)
+ * لأن الكود عدّ الخمسين «صفحةً ناقصة» فظنّ النافذة مستوعَبة. فلا نفترض رقمًا: أكبرُ
+ * صفحةٍ رأيناها في العملية هي السقف المعلوم (يُشارَك في budget بين النوافذ والأنواع)،
+ * وكلُّ صفحةٍ بلغته تُعامَل على أنها مبتورة فنطلب التالية أو نشطر. ومجموعُ المنصة
+ * (total) يُستأنس به لطلب صفحةٍ أخرى بعد صفحةٍ قصيرة، فإن وعد بمزيدٍ ولم يأتِ شيء
+ * عُدّ غيرَ موثوق ولم يُسأل بعدها.
+ *
  * budget (اختياري): رصيدُ طلباتٍ مشترك بين كل النوافذ والأنواع في العملية الواحدة
  * ({ left }) — المزامنةُ الكاملة أو الفحصُ قد يمرّان على عشرات النوافذ، ولا بد من
- * سقفٍ على مجموعها لا على كلٍّ منها وحدها، وإلا كان مجموعُها هو ما يُحظر العنوان. */
+ * سقفٍ على مجموعها لا على كلٍّ منها وحدها، وإلا كان مجموعُها هو ما يُحظر العنوان.
+ * وتُفحص الأنصافُ الأحدث قبل الأقدم: إن نفد الرصيد ضاع القديمُ المحفوظُ أصلًا لا الجديد. */
 async function fetchC2C(base, offset, tradeType, s, e, onRaw, trace, budget) {
   const stack = [[s, e]];
   const seen = new Set();
-  let calls = 0, truncated = false, windowsIgnored = false;
+  let calls = 0, truncated = false, windowsIgnored = false, budgetOut = false;
+  const st = budget || {};                 // maxRows و totalUnreliable يُشارَكان عبر النوافذ والأنواع
+  if (!(st.maxRows > 0)) st.maxRows = 0;
   const exhausted = () => calls >= C2C_MAX_CALLS || (budget && budget.left <= 0);
   while (stack.length) {
-    if (exhausted()) { truncated = true; break; }
+    if (exhausted()) { truncated = true; budgetOut = true; break; }
     const [ws, we] = stack.pop();
-    let page = 1, ended = false;
+    const winIds = new Set();              // ما أعادته المنصة لهذه النافذة (للمقارنة بمجموعها)
+    let page = 1, ended = false, prevFull = false;
     for (;;) {
       calls++;
       if (budget) budget.left--;
@@ -964,34 +978,52 @@ async function fetchC2C(base, offset, tradeType, s, e, onRaw, trace, budget) {
       const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
         { tradeType, startTimestamp: ws, endTimestamp: we, page, rows: 100 }, offset);
       const rows = Array.isArray(j.data) ? j.data : [];
+      const total = j.total != null && Number.isFinite(Number(j.total)) ? Number(j.total) : null;
       let fresh = 0, outside = 0;
       for (const raw of rows) {
         const t = Number(raw.createTime) || 0;
         if (t && (t < ws - C2C_SLACK || t > we + C2C_SLACK)) outside++;
         const id = String(raw.orderNumber || '');
-        if (!id || seen.has(id)) continue;
+        if (!id) continue;
+        winIds.add(id);
+        if (seen.has(id)) continue;
         seen.add(id); fresh++;
         onRaw(raw);
       }
-      if (trace) trace.push({ type: tradeType, from: ws, to: we, page, rows: rows.length, total: j.total != null ? Number(j.total) : null, fresh, outside });
+      st.maxRows = Math.max(st.maxRows, rows.length);
+      const cap = Math.max(C2C_CAP_MIN, st.maxRows);
+      if (trace) trace.push({ type: tradeType, from: ws, to: we, page, rows: rows.length, cap, total, fresh, outside });
       if (rows.length >= 20 && outside * 2 > rows.length) { windowsIgnored = true; break; }
-      if (rows.length < 100) { ended = page === 1 || (rows.length > 0 && fresh > 0); break; }
-      if (!fresh || page >= 60 || exhausted()) break;
+      if (rows.length < cap) {
+        // صفحةٌ أقصر من السقف المعلوم
+        const wantMore = total != null && !st.totalUnreliable && total > winIds.size;
+        if (wantMore && rows.length > 0 && (page === 1 || fresh > 0) && page < 60 && !exhausted()) {
+          prevFull = false; page++; await sleep(C2C_GAP_MS); continue;   // المجموع يقول إن هناك مزيدًا — نجرّب صفحةً أخرى
+        }
+        if (prevFull) ended = rows.length > 0 && fresh > 0;   // بعد صفحةٍ ممتلئة: ناقصةٌ بجديد = نهاية، فارغة أو مكرّرة = اشطر
+        else { if (wantMore && page > 1 && fresh === 0) st.totalUnreliable = true; ended = true; }
+        break;
+      }
+      prevFull = true;
+      if (!fresh || page >= 60 || exhausted()) break;   // صفحةٌ ممتلئة مكرّرة (أو نفد الرصيد): اشطر النافذة
       page++;
       await sleep(C2C_GAP_MS);
     }
     if (windowsIgnored) { truncated = true; break; }
     if (!ended) {
-      if (we - ws > C2C_MIN_WIN) { const mid = Math.floor((ws + we) / 2); stack.push([mid + 1, we], [ws, mid]); }
+      if (we - ws > C2C_MIN_WIN) { const mid = Math.floor((ws + we) / 2); stack.push([ws, mid], [mid + 1, we]); } // الأحدث يُفحص أولًا
       else truncated = true;
     }
     await sleep(C2C_GAP_MS);
   }
-  return { count: seen.size, calls, truncated, windowsIgnored };
+  if (exhausted() && stack.length) { truncated = true; budgetOut = true; }
+  return { count: seen.size, calls, truncated, windowsIgnored, budgetOut, cap: Math.max(C2C_CAP_MIN, st.maxRows) };
 }
 const c2cWarn = (g) => (g.windowsIgnored
-  ? 'المنصة تُهمل الفترة المحدَّدة وتُرجع أحدث ١٠٠ طلب فقط — لا تُجدي القسمة، فزامن قبل أن يتراكم أكثر من مئة طلبٍ بين مزامنتين'
-  : 'المنصة تُرجع مئةً فقط في كل سؤال ولم تكفِ القسمة — قد تبقى طلبات لم تصل');
+  ? `المنصة تُهمل الفترة المحدَّدة وتُرجع أحدث ${g.cap || 100} طلب فقط — لا تُجدي القسمة، فزامن قبل أن يتراكم أكثر من ذلك بين مزامنتين`
+  : g.budgetOut
+    ? 'نفد رصيد الطلبات لهذه العملية — الأحدثُ وصل والأقدمُ قد ينقص؛ قلّل مدى المزامنة في الإعدادات أو زامن مرةً أخرى لاحقًا'
+    : `المنصة تُرجع ${g.cap || 100} صفًّا فقط في كل سؤال ولم تكفِ القسمة — قد تبقى طلبات لم تصل`);
 
 /**
  * مزامنة شاملة: طلبات P2P (بيع/شراء) + سجل الإيداع + سجل السحب، على نوافذ زمنية،
@@ -1026,7 +1058,7 @@ async function* syncGenerator() {
   const result = { done: true };
   try {
     /* ---- طلبات P2P (بيع ثم شراء) ---- */
-    const c2cBudget = { left: 200 }; // مئتا طلبٍ للمزامنة كلها — بيعًا وشراءً وكل النوافذ
+    const c2cBudget = { left: 300 }; // ثلاثمئة طلبٍ للمزامنة كلها — بيعًا وشراءً وكل النوافذ (شهرٌ بسقف خمسين يحتاج نحو ١٦٠)
     for (const tradeType of ['SELL', 'BUY']) {
       const label = tradeType === 'SELL' ? 'مبيعات' : 'مشتريات';
       for (const [s, e] of p2pWindows) {
