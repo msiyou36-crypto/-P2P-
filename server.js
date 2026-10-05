@@ -14,8 +14,10 @@ const { execFile } = require('child_process');
 const xlsxread = require('./xlsxread.js'); // قراءة ملفات التصدير (Excel/CSV) للاستعادة
 
 // عند النشر تُضبط PORT من البيئة ونستمع على كل الواجهات؛ محليًا نبقى على 127.0.0.1 فقط.
-const PORT = Number(process.env.PORT) || 3131;
-const HOST = process.env.HOST || (process.env.PORT ? '0.0.0.0' : '127.0.0.1');
+// (alwaysdata تمرّر المنفذ والعنوان في ALWAYSDATA_HTTPD_PORT/IP فنقبلهما أيضًا)
+const ENV_PORT = process.env.PORT || process.env.ALWAYSDATA_HTTPD_PORT;
+const PORT = Number(ENV_PORT) || 3131;
+const HOST = process.env.HOST || process.env.ALWAYSDATA_HTTPD_IP || (ENV_PORT ? '0.0.0.0' : '127.0.0.1');
 const ROOT = __dirname;
 const PUB = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
