@@ -1,181 +1,83 @@
 /*
- * سجل حوالات P2P — خادم محلي
- * يعمل بـ Node.js فقط بدون أي حزم خارجية.
- * البيانات والمفاتيح تُحفظ محليًا داخل مجلد data/ على هذا الجهاز فقط،
- * والخادم يستمع على 127.0.0.1 حصرًا (غير مرئي لبقية الشبكة).
+ * سجل حوالات P2P — الخادم
+ * Node.js فقط بلا أي حزمة خارجية. محليًا يستمع على 127.0.0.1 ويحفظ في data/،
+ * وعند النشر يقرأ المنفذ من البيئة ويحفظ في Supabase (انظر lib/store.js).
+ *
+ * فهرس الملف:
+ *   ١. البيئة والحسابات والقفل
+ *   ٢. الحالة في الذاكرة، الدمج بين النسخ، مقابر المحذوف
+ *   ٣. الصيانة، حصّة المزامنة، لقطات الرصيد، سجل الدخول
+ *   ٤. الإقلاع (initStore)
+ *   ٥. إدراج الطلبات والحوالات (upsert)
+ *   ٦. المزامنة الشاملة، فحص الدخيل، جلب يوم
+ *   ٧. خادم HTTP: الملفات الثابتة، المسارات وصلاحياتها
+ *   ٨. التشغيل
+ *
+ * الوحدات: lib/store.js (التخزين)، lib/binance.js (عميل المنصة)، lib/normalize.js
+ * (توحيد السجلّات)، lib/auth.js (كلمات السر والجلسات)، lib/xlsxread.js (قراءة Excel/CSV).
  */
 'use strict';
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { execFile } = require('child_process');
-const xlsxread = require('./xlsxread.js'); // قراءة ملفات التصدير (Excel/CSV) للاستعادة
 
-// عند النشر تُضبط PORT من البيئة ونستمع على كل الواجهات؛ محليًا نبقى على 127.0.0.1 فقط.
-// (alwaysdata تمرّر المنفذ والعنوان في ALWAYSDATA_HTTPD_PORT/IP فنقبلهما أيضًا)
+const store = require('./lib/store.js');
+const bn = require('./lib/binance.js');
+const N = require('./lib/normalize.js');
+const auth = require('./lib/auth.js');
+const xlsxread = require('./lib/xlsxread.js');
+
+const { loadStore, saveStore } = store;
+const { sleep, dayLabel, userError } = bn;
+const { num } = N;
+
+/* ===================== ١. البيئة والحسابات والقفل ===================== */
+
+// عند النشر تُضبط PORT من البيئة ونستمع على كل الواجهات؛ محليًا 127.0.0.1 فقط
+// (alwaysdata تمرّر المنفذ والعنوان في ALWAYSDATA_HTTPD_PORT/IP)
 const ENV_PORT = process.env.PORT || process.env.ALWAYSDATA_HTTPD_PORT;
 const PORT = Number(ENV_PORT) || 3131;
 const HOST = process.env.HOST || process.env.ALWAYSDATA_HTTPD_IP || (ENV_PORT ? '0.0.0.0' : '127.0.0.1');
-const ROOT = __dirname;
-const PUB = path.join(ROOT, 'public');
-const DATA_DIR = path.join(ROOT, 'data');
+const PUB = path.join(__dirname, 'public');
 const MAX_BODY = 8 * 1024 * 1024;
 
-/* ===================== طبقة التخزين (مزدوجة) =====================
- * محليًا: ملفات JSON داخل data/.
- * عند النشر: قاعدة Supabase عبر واجهة REST (بدون أي مكتبة) — إذا ضُبط SUPABASE_URL.
- * كلاهما يخزّن ثلاثة مفاتيح: orders / transfers / config.
- */
-const USE_SUPABASE = !!(process.env.SUPABASE_URL && process.env.SUPABASE_KEY);
-const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
-const SB_KEY = process.env.SUPABASE_KEY || '';
-// مسار ملف لأي مفتاح تخزين (orders__p2p, transfers__p3p, config…)
-const kvFile = (key) => path.join(DATA_DIR, String(key).replace(/[^A-Za-z0-9_-]/g, '_') + '.json');
-
-// ===== حسابان: p2p و p3p — كلٌّ بمفاتيحه وبياناته =====
+/* حسابان ممكنان: p2p وp3p، لكلٍّ مفاتيحه وبياناته. متغيّر البيئة ACCOUNT=p2p|p3p
+ * يقفل هذه النسخة على حساب واحد (مخازنه وإعداداته وحده) — وهو وضع النشر. بلا
+ * المتغيّر (التشغيل المحلي) يُقرأ الحساب من config.active. */
 const ACCOUNTS = ['p2p', 'p3p'];
 const ACCOUNT_NAMES = { p2p: 'حوالات P2P', p3p: 'حوالات P3P' };
-function newAccount() {
-  return { apiKey: '', apiSecret: '', baseUrl: 'https://api.binance.com', rangeHours: 720, lastSync: null };
-}
-const DEFAULT_CONFIG = { active: 'p2p', accounts: { p2p: newAccount(), p3p: newAccount() }, auth: {} };
-// الحساب النشط الحالي (مفاتيحه ومداه)
-const AC = () => (config.accounts[config.active] || (config.accounts[config.active] = newAccount()));
-
-/* ===== سستمٌ لحسابٍ واحد =====
- * متغيّر البيئة ACCOUNT=p2p أو p3p يقفل هذه النسخة على حسابٍ واحد: مفاتيحه
- * ومخازنه وإعداداته وحده، بلا زرّ تبديل. سستمان على قاعدةٍ واحدة كانا يتبادلان
- * الحساب النشط تحت بعضهما فتتسرّب عمليات حسابٍ إلى الآخر؛ والقفلُ يجعل ذلك
- * مستحيلًا بنيةً لا برمجةً: النسخةُ لا تعرف إلا حسابها. بلا المتغيّر يبقى
- * السلوك القديم (حسابان وزرّ تبديل) للتشغيل المحلي. */
 const LOCKED = ACCOUNTS.includes(process.env.ACCOUNT) ? process.env.ACCOUNT : null;
 const CONFIG_KEY = LOCKED ? 'config__' + LOCKED : 'config';
-const sysKey = (k) => (LOCKED ? k + '__' + LOCKED : k); // مفاتيح السستم لا الحساب: الحصّة وسجل الدخول
+const sysKey = (k) => (LOCKED ? k + '__' + LOCKED : k);   // مفاتيح السستم (الحصّة وسجل الدخول)
 
-if (!USE_SUPABASE) fs.mkdirSync(DATA_DIR, { recursive: true });
+const newAccount = () => ({ apiKey: '', apiSecret: '', baseUrl: 'https://api.binance.com', rangeHours: 720, lastSync: null });
+const DEFAULT_CONFIG = { active: 'p2p', accounts: {}, auth: {}, syncQuota: 3 };
 
-/* عميل Supabase. db: قاعدةٌ بعينها {url, key} — الافتراضية قاعدةُ هذا السستم،
-   وقاعدةٌ أخرى تُقرأ منها مرّةً واحدة عند نقل البيانات (انظر migrateFromSource). */
-const sbHead = (db) => ({ apikey: db ? db.key : SB_KEY, Authorization: 'Bearer ' + (db ? db.key : SB_KEY) });
-const sbBase = (db) => (db ? db.url : SB_URL) + '/rest/v1/kv';
-async function sbGet(key, fallback, db = null) {
-  const r = await fetch(sbBase(db) + '?key=eq.' + encodeURIComponent(key) + '&select=value', { headers: sbHead(db) });
-  if (!r.ok) throw new Error('Supabase read ' + r.status);
-  const rows = await r.json();
-  return (Array.isArray(rows) && rows[0] && rows[0].value != null) ? rows[0].value : fallback;
-}
-async function sbSet(key, value, db = null) {
-  const r = await fetch(sbBase(db), {
-    method: 'POST',
-    headers: Object.assign({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }, sbHead(db)),
-    body: JSON.stringify({ key, value }),
-  });
-  if (!r.ok) throw new Error('Supabase write ' + r.status + ' ' + (await r.text().catch(() => '')));
-}
-async function sbList(db = null) {
-  const r = await fetch(sbBase(db) + '?select=key&limit=10000', { headers: sbHead(db) });
-  if (!r.ok) throw new Error('Supabase list ' + r.status);
-  const rows = await r.json();
-  return Array.isArray(rows) ? rows.map((x) => String(x.key)) : [];
-}
-async function sbDelete(key) {
-  const r = await fetch(sbBase(null) + '?key=eq.' + encodeURIComponent(key), { method: 'DELETE', headers: sbHead(null) });
-  if (!r.ok) throw new Error('Supabase delete ' + r.status);
-}
-/** كل مفاتيح مخزن هذا السستم (القاعدة أو مجلد data/) */
-async function listStoreKeys() {
-  if (USE_SUPABASE) return sbList();
-  return fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5));
-}
-async function deleteStore(key) {
-  if (USE_SUPABASE) { await sbDelete(key); return; }
-  try { fs.unlinkSync(kvFile(key)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-}
+/* ===================== ٢. الحالة في الذاكرة والدمج والمقابر ===================== */
 
-async function loadStore(key, fallback) {
-  if (USE_SUPABASE) {
-    try { return await sbGet(key, fallback); }
-    catch (e) { console.error('تعذّر القراءة من Supabase:', e.message); return fallback; }
-  }
-  try { return JSON.parse(fs.readFileSync(kvFile(key), 'utf8')); } catch { return fallback; }
-}
-async function saveStore(key, obj) {
-  if (USE_SUPABASE) { await sbSet(key, obj); return; }
-  const file = kvFile(key);
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 1));
-  fs.renameSync(tmp, file);
-}
-
-/* ===== نقلُ بيانات السستم إلى قاعدته المستقلة (مرّةً واحدة) =====
- * الفصلُ التام: لكل سستم قاعدةُ Supabase خاصة به. عند أول إقلاعٍ على القاعدة
- * الجديدة (لا config__X فيها) ومع MIGRATE_FROM_URL/MIGRATE_FROM_KEY مضبوطَين
- * على القاعدة القديمة، تُنسخ مفاتيحُ هذا الحساب وحدها (…__X) وما يخصّ السستم
- * (sharedtx، الصيانة) ثم يمضي السستم على قاعدته. لا يُحذف شيءٌ من القديمة هنا —
- * الحذفُ قرارٌ للمسؤول من منطقة الخطر في السستم الآخر، بعد أن يرى النقل تمّ. */
-const MIGRATE_DB = (process.env.MIGRATE_FROM_URL && process.env.MIGRATE_FROM_KEY)
-  ? { url: process.env.MIGRATE_FROM_URL.replace(/\/+$/, ''), key: process.env.MIGRATE_FROM_KEY }
-  : null;
-const mineKey = (k, acct) => k.endsWith('__' + acct) || k === 'sharedtx' || k.startsWith('maintenance__');
-async function migrateFromSource() {
-  if (!LOCKED || !MIGRATE_DB || !USE_SUPABASE) return;
-  if (MIGRATE_DB.url === SB_URL) { console.log('MIGRATE_FROM_URL هي قاعدة السستم نفسها — لا شيء يُنقل'); return; }
-  try {
-    /* «مأهولة» تعني فيها حوالات، لا مجرّد إعدادات أو طلبات: إقلاعٌ سابق بلا
-       متغيّرات النقل يزرع config__X فارغًا وطلبَي الإصلاح اليدويَّين في orders__X،
-       فلو اكتفينا بوجود المفتاح لظنّ النقلُ أن عمله تمّ ولم يُنقل شيء. الحوالات
-       لا تُزرع أبدًا، فوجودها هو الدليل الوحيد على نقلٍ سابق. */
-    const t = await sbGet('transfers__' + LOCKED, null);
-    if (t && typeof t === 'object' && Object.keys(t).length) return; // نُقل من قبل
-    const keys = (await sbList(MIGRATE_DB)).filter((k) => mineKey(k, LOCKED));
-    let copied = 0;
-    for (const k of keys) {
-      const v = await sbGet(k, null, MIGRATE_DB);
-      if (v == null) continue;
-      await sbSet(k, v);
-      copied++;
-    }
-    // إعداداتُ الحساب: إن لم تكن مستقلةً في القديمة تُشتقّ من إعداداتها المشتركة
-    if (!keys.includes(CONFIG_KEY)) {
-      const shared = await sbGet('config', null, MIGRATE_DB);
-      if (shared) {
-        await sbSet(CONFIG_KEY, {
-          active: LOCKED, accounts: { [LOCKED]: (shared.accounts || {})[LOCKED] || {} },
-          auth: shared.auth || {}, syncQuota: shared.syncQuota,
-        });
-        copied++;
-      }
-    }
-    console.log(`✅ نُقلت بيانات «${ACCOUNT_NAMES[LOCKED]}» إلى قاعدتها المستقلة: ${copied} مفتاحًا (${keys.join('، ') || 'لا شيء'}) — يمكنك الآن حذف MIGRATE_FROM_URL وMIGRATE_FROM_KEY من البيئة`);
-  } catch (e) {
-    console.error('❌ تعذّر نقل البيانات من القاعدة القديمة: ' + e.message
-      + ' — تحقّق من MIGRATE_FROM_URL وMIGRATE_FROM_KEY، ومن أن جدول kv أُنشئ في القاعدة الجديدة (supabase-schema.sql)');
-  }
-}
-
-/** الحالة في الذاكرة (تُملأ من التخزين عند الإقلاع في initStore) — للحساب النشط */
 let orders = {};       // الطلبات مفهرسة برقم الطلب
-let transfers = {};    // الإيداع/السحب مفهرسة بمعرّف فريد
+let transfers = {};    // الحوالات مفهرسة بمعرّفها
 let config = Object.assign({}, DEFAULT_CONFIG);
+const AC = () => (config.accounts[config.active] || (config.accounts[config.active] = newAccount()));
+const ordersKey = () => 'orders__' + config.active;
+const transfersKey = () => 'transfers__' + config.active;
+const hasKeys = () => !!(AC().apiKey && AC().apiSecret);
+const apiBase = () => (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
 
-/* ===== الحفظ مع دمج (سستمان على قاعدة واحدة) =====
- * كل نسخة من الخادم تحمل السجل في ذاكرتها منذ الإقلاع وتكتبه كاملًا عند الحفظ؛
- * فالنسخة ذات الذاكرة الأقدم كانت تمحو ما جلبته النسخة الأخرى — «عمليات تختفي»
- * (نفس علّة وضع الصيانة سابقًا). قبل كل حفظ نقرأ المخزَّن وندمج ما ليس في
- * ذاكرتنا، ثم نكتب. الحذف والمسح يمرّان بلا دمج وإلا عاد المحذوف من المخزَّن.
- */
-/* حقولُ التعليق (ملاحظة/إشاري/سعر/مبلغ/تسمية/مرساة/أرشفة/تثبيت) يكتبها المستخدم
- * صفًّا صفًّا وتُحفظ فورًا، فالمخزَّن أحدثُ منها في ذاكرة أي نسخةٍ لم تكتبها
- * بنفسها. كان الدمج يحمي وجودَ الصفّ لا محتواه: نسخةٌ حفظت ذاكرتها القديمة
- * فأعادت أسعارًا مُعدَّلة إلى ما قبل تعديلها. فعند الدمج تُؤخذ هذه الحقول من
- * المخزَّن — إلا ما عدّلته هذه النسخةُ ولمّا تحفظه بعد (dirty)، فهو الأحدث. */
+/* ===== الدمج قبل الحفظ =====
+ * كل نسخة من الخادم تحمل السجل في ذاكرتها وتكتبه كاملًا عند الحفظ، فنسخةٌ بذاكرةٍ
+ * أقدم كانت تمحو ما جلبته نسخةٌ أخرى. لذا قبل كل حفظ نقرأ المخزَّن وندمج: ما ليس
+ * في ذاكرتنا يُضاف، وحقولُ التعليق (يكتبها المستخدم صفًّا صفًّا) تُؤخذ من المخزَّن
+ * لأنه الأحدث — إلا ما عدّلته هذه النسخة ولمّا تحفظه (dirty). الحذف والمسح يمرّان
+ * بلا دمج وإلا عاد المحذوف من المخزَّن. */
 const ANNOT = ['note', 'reference', 'unitPriceOverride', 'totalPriceOverride', 'networkLabelOverride',
   'zeroPoint', 'archived', 'usdtValue', 'balanceAt', 'balAfter'];
 const dirty = new Set();   // «key:id» عُدّل هنا ولم يُحفظ بعد
 const touch = (key, id) => dirty.add(key + ':' + id);
 function clearDirty(key) { for (const k of dirty) if (k.startsWith(key + ':')) dirty.delete(k); }
+
 async function mergeFromStore(key, mem) {
   try {
     const stored = await loadStore(key, null);
@@ -191,14 +93,12 @@ async function mergeFromStore(key, mem) {
 }
 
 /* ===== مقابرُ المحذوف =====
- * الدمج أعلاه يحمي ما أُضيف، لكنه لا يحمي ما حُذف: نسخةٌ أخرى تحمل الصفَّ في
- * ذاكرتها منذ إقلاعها تُعيده عند أول حفظٍ لها كأنّ الحذف لم يقع (هكذا عادت
- * حوالاتٌ أُخرجت من حسابٍ إلى حسابها). فنقيّد كل حذفٍ في مقبرة المخزن، ويُسقط
- * الدمجُ والتحميلُ كلَّ مقبور — إلا ما أرجعته المنصةُ في هذه الجلسة، فالدليل
- * الطازج أقوى من المقبرة ويُخرجه منها. */
+ * الدمج يحمي ما أُضيف لا ما حُذف: نسخةٌ أخرى تحمل الصفَّ في ذاكرتها تُعيده عند أول
+ * حفظ. فكل حذفٍ يُقيَّد في مقبرة المخزن (gone__<key>)، ويُسقط الدمجُ والتحميلُ كلَّ
+ * مقبور — إلا ما أرجعته المنصةُ في هذه الجلسة (fresh)، فالدليل الطازج يُخرجه منها. */
 const GRAVE_MAX = 20000;
-const fresh = new Set();          // «key:id» لما أرجعته المنصة في هذه الجلسة
-const storeKeyOf = new WeakMap(); // مخزنٌ في الذاكرة ← مفتاحه (لغير الحساب النشط)
+const fresh = new Set();   // «key:id» لما أرجعته المنصة في هذه الجلسة
+
 async function graveOf(key) {
   try { const g = await loadStore('gone__' + key, null); return Array.isArray(g) ? g.map(String) : []; }
   catch { return []; }
@@ -217,7 +117,6 @@ async function unbury(key, ids) {
   const keep = g.filter((id) => !drop.has(id));
   if (keep.length !== g.length) await saveStore('gone__' + key, keep);
 }
-/** يُسقط المقبورَ من الذاكرة، ويُخرج من المقبرة ما عاد بدليلٍ طازج */
 async function applyGrave(key, mem) {
   const g = await graveOf(key);
   if (!g.length) return;
@@ -228,68 +127,63 @@ async function applyGrave(key, mem) {
   }
   if (back.length) await unbury(key, back);
 }
-// الحفظ مفصول لكل حساب: orders__p2p / transfers__p3p …
+
+/** الحفظ (مع دمج ما لم يُطلب غيره) */
 async function saveOrders(opts) {
-  if (!opts || opts.merge !== false) await mergeFromStore('orders__' + config.active, orders);
-  await saveStore('orders__' + config.active, orders);
-  clearDirty('orders__' + config.active);
+  if (!opts || opts.merge !== false) await mergeFromStore(ordersKey(), orders);
+  await saveStore(ordersKey(), orders);
+  clearDirty(ordersKey());
 }
 async function saveTransfers(opts) {
-  if (!opts || opts.merge !== false) await mergeFromStore('transfers__' + config.active, transfers);
-  await saveStore('transfers__' + config.active, transfers);
-  clearDirty('transfers__' + config.active);
+  if (!opts || opts.merge !== false) await mergeFromStore(transfersKey(), transfers);
+  await saveStore(transfersKey(), transfers);
+  clearDirty(transfersKey());
+}
+async function saveConfig() { await saveStore(CONFIG_KEY, config); }
+async function mergeBoth() {
+  await mergeFromStore(ordersKey(), orders);
+  await mergeFromStore(transfersKey(), transfers);
+}
+/** الدفتر تغيّر (حذف/استعادة/أرشفة): المثبَّت من «الباقي» لم يعد صحيحًا */
+function clearFrozen() {
+  for (const o of Object.values(orders)) if (o.balAfter != null) delete o.balAfter;
+  for (const t of Object.values(transfers)) if (t.balAfter != null) delete t.balAfter;
 }
 
-/* ===== وضع الصيانة: مفتاح تخزين مستقل لكل سستم (نطاق) =====
- * لا يُخزَّن داخل config، لأن config يُقرأ مرّة واحدة عند الإقلاع ويُكتب كاملًا عند كل حفظ؛
- * فلو عملت نسخة ثانية من الخادم (سستم ثاني) على نفس القاعدة، تكتب نسختها القديمة فوق الصيانة وتُلغيها.
- * والمفتاح مربوط بنطاق السستم، حتى يمكن إيقاف سستم وترك الثاني شغّالًا رغم اشتراكهما في القاعدة.
- * القراءة دائمًا من القاعدة مباشرة، والكتابة على هذا المفتاح فقط.
- */
+/* ===================== ٣. الصيانة، الحصّة، اللقطات، سجل الدخول ===================== */
+
+/* وضع الصيانة: مفتاح تخزين مستقل لكل نطاق (host) يُقرأ من المخزن مباشرة في كل طلب،
+ * فيوقف هذا السستم وحده ويظهر فورًا من أي نسخة. */
 const MAINT_DEFAULT = { on: false, message: '', link: '' };
-// اسم السستم = النطاق الذي وصل عليه الطلب (p2p-1-3zpk.onrender.com …)
 const systemOf = (req) => String((req && req.headers && req.headers.host) || 'local').toLowerCase();
 const maintKey = (req) => 'maintenance__' + systemOf(req).replace(/[^a-z0-9]+/g, '_');
 async function loadMaintenance(req) {
   const system = systemOf(req);
   try {
     const m = await loadStore(maintKey(req), null);
-    if (m && typeof m === 'object') {
-      return { on: !!m.on, message: String(m.message || ''), link: String(m.link || ''), system };
-    }
+    if (m && typeof m === 'object') return { on: !!m.on, message: String(m.message || ''), link: String(m.link || ''), system };
   } catch (e) { console.error('maintenance read: ' + e.message); }
   return Object.assign({}, MAINT_DEFAULT, { system });
 }
 
-/* ===== حصّة المزامنة للمستخدمين (غير المسؤول) =====
- * المسؤول يزامن بلا حد. «مستخدم» و«مستخدم 2» لكلٍّ منهما عدد مرات في اليوم يحدّده المسؤول.
- * العدّاد في مفتاح تخزين مستقل يُقرأ طازجًا عند كل طلب، حتى لا يكتب سستمٌ فوق عدّاد الآخر،
- * والحصّة مشتركة بين السستمين لأن الحظر يقع على الحساب في المنصة لا على السستم.
- */
-const SYNC_QUOTA_DEFAULT = 3;
-const SYNC_USAGE_KEY = sysKey('syncusage'); // لكل سستم حصّته
-/* ===== اليوم المحاسبي =====
- * لا يُقفل اليوم منتصف الليل بل الساعة الثانية ليلًا بتوقيت ليبيا (UTC+2)،
- * فالعمل يمتدّ إلى ما بعد منتصف الليل وحسابُه على يومه لا على اليوم التالي.
- * فما وقع قبل الثانية ليلًا يُحسب على اليوم السابق. */
-const TZ_OFFSET_H = 2;      // ليبيا UTC+2 (بلا توقيت صيفي)
-const DAY_CLOSE_H = 2;      // الإقفال الساعة ٢ ليلًا محليًا
+/* حصّة المزامنة: المسؤول بلا حد، و«مستخدم»/«مستخدم 2» بعدد مرات يوميًا يحدّده المسؤول.
+ * العدّاد في مفتاح مستقل يُقرأ طازجًا عند كل طلب. */
+const SYNC_USAGE_KEY = sysKey('syncusage');
+/* اليوم المحاسبي يُقفل الساعة الثانية ليلًا بتوقيت ليبيا (UTC+2) لا منتصف الليل */
+const TZ_OFFSET_H = 2;
+const DAY_CLOSE_H = 2;
 const DAY_SHIFT_MS = (TZ_OFFSET_H - DAY_CLOSE_H) * 3600000;
 const dayKey = (ms) => new Date((ms || Date.now()) + DAY_SHIFT_MS).toISOString().slice(0, 10);
-/** بداية اليوم المحاسبي «YYYY-MM-DD» بالتوقيت العالمي */
 const dayStartMs = (y, mo, d) => Date.UTC(y, mo - 1, d, 0, 0, 0) - DAY_SHIFT_MS;
-const syncDayKey = () => dayKey();
 const syncQuotaValue = () => {
   const n = Number(config.syncQuota);
-  return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), 500) : SYNC_QUOTA_DEFAULT;
+  return Number.isFinite(n) && n >= 0 ? Math.min(Math.floor(n), 500) : DEFAULT_CONFIG.syncQuota;
 };
 async function loadSyncUsage() {
-  const day = syncDayKey();
+  const day = dayKey();
   try {
     const u = await loadStore(SYNC_USAGE_KEY, null);
-    if (u && typeof u === 'object' && u.day === day && u.used && typeof u.used === 'object') {
-      return { day, used: Object.assign({}, u.used) };
-    }
+    if (u && typeof u === 'object' && u.day === day && u.used && typeof u.used === 'object') return { day, used: Object.assign({}, u.used) };
   } catch (e) { console.error('sync usage read: ' + e.message); }
   return { day, used: {} };
 }
@@ -306,11 +200,8 @@ async function bumpSyncUsage(role) {
   try { await saveStore(SYNC_USAGE_KEY, u); } catch (e) { console.error('sync usage save: ' + e.message); }
 }
 
-/* ===== لقطات الرصيد اليومية: ما يُثبِّت عمود «الباقي من USDT» تلقائيًا =====
- * لكل يومٍ آخرُ قراءةٍ لرصيد USDT (الفوري + التمويل معًا). ما إن يدخل يومٌ جديد
- * حتى تُغلق قراءةُ أمس وتصير ثابتة إلى الأبد، فلا تتحرّك أرقام الأيام الماضية
- * مهما دخل من عمليات. تُقرأ طازجة وتُدمج قبل الحفظ، فلا يمحو سستمٌ لقطات الآخر.
- */
+/* لقطات الرصيد اليومية: آخر قراءة لرصيد USDT في كل يوم (الفوري + التمويل). بها تُثبَّت
+ * أرقام الأيام الماضية في عمود «الباقي» تلقائيًا (انظر computeBalanceMap في الواجهة). */
 const SNAP_KEEP_DAYS = 200;
 const snapKey = () => 'balsnap__' + config.active;
 async function loadBalSnaps() {
@@ -323,8 +214,7 @@ async function loadBalSnaps() {
 async function saveBalSnap(bal, at) {
   const s = await loadBalSnaps();
   const day = dayKey(at);
-  // آخر قراءة في اليوم هي المعتمدة: كلّما تأخّرت كانت أقرب لإغلاق اليوم
-  if (s[day] && Number(s[day].at) > at) return s;
+  if (s[day] && Number(s[day].at) > at) return s;   // آخر قراءة في اليوم هي المعتمدة
   s[day] = { bal, at };
   const days = Object.keys(s).sort();
   for (const d of days.slice(0, Math.max(days.length - SNAP_KEEP_DAYS, 0))) delete s[d];
@@ -332,856 +222,195 @@ async function saveBalSnap(bal, at) {
   return s;
 }
 
-/* ===================== المصادقة والصلاحيات ===================== */
-
-function hashPassword(password, salt) {
-  return crypto.scryptSync(String(password), salt, 32).toString('hex');
-}
-function makeCredential(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  return { salt, hash: hashPassword(password, salt) };
-}
-function verifyPassword(password, cred) {
-  if (!cred || !cred.salt || !cred.hash) return false;
-  const h = hashPassword(password, cred.salt);
-  const a = Buffer.from(h, 'hex');
-  const b = Buffer.from(cred.hash, 'hex');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-const isConfigured = () => !!(config.auth.admin && config.auth.admin.hash);
-
-/** جلسات في الذاكرة: token → { role } (تُمسح عند إعادة تشغيل الخادم) */
-const sessions = new Map();
-function newToken(role) {
-  const token = crypto.randomBytes(24).toString('hex');
-  sessions.set(token, { role, created: Date.now() });
-  return token;
-}
-function roleOf(req) {
-  const token = req.headers['x-auth-token'];
-  if (!token) return null;
-  const s = sessions.get(String(token));
-  return s ? s.role : null;
-}
-
-/** سجل الدخول: آخر عمليات الدخول (الدور + الوقت + IP) — يراه المسؤول فقط.
- *  يُسجَّل فيه أيضًا كلُّ ما يُثقل على المنصة (مزامنة كاملة، فحص، جلب يوم) بمن
- *  شغّله ومتى: حظرٌ «بلا مزامنة» يُفسَّر من هنا — مستخدمٌ آخر زامن، أو جُلب يومٌ
- *  مرارًا — لا بالتخمين. */
+/* سجل الدخول (للمسؤول): الدور والوقت وIP لكل دخول، ومعه كل ما يُثقل على المنصة —
+ * مزامنة (sync) وفحص (scan) وجلب يوم (day) — بمن شغّله ومتى، فيُفسَّر أي حظر. */
 let loginLog = [];
 const LOGIN_LOG_MAX = 300;
 function recordLogin(role, req, kind = 'login') {
   let ip = '';
   try {
-    ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
-      || (req.socket && req.socket.remoteAddress) || '';
+    ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || (req.socket && req.socket.remoteAddress) || '';
     ip = ip.replace(/^::ffff:/, '');
   } catch {}
   const ev = { role, time: Date.now(), ip };
   if (kind !== 'login') ev.kind = kind;
   loginLog.push(ev);
   if (loginLog.length > LOGIN_LOG_MAX) loginLog = loginLog.slice(-LOGIN_LOG_MAX);
-  // حفظ غير معطِّل للاستجابة (الدخول نادر)
   saveStore(sysKey('loginlog'), loginLog).catch(() => {});
 }
 
-/** بيانات حساب معيّن (مع ترحيل مفاتيح p2p القديمة غير المُلاحقة) */
-/* ===== الحساب النشط بين عدّة نسخ على قاعدةٍ واحدة =====
- * config يُقرأ مرّةً عند الإقلاع ويُكتب كاملًا، فنسخةٌ ثانية تكتب "active" القديم
- * فوق ما بدّلته الأولى — فينقلب الحساب تحت المستخدم وتُحفظ عملياتُ حسابٍ في
- * آخر. فنقرأه طازجًا قبل كل عملٍ يمسّ بيانات حساب، ونُعيد تحميل البيانات إن
- * تبدّل، كي لا تبقى في الذاكرة صفوفُ حسابٍ ونحن نكتب تحت اسم آخر.
- */
-async function refreshActive() {
-  if (LOCKED) return false;   // السستم المقفول لا يبدّل حسابه أبدًا
-  try {
-    const stored = await loadStore(CONFIG_KEY, null);
-    const a = stored && stored.active;
-    if (ACCOUNTS.includes(a) && a !== config.active) {
-      config.active = a;
-      orders = await loadAccountData('orders');
-      transfers = await loadAccountData('transfers');
-      return true;
-    }
-  } catch (e) { console.error('refreshActive: ' + e.message); }
-  return false;
-}
-
-/** حفظُ الإعدادات دون أن نمحو حسابًا بدّلته نسخةٌ أخرى */
-async function saveConfig() {
-  await refreshActive();
-  await saveStore(CONFIG_KEY, config);
-}
+/* ===================== ٤. الإقلاع ===================== */
 
 async function loadAccountData(kind) {
-  let d = await loadStore(kind + '__' + config.active, null);
-  if (d == null && config.active === 'p2p') {
-    d = await loadStore(kind, {}); // المفتاح القديم قبل نظام الحسابين
-    if (d && Object.keys(d).length) { try { await saveStore(kind + '__p2p', d); } catch {} }
-  }
-  d = d || {};
+  const d = (await loadStore(kind + '__' + config.active, null)) || {};
   await applyGrave(kind + '__' + config.active, d);
   return d;
 }
 
-/** تحميل الإعدادات وبيانات الحساب النشط عند الإقلاع + ترحيل + ضبط كلمات السر من البيئة */
+/** تحميل الإعدادات وبيانات الحساب + ضبط كلمات السر من البيئة عند أول تشغيل */
 async function initStore() {
-  await migrateFromSource();   // أول إقلاعٍ على قاعدةٍ مستقلة: تُنقل بيانات هذا الحساب إليها
   let c = await loadStore(CONFIG_KEY, null);
-  /* أول إقلاعٍ مقفول: إعداداتُ هذا الحساب وكلماتُ السر تُنسخ من الإعدادات المشتركة
-     القديمة مرّةً واحدة، ثم يمضي السستم بمفتاحه المستقل ولا يمسّ المشترك بعدها */
   if (c == null && LOCKED) {
+    // أول إقلاعٍ مقفول على قاعدةٍ فيها إعدادات مشتركة قديمة: تُنسخ مرّةً واحدة
     const shared = (await loadStore('config', null)) || {};
-    c = {
-      active: LOCKED,
-      accounts: { [LOCKED]: (shared.accounts || {})[LOCKED] || {} },
-      auth: shared.auth || {},
-      syncQuota: shared.syncQuota,
-    };
-    console.log('سستم «' + ACCOUNT_NAMES[LOCKED] + '» يبدأ بإعداداته المستقلة (منسوخة من المشتركة)');
+    c = { active: LOCKED, accounts: { [LOCKED]: (shared.accounts || {})[LOCKED] || {} }, auth: shared.auth || {}, syncQuota: shared.syncQuota };
   }
   c = c || {};
   config = Object.assign({}, DEFAULT_CONFIG, c);
-
-  // ترحيل من الحساب الواحد القديم → accounts.p2p
   if (!config.accounts || typeof config.accounts !== 'object') config.accounts = {};
-  if (!config.accounts.p2p) {
-    config.accounts.p2p = {
-      apiKey: c.apiKey || '', apiSecret: c.apiSecret || '',
-      baseUrl: c.baseUrl || 'https://api.binance.com', months: c.months || 12, lastSync: c.lastSync || null,
-    };
-  }
-  config.accounts.p2p = Object.assign(newAccount(), config.accounts.p2p);
-  config.accounts.p3p = Object.assign(newAccount(), config.accounts.p3p || {});
-  // ترحيل مدى الجلب: من «months» القديمة (بالأشهر) → «rangeHours» (بالساعات)
-  for (const id of ACCOUNTS) {
-    const a = config.accounts[id];
-    if (a && a.months != null) { a.rangeHours = Math.round(Number(a.months) * 720) || 720; delete a.months; }
-  }
   config.active = LOCKED || (config.active === 'p3p' ? 'p3p' : 'p2p');
-  // السستم المقفول لا يحمل إلا حسابه، فلا تُكتب مفاتيح الحساب الآخر في إعداداته
-  if (LOCKED) for (const id of ACCOUNTS) if (id !== LOCKED) delete config.accounts[id];
-  ['apiKey', 'apiSecret', 'baseUrl', 'months', 'lastSync'].forEach((k) => delete config[k]);
+  for (const id of ACCOUNTS) {
+    if (LOCKED && id !== LOCKED) { delete config.accounts[id]; continue; }   // السستم المقفول لا يحمل إلا حسابه
+    config.accounts[id] = Object.assign(newAccount(), config.accounts[id] || {});
+  }
+  if (config.syncQuota == null) config.syncQuota = DEFAULT_CONFIG.syncQuota;
 
-  // وضع الصيانة انتقل لمفاتيح مستقلة لكل سستم — يُحذف من config نهائيًا
-  delete config.maintenance;
-
-  // عدد مرات المزامنة المسموحة يوميًا لكل مستخدم غير مسؤول
-  if (config.syncQuota == null) config.syncQuota = SYNC_QUOTA_DEFAULT;
-
-  // المصادقة + ضبط كلمات السر من البيئة عند أول تشغيل
   if (!config.auth || typeof config.auth !== 'object') config.auth = {};
-  config.auth.admin = config.auth.admin || {};
-  config.auth.user = config.auth.user || {};
-  config.auth.user2 = config.auth.user2 || {};
-  if (!config.auth.admin.hash && process.env.ADMIN_PASSWORD) config.auth.admin = makeCredential(process.env.ADMIN_PASSWORD);
-  if (!config.auth.user.hash && process.env.USER_PASSWORD) config.auth.user = makeCredential(process.env.USER_PASSWORD);
-  if (!config.auth.user2.hash && process.env.USER2_PASSWORD) config.auth.user2 = makeCredential(process.env.USER2_PASSWORD);
-
-  try { await saveStore(CONFIG_KEY, config); } catch (e) { console.error(e.message); }
+  for (const role of auth.ROLES) config.auth[role] = config.auth[role] || {};
+  if (!config.auth.admin.hash && process.env.ADMIN_PASSWORD) config.auth.admin = auth.makeCredential(process.env.ADMIN_PASSWORD);
+  if (!config.auth.user.hash && process.env.USER_PASSWORD) config.auth.user = auth.makeCredential(process.env.USER_PASSWORD);
+  if (!config.auth.user2.hash && process.env.USER2_PASSWORD) config.auth.user2 = auth.makeCredential(process.env.USER2_PASSWORD);
+  try { await saveConfig(); } catch (e) { console.error(e.message); }
 
   const savedLog = await loadStore(sysKey('loginlog'), []);
   loginLog = Array.isArray(savedLog) ? savedLog : [];
 
   orders = await loadAccountData('orders');
   transfers = await loadAccountData('transfers');
-
-  /* إصلاح بيانات لمرة واحدة: عمليتا P2P نُفِّذتا عبر رصيد الحساب الفوري ولا
-     تُرجعهما واجهة Binance (listUserOrderHistory) إطلاقًا رغم أن نوافذ المزامنة
-     غطّت وقتيهما مرارًا — القيم منقولة من تفاصيل الطلب في تطبيق Binance نفسه.
-     المفتاح هو رقم الطلب الحقيقي: لو أرجعتها المنصة يومًا تُحدَّث ولا تتكرر. */
-  if (config.active === 'p2p') {
-    let seeded = false;
-    if (!orders['22916843477495025664']) {
-      orders['22916843477495025664'] = {
-        orderNumber: '22916843477495025664',
-        tradeType: 'SELL', asset: 'USDT', fiat: 'SDG', fiatSymbol: 'ج.س',
-        amount: 179.06, takerAmount: 179.06, totalPrice: 1051344, unitPrice: 5871.35,
-        commission: 0.06, counterPart: 'Rania76', orderStatus: 'COMPLETED',
-        advertisementRole: '', createTime: Date.UTC(2026, 7, 1, 12, 15, 23),
-        note: '', reference: '', source: 'binance',
-      };
-      seeded = true;
-    }
-    /* خمس عمليات بيع أخرى بعد الطلب أعلاه مباشرةً لا تُرجعها المنصة كذلك.
-       كل القيم منقولة حرفيًا من شاشة «تفاصيل الطلب» في تطبيق Binance: رقم
-       الطلب والكمية والرسوم والسعر والمبلغ بالجنيه ووقت الإنشاء ولقب المشتري.
-       مجموع كمياتها 886.04 USDT يطابق العجز المرصود بالضبط. */
-    const MISSING_SELLS = [
-      { n: '22916845583096152064', rel: 238.71, price: 5863.01, sdg: 1399601, h: 14, m: 23, s: 45, who: 'ZEZOO0098' },
-      { n: '22916845909626912768', rel: 170.57, price: 5863.00, sdg: 1000090, h: 14, m: 25, s: 3,  who: 'Rania76' },
-      { n: '22916851014434566144', rel: 171.34, price: 5866.00, sdg: 1005107, h: 14, m: 45, s: 20, who: 'PRESTIGE_STORE' },
-      { n: '22916844005940060160', rel: 160.20, price: 5871.33, sdg: 940604,  h: 14, m: 17, s: 29, who: 'AHMED ALIi' },
-      { n: '22916851747372740608', rel: 144.92, price: 5867.00, sdg: 850274,  h: 14, m: 48, s: 15, who: 'Abdostor' },
-    ];
-    for (const o of MISSING_SELLS) {
-      // إزالة النسخة التقديرية السابقة (معرّف P2P-xxxx) بعد وصول البيانات الحقيقية
-      const est = 'P2P-' + o.n.slice(-4);
-      if (orders[est]) { delete orders[est]; seeded = true; }
-      if (orders[o.n]) continue;
-      orders[o.n] = {
-        orderNumber: o.n,
-        tradeType: 'SELL', asset: 'USDT', fiat: 'SDG', fiatSymbol: 'ج.س',
-        amount: o.rel, takerAmount: o.rel,
-        totalPrice: o.sdg, unitPrice: o.price,
-        commission: 0.06, counterPart: o.who, orderStatus: 'COMPLETED',
-        advertisementRole: '',
-        createTime: Date.UTC(2026, 7, 1, o.h - 2, o.m, o.s), // التطبيق بتوقيت السودان (UTC+2)
-        note: '', reference: '', source: 'binance',
-      };
-      seeded = true;
-    }
-
-    const stale1184 = orders['22916831805419741184'];
-    if (stale1184 && stale1184.orderStatus === 'TRADING') {
-      // إشعار Binance: أُلغي تلقائيًا لأن المشتري لم يدفع في الوقت المحدد
-      stale1184.orderStatus = 'CANCELLED_BY_SYSTEM';
-      seeded = true;
-    }
-    // بلا دمج: الذاكرة هنا نسخةُ المخزَّن للتوّ، والدمج يُعيد النسخ المحذوفة
-    if (seeded) { try { await saveOrders({ merge: false }); } catch (e) { console.error(e.message); } }
-  }
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+/* ===================== ٥. إدراج الطلبات والحوالات ===================== */
 
-function normalizeOrder(raw, source) {
-  // العمولة الحقيقية لعمليات P2P = الفرق بين amount و takerAmount؛
-  // لأن حقل commission في واجهة Binance يرجع «0» غالبًا للـ P2P.
-  const amt = num(raw.amount);
-  const takerAmt = num(raw.takerAmount);
-  const feeFromDiff = (takerAmt > 0 && Math.abs(amt - takerAmt) < amt * 0.05) ? Math.abs(amt - takerAmt) : 0;
-  const o = {
-    orderNumber: String(raw.orderNumber || '').trim(),
-    tradeType: String(raw.tradeType).toUpperCase() === 'BUY' ? 'BUY' : 'SELL',
-    asset: String(raw.asset || 'USDT').trim() || 'USDT',
-    fiat: String(raw.fiat || '').trim(),
-    fiatSymbol: String(raw.fiatSymbol || raw.fiat || '').trim(),
-    amount: amt,
-    takerAmount: takerAmt,
-    totalPrice: num(raw.totalPrice),
-    unitPrice: num(raw.unitPrice),
-    commission: Math.max(num(raw.commission), feeFromDiff),
-    counterPart: String(raw.counterPartNickName || raw.counterPart || '').trim(),
-    orderStatus: String(raw.orderStatus || 'COMPLETED').toUpperCase(),
-    advertisementRole: String(raw.advertisementRole || ''),
-    createTime: Number(raw.createTime) || Date.now(),
-    note: String(raw.note || ''),
-    reference: String(raw.reference || ''),
-    source: source,
-  };
-  if (!o.orderNumber) o.orderNumber = 'M' + o.createTime + Math.floor(Math.random() * 1000);
-  if (!o.unitPrice && o.amount > 0) o.unitPrice = o.totalPrice / o.amount;
-  if (!o.totalPrice && o.amount > 0 && o.unitPrice > 0) o.totalPrice = o.amount * o.unitPrice;
-  return o;
-}
-
-/** إدراج/تحديث طلب. يُرجع 'added' أو 'updated' أو 'same' */
+/** إدراج/تحديث طلب → 'added' | 'updated' | 'same'. بيانات المنصة أوثق من اليدوي،
+ *  مع الحفاظ على ما كتبه المستخدم (حقول ANNOT) عند إعادة المزامنة. */
 function upsertOrder(o) {
-  if (o.source === 'binance') fresh.add('orders__' + config.active + ':' + o.orderNumber);
+  if (o.source === 'binance') fresh.add(ordersKey() + ':' + o.orderNumber);
   const prev = orders[o.orderNumber];
   if (!prev) { orders[o.orderNumber] = o; return 'added'; }
-  // بيانات المنصة أوثق من الإدخال اليدوي، مع الحفاظ على الملاحظة والإشاري وتعديلات السعر/المبلغ (إدخال المستخدم)
   if (prev.note && !o.note) o.note = prev.note;
   if (prev.reference && !o.reference) o.reference = prev.reference;
-  if (prev.unitPriceOverride != null) o.unitPriceOverride = prev.unitPriceOverride;
-  if (prev.totalPriceOverride != null) o.totalPriceOverride = prev.totalPriceOverride;
-  if (prev.networkLabelOverride != null) o.networkLabelOverride = prev.networkLabelOverride;
+  for (const f of ['unitPriceOverride', 'totalPriceOverride', 'networkLabelOverride', 'balanceAt', 'balAfter']) if (prev[f] != null) o[f] = prev[f];
   if (prev.zeroPoint) o.zeroPoint = true;
-  if (prev.archived) o.archived = true; // الإخفاء من الجدول قرارُ صاحب الدفتر
-  if (prev.balanceAt != null) o.balanceAt = prev.balanceAt; // مرساة المستخدم اليدوية
-  if (prev.balAfter != null) o.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
+  if (prev.archived) o.archived = true;
   if (prev.source === 'binance' && o.source === 'manual') return 'same';
   const changed = JSON.stringify(prev) !== JSON.stringify(o);
   orders[o.orderNumber] = o;
   return changed ? 'updated' : 'same';
 }
 
-/* ===================== حوالات الإيداع والسحب ===================== */
-
-/** نوافذ زمنية بطول win تغطّي المدى [minStart, now] */
-function makeWindows(now, minStart, win) {
-  const windows = [];
-  for (let end = now; end > minStart; end -= win) {
-    windows.push([Math.max(end - win + 1, minStart), end]);
-  }
-  return windows;
-}
-
-/** المنصة تُرجع وقت السحب نصًّا بتوقيت UTC: "YYYY-MM-DD HH:MM:SS" */
-function parseUTC(s) {
-  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
-  if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
-  const t = Date.parse(s);
-  return Number.isFinite(t) ? t : Date.now();
-}
-
-// إيداع: 0 قيد الانتظار، 1 ناجح، 6 مُضاف لا يُسحب، 7 خطأ، 8 بانتظار التأكيد
-function depositStatusNorm(code) {
-  if (code === 1) return 'COMPLETED';
-  if (code === 7) return 'FAILED';
-  return 'PENDING';
-}
-// سحب: 0 إرسال بريد، 1 ملغى، 2 بانتظار الموافقة، 3 مرفوض، 4 قيد المعالجة، 5 فشل، 6 مكتمل
-function withdrawStatusNorm(code) {
-  if (code === 6) return 'COMPLETED';
-  if (code === 1) return 'CANCELLED';
-  if (code === 3 || code === 5) return 'FAILED';
-  return 'PENDING';
-}
-
-/** توحيد سجل الإيداع/السحب في شكل واحد */
-function normalizeTransfer(raw, kind) {
-  if (kind === 'deposit') {
-    const code = Number(raw.status);
-    return {
-      id: 'D' + String(raw.id || raw.txId || ('' + (raw.insertTime || '') + (raw.amount || ''))),
-      kind: 'deposit',
-      coin: String(raw.coin || 'USDT').trim() || 'USDT',
-      network: String(raw.network || '').trim(),
-      amount: num(raw.amount),
-      fee: 0,
-      status: depositStatusNorm(code),
-      statusCode: Number.isFinite(code) ? code : null,
-      address: String(raw.address || ''),
-      txId: String(raw.txId || ''),
-      time: Number(raw.insertTime) || Date.now(),
-      completeTime: Number(raw.completeTime) || 0,
-      walletType: raw.walletType,
-      note: String(raw.note || ''),
-      reference: String(raw.reference || ''),
-      source: 'binance',
-    };
-  }
-  const code = Number(raw.status);
-  return {
-    id: 'W' + String(raw.id || raw.txId || ''),
-    kind: 'withdraw',
-    coin: String(raw.coin || 'USDT').trim() || 'USDT',
-    network: String(raw.network || '').trim(),
-    amount: num(raw.amount),
-    fee: num(raw.transactionFee),
-    status: withdrawStatusNorm(code),
-    statusCode: Number.isFinite(code) ? code : null,
-    address: String(raw.address || ''),
-    txId: String(raw.txId || ''),
-    time: parseUTC(raw.applyTime),
-    completeTime: raw.completeTime ? parseUTC(raw.completeTime) : 0,
-    walletType: raw.walletType,
-    note: String(raw.note || ''),
-    reference: String(raw.reference || ''),
-    source: 'binance',
-  };
-}
-
-/* ===================== عمليات Binance Pay (إرسال/استلام) ===================== */
-
-// نوع المحفظة في Binance Pay: 1 تمويل، 2 فوري، 3 ورقية، 4/6 بطاقة، 5 Earn
-// (ترقيم مختلف عن الإيداع/السحب، لذا نحفظ الاسم جاهزًا)
-const PAY_WALLET_AR = {
-  1: 'محفظة التمويل (Funding)', 2: 'الحساب الفوري (Spot)', 3: 'محفظة العملة الورقية (Fiat)',
-  4: 'بطاقة الدفع', 5: 'محفظة Earn', 6: 'بطاقة الدفع',
-};
-
-/** توحيد عملية Binance Pay في نفس شكل الحوالة.
- *  المبلغ الموجب = استلام (دخل)، والسالب = إرسال (مصروف). */
-function normalizePay(raw) {
-  const amt = num(raw.amount);
-  const isOut = amt < 0;
-  const payer = raw.payerInfo || {};
-  const receiver = raw.receiverInfo || {};
-  // الطرف الآخر: عند الإرسال هو المستلِم، وعند الاستلام هو المُرسِل
-  const other = isOut ? receiver : payer;
-  const otherName = String(other.name || other.binanceId || other.accountId || '').trim();
-  const tid = String(raw.transactionId || '').trim();
-  const wt = Number(raw.walletType);
-  return {
-    id: 'PAY' + (tid || (raw.transactionTime || '') + '' + raw.amount),
-    kind: isOut ? 'pay-out' : 'pay-in',
-    coin: String(raw.currency || 'USDT').trim() || 'USDT',
-    network: '',
-    amount: Math.abs(amt),
-    fee: 0,
-    status: 'COMPLETED', // النقطة تُرجع العمليات المكتملة فقط
-    statusCode: null,
-    address: '',
-    txId: tid,
-    counterPart: otherName,
-    orderType: String(raw.orderType || '').trim(),
-    time: Number(raw.transactionTime) || Date.now(),
-    completeTime: Number(raw.transactionTime) || 0,
-    walletType: Number.isFinite(wt) ? wt : null,
-    walletName: PAY_WALLET_AR[wt] || '',
-    note: '',
-    reference: '',
-    source: 'binance',
-  };
-}
-
-/* ============ تداول السوق الفوري (Spot) — شراء/بيع عملة مقابل USDT ============
- * آخر ما بقي من حركة محفظة الفوري غير المجلوبة. نتتبّع جانب الـ USDT فقط:
- * شراء عملة = صرف USDT، وبيعها = دخل USDT. */
-function normalizeSpotTrade(raw, symbol) {
-  const base = String(symbol).replace(/USDT$/i, '').toUpperCase();
-  const isBuy = !!raw.isBuyer; // شراء العملة الأساسية يعني صرف USDT
-  const quote = num(raw.quoteQty); // قيمة الصفقة بالـ USDT
-  const t = Number(raw.time) || Date.now();
-  return {
-    id: 'SPT' + String(symbol).toUpperCase() + '-' + String(raw.id),
-    kind: isBuy ? 'spot-buy' : 'spot-sell',
-    coin: 'USDT',
-    network: base, // العملة المقابلة تظهر في عمود العملة/الشبكة
-    amount: quote,
-    // العمولة لا تُخصم إلا إن كانت بالـ USDT نفسه
-    fee: String(raw.commissionAsset || '').toUpperCase() === 'USDT' ? num(raw.commission) : 0,
-    status: 'COMPLETED', // النقطة تُرجع الصفقات المنفَّذة فقط
-    statusCode: null,
-    address: '',
-    txId: String(raw.orderId || raw.id || ''),
-    counterPart: '',
-    symbol: String(symbol).toUpperCase(),
-    baseQty: num(raw.qty),
-    unitPrice: num(raw.price),
-    time: t,
-    completeTime: t,
-    note: '',
-    reference: '',
-    source: 'binance',
-  };
-}
-
-/* ===================== عمليات التحويل (Convert) ===================== */
-
-/** توحيد عملية تحويل عملة (مثل USDT → TRX) في شكل الحوالة.
- *  نتتبّع جانب الـ USDT: إن كان USDT مصدرًا فهو مصروف (convert-out)،
- *  وإن كان وجهةً فهو دخل (convert-in). المبلغ المحفوظ هو قيمة الـ USDT. */
-function normalizeConvert(raw) {
-  const from = String(raw.fromAsset || '').trim().toUpperCase();
-  const to = String(raw.toAsset || '').trim().toUpperCase();
-  const fromAmt = num(raw.fromAmount);
-  const toAmt = num(raw.toAmount);
-  const usdtIsFrom = from === 'USDT';
-  const usdtIsTo = to === 'USDT';
-  const t = Number(raw.createTime) || Date.now();
-  const other = usdtIsFrom ? to : from; // العملة المقابلة للـ USDT (تظهر في عمود الشبكة)
-  return {
-    id: 'CVT' + String(raw.orderId || raw.quoteId || (t + '' + fromAmt)),
-    kind: usdtIsTo ? 'convert-in' : 'convert-out',
-    coin: (usdtIsFrom || usdtIsTo) ? 'USDT' : from,
-    network: (usdtIsFrom || usdtIsTo) ? other : to,
-    amount: usdtIsTo ? toAmt : fromAmt, // قيمة الـ USDT (أو المصدر إن لم يكن أيّهما USDT)
-    fee: 0,
-    status: String(raw.orderStatus || '') === 'SUCCESS' ? 'COMPLETED' : 'PENDING',
-    statusCode: null,
-    address: '',
-    txId: String(raw.orderId || ''),
-    counterPart: '',
-    fromAsset: from,
-    fromAmount: fromAmt,
-    toAsset: to,
-    toAmount: toAmt,
-    time: t,
-    completeTime: t,
-    note: '',
-    reference: '',
-    source: 'binance',
-  };
-}
-
-/** إدراج/تحديث حوالة. يُرجع 'added' أو 'updated' أو 'same'.
- *  map: مخزنُ حسابٍ بعينه؛ وبدونه مخزنُ الحساب النشط. */
-function upsertTransfer(t, map = transfers) {
+/** إدراج/تحديث حوالة → 'added' | 'updated' | 'same' */
+function upsertTransfer(t) {
   if (!t.id || t.id === 'D' || t.id === 'W') return 'same';
-  if (t.source === 'binance') fresh.add((storeKeyOf.get(map) || ('transfers__' + config.active)) + ':' + t.id);
-  const has = Object.prototype.hasOwnProperty.call(map, t.id);
-  const prev = has ? map[t.id] : null;
-  if (!prev) { map[t.id] = t; return 'added'; }
-  // الحفاظ على إدخال المستخدم (الملاحظة والإشاري وتعديلات السعر/المبلغ) عند إعادة المزامنة
+  if (t.source === 'binance') fresh.add(transfersKey() + ':' + t.id);
+  const prev = Object.prototype.hasOwnProperty.call(transfers, t.id) ? transfers[t.id] : null;
+  if (!prev) { transfers[t.id] = t; return 'added'; }
   if (prev.note && !t.note) t.note = prev.note;
   if (prev.reference && !t.reference) t.reference = prev.reference;
-  if (prev.unitPriceOverride != null) t.unitPriceOverride = prev.unitPriceOverride;
-  if (prev.totalPriceOverride != null) t.totalPriceOverride = prev.totalPriceOverride;
-  if (prev.networkLabelOverride != null) t.networkLabelOverride = prev.networkLabelOverride;
+  for (const f of ['unitPriceOverride', 'totalPriceOverride', 'networkLabelOverride', 'usdtValue', 'balanceAt', 'balAfter']) if (prev[f] != null) t[f] = prev[f];
   if (prev.zeroPoint) t.zeroPoint = true;
-  if (prev.archived) t.archived = true; // الإخفاء من الجدول قرارُ صاحب الدفتر
-  if (prev.usdtValue != null) t.usdtValue = prev.usdtValue; // تقويمُ عمليةٍ بعملة أخرى
-  if (prev.balanceAt != null) t.balanceAt = prev.balanceAt; // مرساة المستخدم اليدوية
-  if (prev.balAfter != null) t.balAfter = prev.balAfter; // الباقي المثبَّت لا تمحوه مزامنة
+  if (prev.archived) t.archived = true;
   const changed = JSON.stringify(prev) !== JSON.stringify(t);
-  map[t.id] = t;
+  transfers[t.id] = t;
   return changed ? 'updated' : 'same';
 }
 
-/* ============================ عميل Binance ============================ */
+/* ===================== ٦. المزامنة والفحص وجلب يوم ===================== */
 
-function userError(message) { const e = new Error(message); e.isUser = true; return e; }
-
-/* ===== بوّابة الحظر =====
- * ردُّ 429/418 معناه: كفّ عن الطلب حتى يرفع العنوانُ الحظر. الاستمرارُ بعده — ولو
- * بطلب رصيدٍ عند كل فتح صفحة، أو بمزامنةٍ من مستخدمٍ آخر — هو ما يحوّل 429 إلى
- * 418 ويُطيل 418 (المنصة تُضاعف مدّة الحظر لمن يُعاود). فبعد أول ردٍّ منهما يُغلق
- * الخادمُ كلَّ طلبٍ إلى المنصة من كل المستخدمين حتى ينقضي Retry-After الذي
- * تُرسله المنصة (أو ٣٠ دقيقة لـ418 ودقيقتان لـ429 إن لم تُرسله). */
-let binanceBlockedUntil = 0;
-const banLeft = () => Math.max(0, binanceBlockedUntil - Date.now());
-const banMessage = (left) => `المنصة حظرت هذا العنوان مؤقتًا — أُوقفت كل الطلبات إليها حتى ينقضي الحظر (بقي ${Math.ceil(left / 60000)} دقيقة)؛ التكرار يُطيله`;
-function gateBinance() {
-  const left = banLeft();
-  if (left > 0) throw userError(banMessage(left));
-}
-function noteBan(r) {
-  const ra = Number(r.headers.get('retry-after'));
-  const secs = Number.isFinite(ra) && ra > 0 ? ra : (r.status === 418 ? 1800 : 120);
-  binanceBlockedUntil = Math.max(binanceBlockedUntil, Date.now() + secs * 1000);
-  console.error(`المنصة ردّت HTTP ${r.status} — أُغلقت الطلبات إلى المنصة ${Math.ceil(secs / 60)} دقيقة`);
+/** سياق الاتصال بالمنصة للحساب النشط (يتحقّق من التوقيت أولًا) */
+async function binanceCtx() {
+  if (!hasKeys()) throw userError('لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
+  const base = apiBase();
+  return { base, offset: await bn.timeOffset(base), creds: AC() };
 }
 
-async function timeOffset(base) {
-  gateBinance();
-  let r;
-  try {
-    r = await fetch(base + '/api/v3/time', { signal: AbortSignal.timeout(15000) });
-  } catch {
-    throw userError('تعذّر الاتصال بالمنصة — تحقّق من الإنترنت، أو جرّب تغيير عنوان الخادم من الإعدادات');
-  }
-  if (r.status === 451 || r.status === 403) {
-    throw userError('الوصول إلى المنصة محجوب من هذه المنطقة (HTTP ' + r.status + ') — جرّب VPN أو غيّر عنوان الخادم من الإعدادات');
-  }
-  if (r.status === 429 || r.status === 418) {
-    noteBan(r);
-    throw userError('المنصة حظرت الطلبات مؤقتًا بسبب كثرتها (HTTP ' + r.status + ') — أُوقفت كل الطلبات إليها تلقائيًا حتى ينقضي الحظر؛ لا تكرّر الضغط فالتكرار يُطيله');
-  }
-  if (!r.ok) throw userError('استجابة غير متوقعة من المنصة (HTTP ' + r.status + ')');
-  const j = await r.json();
-  return Number(j.serverTime) - Date.now();
-}
-
-/** acct: حسابٌ بعينه بمفاتيحه (إعادةُ الحوالات إلى أصحابها تسأل الحسابين معًا)؛
- *  وبدونه الحسابُ النشط كالمعتاد. */
-async function signedGet(base, endpoint, params, offset, method = 'GET', acct = null) {
-  const ac = acct || AC();
-  const qs = new URLSearchParams({});
-  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
-  qs.set('recvWindow', '30000');
-  qs.set('timestamp', String(Date.now() + offset));
-  const signature = crypto.createHmac('sha256', ac.apiSecret).update(qs.toString()).digest('hex');
-  const url = base + endpoint + '?' + qs.toString() + '&signature=' + signature;
-
-  gateBinance();
-  let r;
-  try {
-    r = await fetch(url, { method, headers: { 'X-MBX-APIKEY': ac.apiKey }, signal: AbortSignal.timeout(30000) });
-  } catch {
-    throw userError('انقطع الاتصال أثناء الجلب — أعد المحاولة');
-  }
-  /* المنصة تُخبرنا في كل ردٍّ بما استهلكناه من حدّ الدقيقة — على الحساب (UID) وعلى
-     العنوان (IP) معًا. قراءتُهما تُغني عن التخمين: نتمهّل قبل بلوغ أيّ الحدّين بدل
-     أن نصطدم به فنُحظر (انظر coolIfHeavy). */
-  const uw = Number(r.headers.get('x-sapi-used-uid-weight-1m'));
-  if (Number.isFinite(uw) && uw > 0) lastUidWeight = uw;
-  const iw = Number(r.headers.get('x-sapi-used-ip-weight-1m'));
-  if (Number.isFinite(iw) && iw > 0) lastIpWeight = iw;
-  if (r.status === 429 || r.status === 418) noteBan(r);
-  const text = await r.text();
-  let j = null;
-  try { j = JSON.parse(text); } catch {}
-
-  if (!r.ok) {
-    const code = j && typeof j.code === 'number' ? j.code : null;
-    if (code === -2014 || code === -2015) throw userError('المنصة رفضت مفتاح API — تأكّد من صحة المفتاح ومن تفعيل صلاحية «إتاحة القراءة»');
-    if (code === -1022) throw userError('التوقيع غير صحيح — تأكّد من المفتاح السري (Secret Key)');
-    if (code === -1021) throw userError('فرق توقيت بين جهازك والمنصة — أعد المحاولة، وإن تكرر اضبط ساعة الجهاز');
-    if (r.status === 429 || r.status === 418) throw userError('المنصة حظرت الطلبات مؤقتًا بسبب كثرتها (HTTP ' + r.status + ') — أُوقفت كل الطلبات إليها تلقائيًا حتى ينقضي الحظر؛ لا تكرّر الضغط فالتكرار يُطيله');
-    if (r.status === 451 || r.status === 403) throw userError('الوصول محجوب من هذه المنطقة — جرّب VPN أو غيّر عنوان الخادم من الإعدادات');
-    throw userError('خطأ من المنصة: ' + (j && (j.msg || j.message) ? (j.msg || j.message) : 'HTTP ' + r.status));
-  }
-  if (j && j.success === false) throw userError('خطأ من المنصة: ' + (j.message || j.code || 'غير معروف'));
-  return j || {};
-}
-
-const dayLabel = (ms) => new Date(ms).toISOString().slice(0, 10);
-
-/* حدُّ نقطة Binance Pay: ١٠٠ سجلًّا للطلب بلا ترقيم صفحات، فالشطرُ الزمني هو
-   الوسيلة الوحيدة لتجاوزه. والسقفُ يمنع نافذةً مزدحمة من إطالة المزامنة بلا نهاية. */
-const PAY_PAGE = 100;
-/* حدُّ الوزن على حساب المستخدم ١٨٠٠٠٠ في الدقيقة لكل نقطة، ووزنُ نقطة Pay ٣٠٠٠
- * — أي ستون طلبًا في الدقيقة سقفًا مطلقًا. كان الفاصل ثانيةً واحدة (ستون
- * بالضبط) وفي «اجلب يومًا» نصفَ ثانية (ضعف الحدّ)، فكان كل تجاوزٍ يُنتج 429 ثم
- * حظرًا 418 على العنوان — ولهذا كانت كل نسخةٍ جديدة تُحظر فور أول مزامنة، مهما
- * تبدّلت المنطقة. نمشي الآن على ثلث الحدّ، ونتمهّل إن اقتربت ترويسةُ الوزن منه.
- */
-const PAY_WEIGHT = 3000;
-const UID_LIMIT = 180000;
-const PAY_GAP_MS = 3000;     // عشرون طلبًا في الدقيقة — ثلث الحدّ
-const PAY_MAX_CALLS = 24;    // ٧٢٠٠٠ وزنًا سقفًا، دون نصف الحدّ
-const IP_LIMIT = 12000;      // حدُّ وزن العنوان في الدقيقة لنقاط sapi
-let lastUidWeight = 0;       // آخر ما أبلغت به المنصة من استهلاك الدقيقة على الحساب
-let lastIpWeight = 0;        // … وعلى العنوان (مشتركٌ مع كل ما على هذا العنوان)
-
-/** تمهّلٌ قبل بلوغ حدّ الدقيقة — على الحساب أو على العنوان: ندع الدقيقة تدور بدل أن نصطدم بالحدّ */
-async function coolIfHeavy(cost) {
-  const heavy = (lastUidWeight && lastUidWeight + cost > UID_LIMIT * 0.6) || (lastIpWeight && lastIpWeight > IP_LIMIT * 0.5);
-  if (heavy) {
-    await sleep(25000);
-    lastUidWeight = 0;
-    lastIpWeight = 0;
-  }
-}
-
-/* ===== جلبُ طلبات P2P بنوافذ تنشطر =====
- * نقطة listUserOrderHistory تُرجع مئة صفٍّ للطلب، والترقيمُ بالصفحات لا يُعوَّل
- * عليه: الصفحةُ التالية قد تُعيد الصفحةَ نفسها. كان الجلب يأخذ المئة ويمضي، فتضيع
- * أيامٌ كاملة من المبيعات ويعيش صاحب الدفتر على ملفات CSV يومية. الآن: إن امتلأت
- * الصفحة ولم تأتِ التالية بجديد، تُشطر النافذة نصفين ويُعاد السؤال — حتى تعود
- * الصفحة ناقصةً فنعلم يقينًا أننا استوعبنا كل ما فيها. onRaw يُستدعى لكل طلبٍ
- * مرّةً واحدة؛ trace (اختياري) يسجّل كل طلبٍ للفحص. */
-const C2C_MIN_WIN = 15 * 60000;
-const C2C_MAX_CALLS = 400;
-const C2C_GAP_MS = 600;          // مئةُ طلبٍ في الدقيقة سقفًا — القسمةُ تُكثر الطلبات، والعنوانُ مشترك
-const C2C_SLACK = 6 * 3600000;   // هامشٌ لو رتّبت المنصة بوقت الإكمال لا الإنشاء
-const C2C_CAP_MIN = 20;          // قبل أن نعرف سقف الصفحة: كلُّ صفحةٍ بعشرين فأكثر تُعامَل على أنها قد تكون مبتورة
-/* متى تُعدّ النافذة مستوعَبة؟ حين تنتهي بصفحةٍ ناقصةٍ غير فارغة تأتي بجديد (أو حين
- * تكون صفحتها الأولى ناقصة). صفحةٌ ممتلئة تلتها صفحةٌ مكرّرة أو فارغة لا تثبت شيئًا:
- * قد يكون وراءها طلبات لا تُعطيها المنصة — فنشطر النافذة. وإن كانت صفوفها خارج
- * الفترة المطلوبة فالمنصة تُهمل الفترة أصلًا وتُرجع أحدث مئةٍ دائمًا، فلا تنفع
- * القسمة ونتوقف بدل أن نستهلك مئات الطلبات بلا طائل (windowsIgnored).
- *
- * وما «الصفحة الممتلئة»؟ الوثائق تقول مئة صفٍّ، لكن الدفتر أثبت غير ذلك: كلُّ
- * مزامنةٍ كانت تحفظ أحدث خمسين طلبًا بالضبط ثم تقف (ساعاتٌ كاملة تضيع بين مزامنتين)
- * لأن الكود عدّ الخمسين «صفحةً ناقصة» فظنّ النافذة مستوعَبة. فلا نفترض رقمًا: أكبرُ
- * صفحةٍ رأيناها في العملية هي السقف المعلوم (يُشارَك في budget بين النوافذ والأنواع)،
- * وكلُّ صفحةٍ بلغته تُعامَل على أنها مبتورة فنطلب التالية أو نشطر. ومجموعُ المنصة
- * (total) يُستأنس به لطلب صفحةٍ أخرى بعد صفحةٍ قصيرة، فإن وعد بمزيدٍ ولم يأتِ شيء
- * عُدّ غيرَ موثوق ولم يُسأل بعدها.
- *
- * budget (اختياري): رصيدُ طلباتٍ مشترك بين كل النوافذ والأنواع في العملية الواحدة
- * ({ left }) — المزامنةُ الكاملة أو الفحصُ قد يمرّان على عشرات النوافذ، ولا بد من
- * سقفٍ على مجموعها لا على كلٍّ منها وحدها، وإلا كان مجموعُها هو ما يُحظر العنوان.
- * وتُفحص الأنصافُ الأحدث قبل الأقدم: إن نفد الرصيد ضاع القديمُ المحفوظُ أصلًا لا الجديد. */
-async function fetchC2C(base, offset, tradeType, s, e, onRaw, trace, budget) {
-  const stack = [[s, e]];
-  const seen = new Set();
-  let calls = 0, truncated = false, windowsIgnored = false, budgetOut = false;
-  const st = budget || {};                 // maxRows و totalUnreliable يُشارَكان عبر النوافذ والأنواع
-  if (!(st.maxRows > 0)) st.maxRows = 0;
-  const exhausted = () => calls >= C2C_MAX_CALLS || (budget && budget.left <= 0);
-  while (stack.length) {
-    if (exhausted()) { truncated = true; budgetOut = true; break; }
-    const [ws, we] = stack.pop();
-    const winIds = new Set();              // ما أعادته المنصة لهذه النافذة (للمقارنة بمجموعها)
-    let page = 1, ended = false, prevFull = false;
-    for (;;) {
-      calls++;
-      if (budget) budget.left--;
-      await coolIfHeavy(1);
-      const j = await signedGet(base, '/sapi/v1/c2c/orderMatch/listUserOrderHistory',
-        { tradeType, startTimestamp: ws, endTimestamp: we, page, rows: 100 }, offset);
-      const rows = Array.isArray(j.data) ? j.data : [];
-      const total = j.total != null && Number.isFinite(Number(j.total)) ? Number(j.total) : null;
-      let fresh = 0, outside = 0;
-      for (const raw of rows) {
-        const t = Number(raw.createTime) || 0;
-        if (t && (t < ws - C2C_SLACK || t > we + C2C_SLACK)) outside++;
-        const id = String(raw.orderNumber || '');
-        if (!id) continue;
-        winIds.add(id);
-        if (seen.has(id)) continue;
-        seen.add(id); fresh++;
-        onRaw(raw);
-      }
-      st.maxRows = Math.max(st.maxRows, rows.length);
-      const cap = Math.max(C2C_CAP_MIN, st.maxRows);
-      if (trace) trace.push({ type: tradeType, from: ws, to: we, page, rows: rows.length, cap, total, fresh, outside });
-      if (rows.length >= 20 && outside * 2 > rows.length) { windowsIgnored = true; break; }
-      if (rows.length < cap) {
-        // صفحةٌ أقصر من السقف المعلوم
-        const wantMore = total != null && !st.totalUnreliable && total > winIds.size;
-        if (wantMore && rows.length > 0 && (page === 1 || fresh > 0) && page < 60 && !exhausted()) {
-          prevFull = false; page++; await sleep(C2C_GAP_MS); continue;   // المجموع يقول إن هناك مزيدًا — نجرّب صفحةً أخرى
-        }
-        if (prevFull) ended = rows.length > 0 && fresh > 0;   // بعد صفحةٍ ممتلئة: ناقصةٌ بجديد = نهاية، فارغة أو مكرّرة = اشطر
-        else { if (wantMore && page > 1 && fresh === 0) st.totalUnreliable = true; ended = true; }
-        break;
-      }
-      prevFull = true;
-      if (!fresh || page >= 60 || exhausted()) break;   // صفحةٌ ممتلئة مكرّرة (أو نفد الرصيد): اشطر النافذة
-      page++;
-      await sleep(C2C_GAP_MS);
-    }
-    if (windowsIgnored) { truncated = true; break; }
-    if (!ended) {
-      if (we - ws > C2C_MIN_WIN) { const mid = Math.floor((ws + we) / 2); stack.push([ws, mid], [mid + 1, we]); } // الأحدث يُفحص أولًا
-      else truncated = true;
-    }
-    await sleep(C2C_GAP_MS);
-  }
-  if (exhausted() && stack.length) { truncated = true; budgetOut = true; }
-  return { count: seen.size, calls, truncated, windowsIgnored, budgetOut, cap: Math.max(C2C_CAP_MIN, st.maxRows) };
-}
-const c2cWarn = (g) => (g.windowsIgnored
-  ? `المنصة تُهمل الفترة المحدَّدة وتُرجع أحدث ${g.cap || 100} طلب فقط — لا تُجدي القسمة، فزامن قبل أن يتراكم أكثر من ذلك بين مزامنتين`
-  : g.budgetOut
-    ? 'نفد رصيد الطلبات لهذه العملية — الأحدثُ وصل والأقدمُ قد ينقص؛ قلّل مدى المزامنة في الإعدادات أو زامن مرةً أخرى لاحقًا'
-    : `المنصة تُرجع ${g.cap || 100} صفًّا فقط في كل سؤال ولم تكفِ القسمة — قد تبقى طلبات لم تصل`);
+/* أقصى نوافذ تقبلها المنصة: ٣٠ يومًا لطلبات P2P والتحويل، ٩٠ يومًا للإيداع/السحب/Pay */
+const WIN_30 = 29 * 86400000;
+const WIN_90 = 89 * 86400000;
 
 /**
- * مزامنة شاملة: طلبات P2P (بيع/شراء) + سجل الإيداع + سجل السحب، على نوافذ زمنية،
- * وتبثّ تقدّم العملية سطرًا-بسطر (NDJSON). أي بيانات جُلبت تُحفظ حتى لو فشلت
- * المزامنة في منتصفها (بفضل كتلة finally) فلا يضيع ما نزل.
+ * مزامنة شاملة: طلبات P2P ثم الإيداع والسحب وPay والتحويل والسوق الفوري، على نوافذ
+ * زمنية، وتبثّ تقدّمها سطرًا سطرًا (NDJSON). ما جُلب يُحفظ ولو فشلت في منتصفها.
  */
 async function* syncGenerator() {
-  await refreshActive();   // قد تكون نسخةٌ أخرى بدّلت الحساب
-  if (!AC().apiKey || !AC().apiSecret) {
-    throw userError('لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
-  }
-  const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
   yield { msg: 'جارٍ الاتصال بالمنصة والتحقق من التوقيت…', pct: 1 };
-  // دمج ما كتبه السستم الآخر (على نفس القاعدة) قبل الجلب، حتى لا نمحوه عند الحفظ
-  await mergeFromStore('orders__' + config.active, orders);
-  await mergeFromStore('transfers__' + config.active, transfers);
-  const offset = await timeOffset(base);
+  await mergeBoth();   // دمج ما كتبته نسخةٌ أخرى قبل الجلب حتى لا نمحوه عند الحفظ
+  const ctx = await binanceCtx();
 
   const now = Date.now();
-  const rangeHours = Math.min(Math.max(Number(AC().rangeHours) || 720, 1), 26280); // من ساعة إلى 3 سنوات
+  const rangeHours = Math.min(Math.max(Number(AC().rangeHours) || 720, 1), 26280);   // من ساعة إلى ٣ سنوات
   const minStart = now - rangeHours * 3600000;
-  const p2pWindows = makeWindows(now, minStart, 29 * 86400000); // C2C: أقصى نافذة 30 يومًا
-  const txWindows = makeWindows(now, minStart, 89 * 86400000);  // الإيداع/السحب: أقصى نافذة 90 يومًا
-  const convertWindows = makeWindows(now, minStart, 29 * 86400000); // Convert: أقصى نافذة 30 يومًا
+  const p2pWindows = bn.makeWindows(now, minStart, WIN_30);
+  const txWindows = bn.makeWindows(now, minStart, WIN_90);
+  const convertWindows = bn.makeWindows(now, minStart, WIN_30);
 
   let added = 0, updated = 0, fetched = 0;
   let depAdded = 0, wdAdded = 0, payAdded = 0, cvtAdded = 0, sptAdded = 0, txUpdated = 0;
   let step = 0;
   const totalSteps = p2pWindows.length * 2 + txWindows.length * 3 + convertWindows.length + 4;
   const prog = (msg) => { step++; return { msg, pct: Math.min(1 + Math.round((step / totalSteps) * 96), 97) }; };
+  const countTx = (r, onAdd) => { if (r === 'added') onAdd(); else if (r === 'updated') txUpdated++; };
 
   const result = { done: true };
   try {
-    /* ---- طلبات P2P (بيع ثم شراء) ---- */
-    const c2cBudget = { left: 300 }; // ثلاثمئة طلبٍ للمزامنة كلها — بيعًا وشراءً وكل النوافذ (شهرٌ بسقف خمسين يحتاج نحو ١٦٠)
+    /* ---- طلبات P2P (بيع ثم شراء) — رصيدٌ واحد للمزامنة كلها ---- */
+    const c2cBudget = { left: 300 };
     for (const tradeType of ['SELL', 'BUY']) {
       const label = tradeType === 'SELL' ? 'مبيعات' : 'مشتريات';
       for (const [s, e] of p2pWindows) {
         yield prog(`جلب ${label} P2P: ${dayLabel(s)} ← ${dayLabel(e)}`);
-        const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => {
-          const r = upsertOrder(normalizeOrder(raw, 'binance'));
-          if (r === 'added') added++;
-          else if (r === 'updated') updated++;
+        const got = await bn.fetchC2C(ctx, tradeType, s, e, (raw) => {
+          const r = upsertOrder(N.normalizeOrder(raw, 'binance'));
+          if (r === 'added') added++; else if (r === 'updated') updated++;
         }, undefined, c2cBudget);
         fetched += got.count;
-        if (got.truncated) yield { msg: `⚠ ${label} P2P ${dayLabel(s)} ← ${dayLabel(e)}: ${c2cWarn(got)}`, pct: null };
+        if (got.truncated) yield { msg: `⚠ ${label} P2P ${dayLabel(s)} ← ${dayLabel(e)}: ${bn.c2cWarn(got)}`, pct: null };
       }
     }
 
-    /* ---- سجل الإيداع ---- */
-    for (const [s, e] of txWindows) {
-      yield prog(`جلب الإيداعات: ${dayLabel(s)} ← ${dayLabel(e)}`);
-      let off = 0;
-      for (;;) {
-        const arr = await signedGet(base, '/sapi/v1/capital/deposit/hisrec',
-          { startTime: s, endTime: e, offset: off, limit: 1000 }, offset);
-        const rows = Array.isArray(arr) ? arr : [];
-        for (const raw of rows) {
-          const r = upsertTransfer(normalizeTransfer(raw, 'deposit'));
-          if (r === 'added') depAdded++;
-          else if (r === 'updated') txUpdated++;
+    /* ---- الإيداع والسحب (حتى ألف سجل في الطلب، مع ترقيم offset) ---- */
+    for (const [kind, endpoint, label, gap] of [
+      ['deposit', '/sapi/v1/capital/deposit/hisrec', 'الإيداعات', 300],
+      ['withdraw', '/sapi/v1/capital/withdraw/history', 'عمليات السحب', 400],
+    ]) {
+      for (const [s, e] of txWindows) {
+        yield prog(`جلب ${label}: ${dayLabel(s)} ← ${dayLabel(e)}`);
+        for (let off = 0; ; off += 1000) {
+          const arr = await bn.signedGet(ctx, endpoint, { startTime: s, endTime: e, offset: off, limit: 1000 });
+          if (kind === 'withdraw') await bn.coolIfHeavy(18000);   // وزن سجل السحب ١٨٠٠٠: عشرة طلبات في الدقيقة
+          const rows = Array.isArray(arr) ? arr : [];
+          for (const raw of rows) countTx(upsertTransfer(N.normalizeTransfer(raw, kind)), () => (kind === 'deposit' ? depAdded++ : wdAdded++));
+          if (rows.length < 1000) break;
+          await sleep(gap);
         }
-        if (rows.length < 1000) break;
-        off += 1000;
-        await sleep(300);
+        await sleep(gap);
       }
-      await sleep(300);
     }
 
-    /* ---- سجل السحب ---- */
-    for (const [s, e] of txWindows) {
-      yield prog(`جلب عمليات السحب: ${dayLabel(s)} ← ${dayLabel(e)}`);
-      let off = 0;
-      for (;;) {
-        const arr = await signedGet(base, '/sapi/v1/capital/withdraw/history',
-          { startTime: s, endTime: e, offset: off, limit: 1000 }, offset);
-        await coolIfHeavy(18000); // وزن سجل السحب ١٨٠٠٠: عشرة طلبات في الدقيقة
-        const rows = Array.isArray(arr) ? arr : [];
-        for (const raw of rows) {
-          const r = upsertTransfer(normalizeTransfer(raw, 'withdraw'));
-          if (r === 'added') wdAdded++;
-          else if (r === 'updated') txUpdated++;
-        }
-        if (rows.length < 1000) break;
-        off += 1000;
-        await sleep(400);
-      }
-      await sleep(400);
-    }
-
-    /* ---- عمليات Binance Pay (إرسال/استلام) ----
-       نقطة /sapi/v1/pay/transactions: الحد الأقصى للفترة 90 يومًا، وأقصى 100 سجل
-       لكل طلب ولا ترقيم صفحات لها، ووزنها على حساب المستخدم (UID) 3000 وهو ضمن الحد.
-       نغلّفها بـ try/catch حتى لا يوقف فشلُها (صلاحية/منطقة) بقيةَ المزامنة. */
+    /* ---- Binance Pay (فشلها غير قاتل: صلاحية أو منطقة) ---- */
     try {
       for (const [ws, we] of txWindows) {
         yield prog(`جلب عمليات Binance Pay: ${dayLabel(ws)} ← ${dayLabel(we)}`);
-        /* نافذةٌ عادت ممتلئة (١٠٠ سجلًّا) معناها أن ما زاد سقط صامتًا — ولا
-           ترقيم صفحات نطلب به البقية. وسقوطُ عملية دخلٍ واحدة يجعل عمود
-           «الباقي من USDT» ينزل تحت الصفر بلا سببٍ ظاهر، فتضيع أرقام ما بعدها.
-           لذلك نشطر النافذة الممتلئة نصفين ونعيد السؤال، حتى تعود ناقصةً
-           فنعلم يقينًا أننا استوعبنا كل ما فيها. */
-        const parts = [[ws, we]];
-        let calls = 0;
-        while (parts.length && calls < PAY_MAX_CALLS) {
-          const [s, e] = parts.pop();
-          calls++;
-          const j = await signedGet(base, '/sapi/v1/pay/transactions',
-            { startTime: s, endTime: e, limit: PAY_PAGE }, offset);
-          const rows = Array.isArray(j.data) ? j.data : [];
-          for (const raw of rows) {
-            const r = upsertTransfer(normalizePay(raw));
-            if (r === 'added') payAdded++;
-            else if (r === 'updated') txUpdated++;
-          }
-          // نافذة دقيقة واحدة لا تُشطر أكثر — لو امتلأت فالسقوط أصغر من أن نلاحقه
-          if (rows.length >= PAY_PAGE && e - s > 60000) {
-            const mid = Math.floor((s + e) / 2);
-            parts.push([mid + 1, e], [s, mid]);
-            yield prog(`تكثيف Binance Pay (${dayLabel(s)} ← ${dayLabel(e)}): السجل ممتلئ، نشطر الفترة`);
-          }
-          await sleep(PAY_GAP_MS);
-          await coolIfHeavy(PAY_WEIGHT);
-        }
-        if (parts.length) {
-          yield { msg: '⚠ عمليات Binance Pay كثيرة جدًّا في هذه الفترة — جُلب أقصى ما يسمح به الحد، وقد تبقى عمليات لم تصل.', pct: 97 };
-        }
+        const got = await bn.fetchPay(ctx, ws, we, (raw) => countTx(upsertTransfer(N.normalizePay(raw)), () => payAdded++));
+        if (got.capped) yield { msg: '⚠ عمليات Binance Pay كثيرة جدًّا في هذه الفترة — جُلب أقصى ما يسمح به الحد، وقد تبقى عمليات لم تصل.', pct: 97 };
       }
     } catch (err) {
-      // فشل غير قاتل — نُبلّغ المستخدم ونكمل بما جُلب
       yield { msg: 'تعذّر جلب عمليات Binance Pay (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
     }
 
-    /* ---- سجل التحويل (Convert: مثل USDT → TRX) ----
-       نقطة /sapi/v1/convert/tradeFlow: أقصى نافذة 30 يومًا، حتى 1000 سجل،
-       ووزنها على حساب المستخدم (UID) ضمن الحد. نغلّفها بـ try/catch حتى
-       لا يوقف فشلُها بقيةَ المزامنة. */
+    /* ---- التحويل بين العملات (Convert) ---- */
     try {
       for (const [s, e] of convertWindows) {
         yield prog(`جلب سجل التحويل (Convert): ${dayLabel(s)} ← ${dayLabel(e)}`);
-        const j = await signedGet(base, '/sapi/v1/convert/tradeFlow',
-          { startTime: s, endTime: e, limit: 1000 }, offset);
-        const rows = Array.isArray(j.list) ? j.list : [];
-        for (const raw of rows) {
-          const r = upsertTransfer(normalizeConvert(raw));
-          if (r === 'added') cvtAdded++;
-          else if (r === 'updated') txUpdated++;
-        }
+        const j = await bn.signedGet(ctx, '/sapi/v1/convert/tradeFlow', { startTime: s, endTime: e, limit: 1000 });
+        for (const raw of (Array.isArray(j.list) ? j.list : [])) countTx(upsertTransfer(N.normalizeConvert(raw)), () => cvtAdded++);
         await sleep(1000);
       }
     } catch (err) {
       yield { msg: 'تعذّر جلب سجل التحويل Convert (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
     }
 
-    /* ---- تداول السوق الفوري (Spot) ----
-       /api/v3/myTrades تلزمها «symbol»، ومداها الزمني محدود بـ٢٤ ساعة؛ لكن
-       بدون تحديد وقت تُرجع أحدث ١٠٠٠ صفقة دفعةً واحدة — طلبٌ واحد لكل زوج.
-       الأزواج تُستنتج من العملات التي مرّت فعلًا على الحساب (بلا تخمين واسع). */
+    /* ---- السوق الفوري: /api/v3/myTrades تلزمها symbol، فنستنتج الأزواج من العملات
+         التي مرّت على الحساب فعلًا؛ وبلا وقتٍ تُرجع أحدث ألف صفقة دفعةً واحدة ---- */
     try {
       const bases = new Set();
       for (const t of Object.values(transfers)) {
@@ -1190,19 +419,13 @@ async function* syncGenerator() {
           if (s && s !== 'USDT' && /^[A-Z0-9]{2,10}$/.test(s)) bases.add(s);
         }
       }
-      const symbols = [...bases].slice(0, 8).map((b) => b + 'USDT');
-      for (const symbol of symbols) {
+      for (const symbol of [...bases].slice(0, 8).map((b) => b + 'USDT')) {
         yield prog(`جلب تداول السوق الفوري: ${symbol}`);
         try {
-          const arr = await signedGet(base, '/api/v3/myTrades', { symbol, limit: 1000 }, offset);
-          for (const raw of (Array.isArray(arr) ? arr : [])) {
-            const r = upsertTransfer(normalizeSpotTrade(raw, symbol));
-            if (r === 'added') sptAdded++;
-            else if (r === 'updated') txUpdated++;
-          }
+          const arr = await bn.signedGet(ctx, '/api/v3/myTrades', { symbol, limit: 1000 });
+          for (const raw of (Array.isArray(arr) ? arr : [])) countTx(upsertTransfer(N.normalizeSpotTrade(raw, symbol)), () => sptAdded++);
         } catch (e) {
-          // زوج غير موجود أو بلا صلاحية — نتخطّاه ونكمل البقية
-          if (!/-1121|Invalid symbol/i.test(e.message || '')) throw e;
+          if (!/-1121|Invalid symbol/i.test(e.message || '')) throw e;   // زوج غير موجود: نتخطّاه
         }
         await sleep(400);
       }
@@ -1213,12 +436,9 @@ async function* syncGenerator() {
     AC().lastSync = Date.now();
     Object.assign(result, {
       added, updated, fetched, depAdded, wdAdded, payAdded, cvtAdded, sptAdded, txUpdated,
-      total: Object.keys(orders).length,
-      totalTx: Object.keys(transfers).length,
-      lastSync: AC().lastSync,
+      total: Object.keys(orders).length, totalTx: Object.keys(transfers).length, lastSync: AC().lastSync,
     });
   } finally {
-    // نحفظ ما جُلب حتى الآن مهما حدث (نجاح كامل أو فشل جزئي)
     await saveOrders();
     await saveTransfers();
     await saveConfig();
@@ -1226,29 +446,19 @@ async function* syncGenerator() {
   yield result;
 }
 
-const TX_GROUP = {
-  deposit: 'deposit', withdraw: 'withdraw', 'pay-in': 'pay', 'pay-out': 'pay',
-  'convert-in': 'convert', 'convert-out': 'convert', 'spot-buy': 'spot', 'spot-sell': 'spot',
-};
-
-/* ===== عملياتٌ محفوظة هنا لا يُرجعها مفتاحُ هذا الحساب =====
-   أيام كان السستمان يتبادلان الحسابَ النشط تسرّبت عملياتُ الحساب الآخر إلى هذا
-   المخزن — طلباتُ P2P أيضًا لا الحوالات وحدها. المرجعُ الوحيد هو ما تُرجعه
-   المنصة لمفتاح هذا السستم في الفترة: كل عمليةٍ محفوظة في الفترة ولم تُرجعها
-   المنصة مرشَّحةٌ للحذف. تُعرض على المسؤول بتفاصيلها ويقرّر هو — فالمنصة
-   تُغفل أحيانًا بعض طلبات P2P، ولا نحذف على الظنّ. */
+/* ===== فحص الدخيل: عملياتٌ محفوظة هنا لا يُرجعها مفتاح هذا الحساب =====
+ * المرجع الوحيد ما تُرجعه المنصة لمفتاح هذا السستم في الفترة؛ كل عمليةٍ محفوظة
+ * في الفترة ولم تُرجعها مرشَّحةٌ للحذف. تُعرض على المسؤول ويقرّر هو — فالمنصة
+ * تُغفل أحيانًا بعض طلبات P2P ولا نحذف على الظنّ. */
 async function* foreignScanGenerator(days) {
-  if (!AC().apiKey || !AC().apiSecret) throw userError('لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
-  const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
   yield { msg: 'جارٍ الاتصال بالمنصة…', pct: 1 };
-  await mergeFromStore('orders__' + config.active, orders);
-  await mergeFromStore('transfers__' + config.active, transfers);
-  const offset = await timeOffset(base);
+  await mergeBoth();
+  const ctx = await binanceCtx();
   const now = Date.now();
   const minStart = now - days * 86400000;
-  const p2pWindows = makeWindows(now, minStart, 29 * 86400000);
-  const txWindows = makeWindows(now, minStart, 89 * 86400000);
-  const cvtWindows = makeWindows(now, minStart, 29 * 86400000);
+  const p2pWindows = bn.makeWindows(now, minStart, WIN_30);
+  const txWindows = bn.makeWindows(now, minStart, WIN_90);
+  const cvtWindows = bn.makeWindows(now, minStart, WIN_30);
   const total = Math.max(p2pWindows.length * 2 + txWindows.length * 3 + cvtWindows.length, 1);
   let step = 0;
   const prog = (msg) => ({ msg, pct: Math.min(2 + Math.round((++step / total) * 94), 97) });
@@ -1256,22 +466,16 @@ async function* foreignScanGenerator(days) {
   const seenO = new Set(), seenT = new Set();
   const complete = { deposit: false, withdraw: false, pay: false, convert: false };
   const warnings = [];
-  /* آخرُ طلبٍ أرجعته المنصة لهذا الحساب: كل طلبٍ محفوظ بعده ليس من هذا الحساب
-     يقينًا (حسابٌ لم يبع منذ شهرين لا يكون له بيعٌ بالأمس)، وما قبله يُراجَع
-     بحذر لأن المنصة تُغفل طلبًا أحيانًا */
-  let lastO = 0, lastT = 0;
+  let lastO = 0, lastT = 0;   // آخر ما أرجعته المنصة: ما بعده محفوظٌ هنا ليس من هذا الحساب يقينًا
+  const noteT = (t) => { seenT.add(t.id); lastT = Math.max(lastT, t.time); };
 
-  /* ---- طلبات P2P ----
-     أثرُ كل طلبٍ (النافذة، الصفحة، عدد الصفوف، المجموع المعلن، الجديد منها) يُرفق
-     بالتقرير: مئةٌ بالضبط في تسعين يومًا لحسابٍ يبيع كل يوم معناها أن الترقيم لا
-     يعمل أو أن النافذة تُتجاهل — ولا يُحكم على شيءٍ قبل رؤية الأثر. */
-  const calls = [];
-  const c2cBudget = { left: 300 }; // سقفُ الفحص كله — ٤٠٠ يومٍ بنوافذها قد تستدعي المئات
+  const calls = [];   // أثر كل طلب P2P (نافذة/صفحة/صفوف) يُرفق بالتقرير
+  const c2cBudget = { left: 300 };
   let truncated = false, windowsIgnored = false;
   for (const tradeType of ['SELL', 'BUY']) {
     for (const [s, e] of p2pWindows) {
       yield prog(`طلبات ${tradeType === 'SELL' ? 'البيع' : 'الشراء'}: ${dayLabel(s)} ← ${dayLabel(e)}`);
-      const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => {
+      const got = await bn.fetchC2C(ctx, tradeType, s, e, (raw) => {
         seenO.add(String(raw.orderNumber));
         lastO = Math.max(lastO, Number(raw.createTime) || 0);
       }, calls, c2cBudget);
@@ -1279,69 +483,56 @@ async function* foreignScanGenerator(days) {
       if (got.windowsIgnored) windowsIgnored = true;
     }
   }
-  /* ---- الإيداع والسحب ---- */
   try {
     for (const [s, e] of txWindows) {
       yield prog(`الإيداعات: ${dayLabel(s)} ← ${dayLabel(e)}`);
-      const arr = await signedGet(base, '/sapi/v1/capital/deposit/hisrec', { startTime: s, endTime: e, limit: 1000 }, offset);
-      for (const raw of (Array.isArray(arr) ? arr : [])) { const t = normalizeTransfer(raw, 'deposit'); seenT.add(t.id); lastT = Math.max(lastT, t.time); }
+      const arr = await bn.signedGet(ctx, '/sapi/v1/capital/deposit/hisrec', { startTime: s, endTime: e, limit: 1000 });
+      for (const raw of (Array.isArray(arr) ? arr : [])) noteT(N.normalizeTransfer(raw, 'deposit'));
       await sleep(300);
     }
     complete.deposit = true;
     for (const [s, e] of txWindows) {
       yield prog(`السحوبات: ${dayLabel(s)} ← ${dayLabel(e)}`);
-      const arr = await signedGet(base, '/sapi/v1/capital/withdraw/history', { startTime: s, endTime: e, limit: 1000 }, offset);
-      await coolIfHeavy(18000);
-      for (const raw of (Array.isArray(arr) ? arr : [])) { const t = normalizeTransfer(raw, 'withdraw'); seenT.add(t.id); lastT = Math.max(lastT, t.time); }
+      const arr = await bn.signedGet(ctx, '/sapi/v1/capital/withdraw/history', { startTime: s, endTime: e, limit: 1000 });
+      await bn.coolIfHeavy(18000);
+      for (const raw of (Array.isArray(arr) ? arr : [])) noteT(N.normalizeTransfer(raw, 'withdraw'));
       await sleep(400);
     }
     complete.withdraw = true;
   } catch (e) { if (fatal(e)) throw e; warnings.push('تعذّر جلب الإيداع/السحب: ' + e.message); }
-  /* ---- Binance Pay ---- */
   try {
     let capped = false;
     for (const [ws, we] of txWindows) {
       yield prog(`Binance Pay: ${dayLabel(ws)} ← ${dayLabel(we)}`);
-      const parts = [[ws, we]];
-      let calls = 0;
-      while (parts.length && calls < PAY_MAX_CALLS) {
-        const [s, e] = parts.pop();
-        calls++;
-        const j = await signedGet(base, '/sapi/v1/pay/transactions', { startTime: s, endTime: e, limit: PAY_PAGE }, offset);
-        const rows = Array.isArray(j.data) ? j.data : [];
-        for (const raw of rows) { const t = normalizePay(raw); seenT.add(t.id); lastT = Math.max(lastT, t.time); }
-        if (rows.length >= PAY_PAGE && e - s > 60000) { const mid = Math.floor((s + e) / 2); parts.push([mid + 1, e], [s, mid]); }
-        await sleep(PAY_GAP_MS);
-        await coolIfHeavy(PAY_WEIGHT);
-      }
-      if (parts.length) capped = true;
+      const got = await bn.fetchPay(ctx, ws, we, (raw) => noteT(N.normalizePay(raw)));
+      if (got.capped) capped = true;
     }
     complete.pay = !capped;
     if (capped) warnings.push('عمليات Pay أكثر مما يسمح به الحدّ — لم تُفحص كلها');
   } catch (e) { if (fatal(e)) throw e; warnings.push('تعذّر جلب Binance Pay: ' + e.message); }
-  /* ---- Convert ---- */
   try {
     for (const [s, e] of cvtWindows) {
       yield prog(`التحويل Convert: ${dayLabel(s)} ← ${dayLabel(e)}`);
-      const j = await signedGet(base, '/sapi/v1/convert/tradeFlow', { startTime: s, endTime: e, limit: 1000 }, offset);
-      for (const raw of (Array.isArray(j.list) ? j.list : [])) { const t = normalizeConvert(raw); seenT.add(t.id); lastT = Math.max(lastT, t.time); }
+      const j = await bn.signedGet(ctx, '/sapi/v1/convert/tradeFlow', { startTime: s, endTime: e, limit: 1000 });
+      for (const raw of (Array.isArray(j.list) ? j.list : [])) noteT(N.normalizeConvert(raw));
       await sleep(1000);
     }
     complete.convert = true;
   } catch (e) { if (fatal(e)) throw e; warnings.push('تعذّر جلب التحويل: ' + e.message); }
 
-  /* ---- المقارنة: ما في الفترة ولم تُرجعه المنصة ---- */
   const inWin = (t) => t >= minStart && t <= now;
   const foreignOrders = Object.values(orders)
     .filter((o) => o && inWin(o.createTime) && !seenO.has(String(o.orderNumber)))
     .sort((a, b) => b.createTime - a.createTime)
     .map((o) => ({
-      id: o.orderNumber, tradeType: o.tradeType, amount: o.amount, unitPrice: o.unitPriceOverride != null ? o.unitPriceOverride : o.unitPrice,
-      totalPrice: o.totalPriceOverride != null ? o.totalPriceOverride : o.totalPrice, fiat: o.fiat, counterPart: o.counterPart,
-      status: o.orderStatus, time: o.createTime, source: o.source, note: o.note || '', reference: o.reference || '',
+      id: o.orderNumber, tradeType: o.tradeType, amount: o.amount,
+      unitPrice: o.unitPriceOverride != null ? o.unitPriceOverride : o.unitPrice,
+      totalPrice: o.totalPriceOverride != null ? o.totalPriceOverride : o.totalPrice,
+      fiat: o.fiat, counterPart: o.counterPart, status: o.orderStatus, time: o.createTime, source: o.source,
+      note: o.note || '', reference: o.reference || '',
     }));
   const foreignTransfers = Object.values(transfers)
-    .filter((t) => t && inWin(t.time) && TX_GROUP[t.kind] && TX_GROUP[t.kind] !== 'spot' && complete[TX_GROUP[t.kind]] && !seenT.has(t.id))
+    .filter((t) => t && inWin(t.time) && N.TX_GROUP[t.kind] && N.TX_GROUP[t.kind] !== 'spot' && complete[N.TX_GROUP[t.kind]] && !seenT.has(t.id))
     .sort((a, b) => b.time - a.time)
     .map((t) => ({ id: t.id, kind: t.kind, amount: t.amount, coin: t.coin, network: t.network, counterPart: t.counterPart || '',
       status: t.status, time: t.time, source: t.source, note: t.note || '', reference: t.reference || '' }));
@@ -1354,9 +545,46 @@ async function* foreignScanGenerator(days) {
   };
 }
 
-/* ============================ خادم HTTP ============================ */
+/** جلب يومٍ محاسبي واحد بكل أنواعه (علاجٌ موضعي بلا كلفة المزامنة الكاملة) */
+async function fetchOneDay(s, e) {
+  const ctx = await binanceCtx();
+  await mergeBoth();
+  const found = { p2p: 0, deposit: 0, withdraw: 0, pay: 0, convert: 0 };
+  const added = { p2p: 0, deposit: 0, withdraw: 0, pay: 0, convert: 0 };
+  const skipped = [];
+  const take = (kind, raw, rec) => {
+    found[kind]++;
+    const r = kind === 'p2p' ? upsertOrder(rec) : upsertTransfer(rec);
+    if (r === 'added') added[kind]++;
+  };
+  const c2cBudget = { left: 60 };
+  for (const tradeType of ['SELL', 'BUY']) {
+    const got = await bn.fetchC2C(ctx, tradeType, s, e, (raw) => take('p2p', raw, N.normalizeOrder(raw, 'binance')), undefined, c2cBudget);
+    if (got.truncated) skipped.push('p2p: ' + bn.c2cWarn(got));
+  }
+  for (const [kind, endpoint] of [['deposit', '/sapi/v1/capital/deposit/hisrec'], ['withdraw', '/sapi/v1/capital/withdraw/history']]) {
+    const arr = await bn.signedGet(ctx, endpoint, { startTime: s, endTime: e, offset: 0, limit: 1000 });
+    for (const raw of (Array.isArray(arr) ? arr : [])) take(kind, raw, N.normalizeTransfer(raw, kind));
+    await sleep(300);
+  }
+  // Pay والتحويل قد يُمنعان بصلاحية المفتاح أو المنطقة — فشلهما لا يُفشل الباقي
+  try {
+    const got = await bn.fetchPay(ctx, s, e, (raw) => take('pay', raw, N.normalizePay(raw)));
+    if (got.capped) skipped.push('pay: عمليات كثيرة جدًّا في هذا اليوم — قد تبقى عمليات لم تصل');
+  } catch (err) { skipped.push('pay: ' + (err && err.message ? err.message : 'خطأ')); }
+  try {
+    const j = await bn.signedGet(ctx, '/sapi/v1/convert/tradeFlow', { startTime: s, endTime: e, limit: 1000 });
+    for (const raw of (Array.isArray(j.list) ? j.list : [])) take('convert', raw, N.normalizeConvert(raw));
+  } catch (err) { skipped.push('convert: ' + (err && err.message ? err.message : 'خطأ')); }
+  try { await saveOrders(); await saveTransfers(); } catch (err) { console.error(err.message); }
+  const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+  const inDay = (t) => t >= s && t <= e;
+  const stored = Object.values(orders).filter((o) => inDay(o.createTime)).length + Object.values(transfers).filter((t) => inDay(t.time)).length;
+  return { found, added, skipped, total: sum(found), totalAdded: sum(added), stored };
+}
 
-/** جسمُ الطلب خامًا (ملفٌ مرفوع) بنفس حدّ الحجم */
+/* ===================== ٧. خادم HTTP ===================== */
+
 function readRaw(req) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -1370,127 +598,54 @@ function readRaw(req) {
     req.on('error', reject);
   });
 }
-
-/* ===== الاستعادة من ملف تصدير =====
-   ملفُ Excel/CSV الذي صدّره النظام هو نسخةٌ احتياطية طبيعية: كل صفٍّ فيه غير
-   موجود في المخزن يُعاد بناؤه منه. الطلباتُ بمعرّفها، وPay والتحويل بمعرّفهما
-   المشتقّ من TxID؛ أمّا الإيداع والسحب فمعرّفهما الداخلي ليس في الملف والمنصة
-   تُرجعهما كاملَين، فتُعيدهما المزامنةُ (والمقبرةُ تُخلي سبيل ما أرجعته). */
-const AR_TX_KIND = {
-  'إيداع': 'deposit', 'سحب': 'withdraw', 'استلام Pay': 'pay-in', 'إرسال Pay': 'pay-out',
-  'تحويل (→USDT)': 'convert-in', 'تحويل (USDT→)': 'convert-out', 'شراء فوري': 'spot-buy', 'بيع فوري': 'spot-sell',
-};
-const AR_STATUS = { 'مكتمل': 'COMPLETED', 'ملغى': 'CANCELLED', 'ملغي': 'CANCELLED', 'فشل': 'FAILED', 'مرفوض': 'FAILED' };
-function parseExportTime(s) {
-  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (!m) return 0;
-  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime(); // بتوقيت الجهاز كما صُدِّر
+async function readBody(req) {
+  const buf = await readRaw(req);
+  if (!buf.length) return {};
+  try { return JSON.parse(buf.toString('utf8')); } catch { throw new Error('bad json'); }
 }
-/** صفوفُ الملف → سجلّات مرشَّحة {orders, transfers, depwd} */
-function rowsToRecords(rows) {
-  if (!rows.length) return { orders: [], transfers: [], depwd: 0 };
-  const hdr = rows[0];
-  const col = (names) => Object.keys(hdr).find((c) => names.some((n) => String(hdr[c] || '').trim().toLowerCase().startsWith(n.toLowerCase())));
-  const C = {
-    date: col(['التاريخ']), type: col(['النوع']), amount: col(['الكمية']), price: col(['السعر']), total: col(['المبلغ']),
-    cur: col(['العملة']), party: col(['الطرف']), status: col(['الحالة']), fee: col(['العمولة']),
-    ref: col(['الإشاري']), note: col(['الملاحظة']), id: col(['المعرّف', 'المعرف']),
-  };
-  if (!C.type || !C.id || !C.date) throw new Error('الملف ليس ملف تصدير من هذا النظام (الأعمدة غير معروفة)');
-  const orders = [], transfers = [];
-  let depwd = 0;
-  for (const r of rows.slice(1)) {
-    const type = String(r[C.type] || '').trim();
-    const id = String(r[C.id] || '').trim();
-    const time = parseExportTime(r[C.date]);
-    if (!id || !time) continue;
-    const status = AR_STATUS[String(r[C.status] || '').trim()] || 'COMPLETED';
-    const g = (c) => (c ? String(r[c] || '').trim() : '');
-    if (type === 'بيع' || type === 'شراء') {
-      orders.push({
-        orderNumber: id, tradeType: type === 'بيع' ? 'SELL' : 'BUY', amount: num(g(C.amount)), unitPrice: num(g(C.price)),
-        totalPrice: num(g(C.total)), fiat: g(C.cur), counterPart: g(C.party), orderStatus: status, commission: num(g(C.fee)),
-        createTime: time, note: g(C.note), reference: g(C.ref),
-      });
-      continue;
-    }
-    const kind = AR_TX_KIND[type];
-    if (!kind) continue;
-    if (kind === 'deposit' || kind === 'withdraw') { depwd++; continue; }
-    const tid = kind.startsWith('pay') ? 'PAY' + id : kind.startsWith('convert') ? 'CVT' + id : id;
-    transfers.push({
-      id: tid, kind, coin: 'USDT', network: kind.startsWith('convert') ? g(C.cur) : '', amount: num(g(C.amount)), fee: num(g(C.fee)),
-      status, statusCode: null, address: '', txId: id, counterPart: kind.startsWith('pay') ? g(C.party) : '',
-      time, completeTime: time, note: g(C.note), reference: g(C.ref), source: 'import',
-    });
-  }
-  return { orders, transfers, depwd };
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks = [];
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > MAX_BODY) { reject(new Error('body too large')); req.destroy(); return; }
-      chunks.push(c);
-    });
-    req.on('end', () => {
-      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); }
-      catch { reject(new Error('bad json')); }
-    });
-    req.on('error', reject);
-  });
-}
-
 function sendJSON(res, status, obj) {
-  const body = JSON.stringify(obj);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
-  });
-  res.end(body);
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(obj));
+}
+/** بثّ مولّدٍ سطرًا سطرًا (NDJSON) حتى يكتمل أو يفشل */
+async function streamNdjson(res, gen) {
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+  try {
+    for await (const ev of gen) res.write(JSON.stringify(ev) + '\n');
+  } catch (e) {
+    res.write(JSON.stringify({ error: e.isUser ? e.message : 'خطأ غير متوقع: ' + e.message }) + '\n');
+  } finally {
+    res.end();
+  }
 }
 
+/* ---------- الملفات الثابتة ---------- */
 const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.webmanifest': 'application/manifest+json; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
+  '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json; charset=utf-8', '.json': 'application/json; charset=utf-8',
 };
 
-/* ===== صفحةُ الدخول بلون السستم من الخادم نفسه =====
- * معاينةُ الرابط في واتساب وأمثاله تقرأ HTML كما يصل من الخادم بلا تشغيل
- * JavaScript، فكانت ترى الأيقونة الذهبية والعنوان الافتراضي مهما كان السستم.
- * فالخادم يكتب في الصفحة عنوانَ السستم وأيقوناته ووسومَ Open Graph (بصورةٍ
- * برابطٍ مطلق) وسمةَ الحساب على الجذر — فلا وميضَ ذهبي قبل أن يعمل JavaScript. */
+/* الصفحة تُبنى في الخادم بعنوان السستم وأيقوناته ووسوم Open Graph: معاينةُ الرابط
+ * في واتساب تقرأ HTML بلا JavaScript، فتراه بلون السستم الصحيح من أول لحظة. */
 const THEME_HTML = {
   p2p: { accent: '8e1f3f', ink: 'fbeef2', suffix: '-p2p' },
   p3p: { accent: 'f0b90b', ink: '1a1a19', suffix: '' },
 };
 function renderIndex(html, req) {
   const acct = LOCKED || 'p3p';
-  const t = THEME_HTML[acct] || THEME_HTML.p3p;
+  const t = THEME_HTML[acct];
   const name = 'سجل ' + ACCOUNT_NAMES[LOCKED || 'p2p'];
-  const proto = String(req.headers['x-forwarded-proto'] || (process.env.PORT ? 'https' : 'http')).split(',')[0].trim();
-  const host = String(req.headers.host || 'localhost');
-  const origin = proto + '://' + host;
+  const proto = String(req.headers['x-forwarded-proto'] || (ENV_PORT ? 'https' : 'http')).split(',')[0].trim();
+  const origin = proto + '://' + String(req.headers.host || 'localhost');
   let out = html
     .replace('<html lang="ar" dir="rtl">', `<html lang="ar" dir="rtl" data-account="${acct}">`)
     .replace(/<title>[^<]*<\/title>/, `<title>${name}</title>`)
     .replace('%23f0b90b', '%23' + t.accent).replace('%231a1a19', '%23' + t.ink);
   if (t.suffix) {
-    out = out
-      .replace('href="favicon.ico"', `href="favicon${t.suffix}.ico"`)
-      .replace('href="icon-192.png"', `href="icon-192${t.suffix}.png"`)
-      .replace('href="icon-512.png"', `href="icon-512${t.suffix}.png"`)
-      .replace('href="apple-touch-icon.png"', `href="apple-touch-icon${t.suffix}.png"`)
-      .replace('href="manifest.webmanifest"', `href="manifest${t.suffix}.webmanifest"`);
+    for (const f of ['favicon.ico', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png', 'manifest.webmanifest']) {
+      out = out.replace(`href="${f}"`, `href="${f.replace(/\.(\w+)$/, t.suffix + '.$1')}"`);
+    }
   }
   const og = [
     `<meta property="og:type" content="website">`,
@@ -1507,886 +662,547 @@ function renderIndex(html, req) {
   return out.replace('<link rel="stylesheet" href="style.css">', og + '\n<link rel="stylesheet" href="style.css">');
 }
 
-function serveStatic(res, urlPath, req) {
+function serveStatic(req, res, urlPath) {
   const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
   const file = path.normalize(path.join(PUB, rel));
   if (!file.startsWith(PUB)) { res.writeHead(403); res.end(); return; }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('غير موجود'); return; }
-    if (rel === 'index.html' && req) {
-      // الصفحة تُبنى لكل طلب وبلا تخزين، فيرى المتصفّح والمعاينةُ السستمَ الصحيح دائمًا
+    if (rel === 'index.html') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
       res.end(renderIndex(buf.toString('utf8'), req));
       return;
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    const ext = path.extname(file);
+    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+    if (ext === '.js' || ext === '.css') headers['Cache-Control'] = 'no-cache';   // يُتحقّق من حداثتها بعد كل نشر
+    res.writeHead(200, headers);
     res.end(buf);
   });
 }
 
-let syncRunning = false;
+/* ---------- المسارات ----------
+ * route(method, path, scope, handler). الصلاحية (scope):
+ *   public   بلا دخول
+ *   login    أي مستخدم مسجّل دخوله (admin / user / user2)
+ *   annotate المسؤول و«مستخدم 2»: تصحيحُ صفٍّ واحد (إشاري، ملاحظة، سعر، مبلغ)
+ *   admin    المسؤول فقط
+ * handler(req, res, ctx) حيث ctx = { url, role, body (دالة تقرأ JSON) }. */
+const routes = new Map();
+const route = (method, p, scope, handler) => routes.set(method + ' ' + p, { scope, handler });
+const deny = (res, status, error) => sendJSON(res, status, { error });
+let syncRunning = false;   // مزامنةٌ أو فحصٌ واحد في كل مرة
 
+/* --- حالة الصيانة والمصادقة --- */
+route('GET', '/api/maintenance', 'public', async (req, res) => sendJSON(res, 200, await loadMaintenance(req)));
+
+route('GET', '/api/auth/status', 'public', (req, res) => sendJSON(res, 200, {
+  configured: !!(config.auth.admin && config.auth.admin.hash),
+  hasUser: !!(config.auth.user && config.auth.user.hash),
+  hasUser2: !!(config.auth.user2 && config.auth.user2.hash),
+  account: LOCKED ? { id: LOCKED, name: ACCOUNT_NAMES[LOCKED] } : null,   // شاشة الدخول تأخذ لون السستم قبل الدخول
+}));
+
+route('POST', '/api/auth/setup', 'public', async (req, res, c) => {
+  if (config.auth.admin && config.auth.admin.hash) return deny(res, 409, 'تم الإعداد مسبقًا — سجّل الدخول');
+  const body = await c.body();
+  const ap = String(body.adminPassword || ''), up = String(body.userPassword || ''), up2 = String(body.user2Password || '');
+  if (ap.length < 4) return deny(res, 400, 'كلمة سر المسؤول يجب ألا تقل عن 4 خانات');
+  config.auth.admin = auth.makeCredential(ap);
+  config.auth.user = up ? auth.makeCredential(up) : {};
+  config.auth.user2 = up2 ? auth.makeCredential(up2) : {};
+  await saveConfig();
+  recordLogin('admin', req);
+  sendJSON(res, 200, { ok: true, token: auth.newToken('admin'), role: 'admin' });
+});
+
+route('POST', '/api/auth/login', 'public', async (req, res, c) => {
+  const body = await c.body();
+  const role = auth.ROLES.includes(body.role) ? body.role : 'user';
+  const cred = config.auth[role];
+  if (!cred || !cred.hash) {
+    return deny(res, 400, role === 'admin' ? 'لم يتم الإعداد بعد'
+      : (role === 'user2' ? 'لا يوجد حساب «مستخدم 2» — عيّنه من «تغيير كلمات السر»' : 'لا يوجد حساب مستخدم — ادخل كمسؤول'));
+  }
+  if (!auth.verifyPassword(String(body.password || ''), cred)) return deny(res, 401, 'كلمة السر غير صحيحة');
+  recordLogin(role, req);
+  sendJSON(res, 200, { ok: true, token: auth.newToken(role), role });
+});
+
+route('POST', '/api/auth/logout', 'public', (req, res) => { auth.dropToken(req.headers['x-auth-token']); sendJSON(res, 200, { ok: true }); });
+
+route('POST', '/api/auth/password', 'admin', async (req, res, c) => {
+  const body = await c.body();
+  if (typeof body.adminPassword === 'string' && body.adminPassword) {
+    if (body.adminPassword.length < 4) return deny(res, 400, 'كلمة سر المسؤول قصيرة جدًا');
+    config.auth.admin = auth.makeCredential(body.adminPassword);
+  }
+  if (typeof body.userPassword === 'string') config.auth.user = body.userPassword ? auth.makeCredential(body.userPassword) : {};
+  if (typeof body.user2Password === 'string') config.auth.user2 = body.user2Password ? auth.makeCredential(body.user2Password) : {};
+  await saveConfig();
+  sendJSON(res, 200, { ok: true });
+});
+
+route('GET', '/api/auth/log', 'admin', (req, res) => sendJSON(res, 200, { events: loginLog.slice().reverse() }));
+
+route('POST', '/api/maintenance', 'admin', async (req, res, c) => {
+  const body = await c.body();
+  const m = await loadMaintenance(req);
+  if (typeof body.on === 'boolean') m.on = body.on;
+  if (typeof body.message === 'string') m.message = body.message.slice(0, 2000);
+  if (typeof body.link === 'string') m.link = body.link.slice(0, 1000);
+  await saveStore(maintKey(req), m);   // يُوقف هذا السستم (النطاق الحالي) وحده
+  sendJSON(res, 200, { ok: true, maintenance: m });
+});
+
+/* --- الحساب والإعدادات --- */
+route('GET', '/api/account', 'login', (req, res) => sendJSON(res, 200, {
+  active: config.active,
+  locked: !!LOCKED,
+  accounts: (LOCKED ? [LOCKED] : ACCOUNTS).map((id) => ({
+    id, name: ACCOUNT_NAMES[id],
+    hasKey: !!(config.accounts[id] && config.accounts[id].apiKey && config.accounts[id].apiSecret),
+    lastSync: config.accounts[id] ? config.accounts[id].lastSync : null,
+  })),
+}));
+
+route('GET', '/api/settings', 'login', (req, res) => {
+  const k = AC().apiKey || '';
+  sendJSON(res, 200, {
+    apiKeyMasked: k ? k.slice(0, 4) + '…' + k.slice(-4) : '',
+    hasSecret: !!AC().apiSecret,
+    baseUrl: AC().baseUrl,
+    rangeHours: AC().rangeHours,
+    syncQuota: syncQuotaValue(),
+    lastSync: AC().lastSync,
+  });
+});
+
+route('POST', '/api/settings', 'admin', async (req, res, c) => {
+  const body = await c.body();
+  if (typeof body.apiKey === 'string' && body.apiKey.trim()) AC().apiKey = body.apiKey.trim();
+  if (typeof body.apiSecret === 'string' && body.apiSecret.trim()) AC().apiSecret = body.apiSecret.trim();
+  if (typeof body.baseUrl === 'string' && /^https:\/\/[\w.-]+$/.test(body.baseUrl.trim().replace(/\/+$/, ''))) AC().baseUrl = body.baseUrl.trim().replace(/\/+$/, '');
+  if (body.rangeHours != null) AC().rangeHours = Math.min(Math.max(Number(body.rangeHours) || 720, 1), 26280);
+  if (body.syncQuota != null) config.syncQuota = Math.min(Math.max(Math.floor(Number(body.syncQuota)) || 0, 0), 500);
+  await saveConfig();
+  sendJSON(res, 200, { ok: true });
+});
+
+/* --- الطلبات --- */
+route('GET', '/api/orders', 'login', (req, res) => sendJSON(res, 200, { orders: Object.values(orders), lastSync: AC().lastSync }));
+
+route('POST', '/api/orders', 'admin', async (req, res, c) => {
+  const o = N.normalizeOrder(await c.body(), 'manual');
+  if (!(o.amount > 0)) return deny(res, 400, 'الكمية مطلوبة ويجب أن تكون أكبر من صفر');
+  if (!(o.totalPrice > 0)) return deny(res, 400, 'المبلغ مطلوب ويجب أن يكون أكبر من صفر');
+  const r = upsertOrder(o);
+  await saveOrders();
+  sendJSON(res, 200, { result: r, order: o });
+});
+
+/** استيراد دفعة (ملف CSV من الواجهة): الصفّ الموجود يُحدَّث من الملف (status/السعر…) مع حفظ تعليقاته */
+route('POST', '/api/orders/bulk', 'admin', async (req, res, c) => {
+  const body = await c.body();
+  let added = 0, updated = 0, skipped = 0;
+  for (const raw of (Array.isArray(body.orders) ? body.orders : [])) {
+    const o = N.normalizeOrder(raw, raw.source === 'binance' ? 'binance' : 'import');
+    if (!(o.amount > 0) || !(o.totalPrice > 0)) { skipped++; continue; }
+    const r = upsertOrder(o);
+    if (r === 'added') added++; else if (r === 'updated') updated++;
+    if (r !== 'same') touch(ordersKey(), o.orderNumber);
+  }
+  await saveOrders();
+  sendJSON(res, 200, { added, updated, skipped, total: Object.keys(orders).length });
+});
+
+route('DELETE', '/api/orders', 'admin', async (req, res, c) => {
+  const id = c.url.searchParams.get('id') || '';
+  if (!orders[id]) return deny(res, 404, 'الطلب غير موجود');
+  await mergeFromStore(ordersKey(), orders);
+  delete orders[id];
+  await bury(ordersKey(), [id]);
+  await saveOrders({ merge: false });
+  sendJSON(res, 200, { ok: true, total: Object.keys(orders).length });
+});
+
+route('POST', '/api/orders/clear', 'admin', async (req, res) => { orders = {}; await saveOrders({ merge: false }); sendJSON(res, 200, { ok: true }); });
+route('POST', '/api/transfers/clear', 'admin', async (req, res) => { transfers = {}; await saveTransfers({ merge: false }); sendJSON(res, 200, { ok: true }); });
+
+/* تعليقات الصفّ (تبقى بعد المزامنة). مرساة الرصيد والأرشفة وتسمية الشبكة وتقويم USDT
+ * تمسّ الدفتر كلّه فتبقى للمسؤول؛ الواجهة تُخفيها عن «مستخدم 2» والخادم يُلزم ذلك. */
+function applyAnnotation(rec, body, isAdmin, isTransfer) {
+  if (typeof body.note === 'string') rec.note = body.note.slice(0, 2000);
+  if (typeof body.reference === 'string') rec.reference = body.reference.slice(0, 2000);
+  for (const [field, over] of [['unitPrice', 'unitPriceOverride'], ['totalPrice', 'totalPriceOverride']]) {
+    if (!(field in body)) continue;
+    const s = String(body[field]).trim();   // '' يعني إلغاء التعديل والرجوع لقيمة المنصة
+    if (s === '') delete rec[over];
+    else { const v = Number(s); if (Number.isFinite(v) && v >= 0) rec[over] = v; }
+  }
+  if (!isAdmin) return;
+  if ('networkLabel' in body) {
+    const s = String(body.networkLabel).trim();
+    if (s === '') delete rec.networkLabelOverride; else rec.networkLabelOverride = s.slice(0, 40);
+  }
+  if ('archived' in body) { if (body.archived) rec.archived = true; else delete rec.archived; }   // إخفاءٌ من الجدول لا محو
+  if ('zeroPoint' in body) { if (body.zeroPoint) rec.zeroPoint = true; else delete rec.zeroPoint; }
+  if ('balanceAt' in body) {   // مرساة المستخدم: رصيده الحقيقي بعد هذه العملية
+    const v = Number(body.balanceAt);
+    if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete rec.balanceAt; delete rec.zeroPoint; }
+    else { rec.balanceAt = Math.round(v * 1e8) / 1e8; delete rec.zeroPoint; }
+  }
+  if (isTransfer && 'usdtValue' in body) {   // تقويم عمليةٍ بعملة أخرى بالـUSDT لتدخل «الباقي»
+    const v = Number(body.usdtValue);
+    if (body.usdtValue == null || String(body.usdtValue).trim() === '' || !Number.isFinite(v) || v < 0) delete rec.usdtValue;
+    else rec.usdtValue = Math.round(v * 1e8) / 1e8;
+  }
+}
+
+route('POST', '/api/orders/annotate', 'annotate', async (req, res, c) => {
+  const body = await c.body();
+  const id = String(body.id || '');
+  if (!Object.prototype.hasOwnProperty.call(orders, id)) return deny(res, 404, 'الطلب غير موجود');
+  applyAnnotation(orders[id], body, c.role === 'admin', false);
+  touch(ordersKey(), id);
+  await saveOrders();
+  sendJSON(res, 200, { ok: true, order: orders[id] });
+});
+
+/* --- الحوالات --- */
+route('GET', '/api/transfers', 'login', (req, res) => sendJSON(res, 200, { transfers: Object.values(transfers), lastSync: AC().lastSync }));
+
+route('POST', '/api/transfers/annotate', 'annotate', async (req, res, c) => {
+  const body = await c.body();
+  const id = String(body.id || '');
+  if (!Object.prototype.hasOwnProperty.call(transfers, id)) return deny(res, 404, 'الحوالة غير موجودة');
+  applyAnnotation(transfers[id], body, c.role === 'admin', true);
+  touch(transfersKey(), id);
+  await saveTransfers();
+  sendJSON(res, 200, { ok: true, transfer: transfers[id] });
+});
+
+/* --- الرصيد وعمود «الباقي» --- */
+route('GET', '/api/balance', 'login', async (req, res) => {
+  if (!hasKeys()) return deny(res, 400, 'أدخل مفتاح API من الإعدادات أولًا لعرض الرصيد');
+  const ctx = await binanceCtx();
+  const funding = await bn.signedGet(ctx, '/sapi/v1/asset/get-funding-asset', { needBtcValuation: 'true' }, 'POST');
+  // الحساب الفوري يُجمع مع التمويل (التحويل بينهما لا يغيّر ما نملكه)؛ فشلُه غير قاتل
+  let spot = [], spotError = '';
+  try { spot = await bn.signedGet(ctx, '/sapi/v3/asset/getUserAsset', {}, 'POST'); }
+  catch (e) { spotError = e.message || 'تعذّر الجلب'; console.error('spot balance: ' + spotError); }
+
+  const NUMS = ['free', 'locked', 'freeze', 'withdrawing', 'btcValuation'];
+  const usdtTotal = (list) => (Array.isArray(list) ? list : [])
+    .filter((a) => String(a.asset || '').toUpperCase() === 'USDT')
+    .reduce((s, a) => s + num(a.free) + num(a.locked) + num(a.freeze) + num(a.withdrawing), 0);
+  const merged = new Map();
+  for (const a of [...(Array.isArray(funding) ? funding : []), ...(Array.isArray(spot) ? spot : [])]) {
+    const key = String(a.asset || '').toUpperCase();
+    if (!key) continue;
+    const cur = merged.get(key) || { asset: key };
+    for (const f of NUMS) cur[f] = num(cur[f]) + num(a[f]);
+    merged.set(key, cur);
+  }
+  const now = Date.now();
+  // لقطةُ اليوم لا تُسجَّل إلا بالمحفظتين معًا: رقمٌ ناقص يصير أساسًا خاطئًا للعمود
+  let snapshots = null;
+  if (!spotError) {
+    try { snapshots = await saveBalSnap(usdtTotal(funding) + usdtTotal(spot), now); }
+    catch (e) { console.error('balsnap: ' + e.message); }
+  }
+  sendJSON(res, 200, {
+    assets: [...merged.values()], spotIncluded: !spotError, spotError,
+    usdtFunding: usdtTotal(funding), usdtSpot: usdtTotal(spot),
+    snapshots: snapshots || await loadBalSnaps(), updatedAt: now,
+  });
+});
+
+route('GET', '/api/balance/snapshots', 'login', async (req, res) => sendJSON(res, 200, { snapshots: await loadBalSnaps() }));
+
+/* تثبيت «الباقي» على الصفّ: أول قيمة تُكتب نهائية، ولا تُكتب فوقها */
+route('POST', '/api/balance/freeze', 'login', async (req, res, c) => {
+  const body = await c.body();
+  let n = 0;
+  const put = (map, key, id, v) => {
+    const rec = map[id];
+    const x = Number(v);
+    if (!rec || rec.balAfter != null || !Number.isFinite(x)) return;
+    rec.balAfter = Math.round(x * 1e8) / 1e8;
+    touch(key, id);
+    n++;
+  };
+  for (const [id, v] of Object.entries(body.orders || {})) put(orders, ordersKey(), id, v);
+  for (const [id, v] of Object.entries(body.transfers || {})) put(transfers, transfersKey(), id, v);
+  if (n) { await saveOrders(); await saveTransfers(); }
+  sendJSON(res, 200, { ok: true, frozen: n });
+});
+
+/* إلغاء التثبيت وإعادة الحساب من الصفر (مخرجٌ إن ثُبِّتت أرقام خاطئة) */
+route('POST', '/api/balance/unfreeze', 'login', async (req, res) => {
+  await mergeBoth();
+  let n = 0;
+  for (const o of Object.values(orders)) if (o.balAfter != null) { delete o.balAfter; n++; }
+  for (const t of Object.values(transfers)) if (t.balAfter != null) { delete t.balAfter; n++; }
+  await saveOrders({ merge: false });
+  await saveTransfers({ merge: false });
+  sendJSON(res, 200, { ok: true, cleared: n });
+});
+
+/* --- المزامنة --- */
+route('GET', '/api/sync/quota', 'login', async (req, res, c) => {
+  // blockedFor: ثواني الحظر الباقية إن حظرت المنصة العنوان — فيُقفل زر المزامنة عند الجميع
+  sendJSON(res, 200, Object.assign(await syncQuotaFor(c.role), { blockedFor: Math.ceil(bn.banLeft() / 1000) }));
+});
+
+route('POST', '/api/sync', 'login', async (req, res, c) => {
+  if (bn.banLeft() > 0) return deny(res, 429, bn.banMessage(bn.banLeft()));   // أثناء الحظر لا تبدأ ولا تُخصم
+  const q = await syncQuotaFor(c.role);
+  if (!q.unlimited && q.left <= 0) {
+    return sendJSON(res, 429, {
+      error: q.quota === 0 ? 'المزامنة غير مسموحة لحسابك — راجع المسؤول' : `انتهى عدد مرات المزامنة اليوم (${q.quota}) — جرّب بكرة أو راجع المسؤول`,
+      quota: q.quota, used: q.used, left: 0,
+    });
+  }
+  if (syncRunning) return deny(res, 409, 'هناك مزامنة قيد التنفيذ بالفعل');
+  if (!hasKeys()) return deny(res, 400, 'لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
+  if (!q.unlimited) await bumpSyncUsage(c.role);
+  syncRunning = true;
+  recordLogin(c.role, req, 'sync');
+  try { await streamNdjson(res, syncGenerator()); } finally { syncRunning = false; }
+});
+
+route('POST', '/api/sync/day', 'admin', async (req, res, c) => {
+  if (!hasKeys()) return deny(res, 400, 'أدخل مفتاح API من الإعدادات أولًا');
+  const body = await c.body();
+  const m = String(body.day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return deny(res, 400, 'حدّد اليوم بصيغة YYYY-MM-DD');
+  const s = dayStartMs(+m[1], +m[2], +m[3]);   // حدود اليوم المحاسبي (من الثانية ليلًا)
+  const e = s + 86400000 - 1;
+  if (s > Date.now()) return deny(res, 400, 'هذا اليوم لم يأتِ بعد');
+  recordLogin(c.role, req, 'day');
+  let r;
+  try { r = await fetchOneDay(s, e); }
+  catch (err) { return deny(res, 502, err && err.message ? err.message : 'تعذّر سؤال المنصة'); }
+  sendJSON(res, 200, Object.assign({ ok: true, day: body.day, from: s, to: e }, r));
+});
+
+/* --- أدوات الفحص (للمسؤول) --- */
+
+/** ما تُرجعه المنصة فعلًا في آخر N يومًا مقابل المحفوظ: هل العملية لم تصل أم وصلت ولم تُحفظ؟ */
+route('GET', '/api/diag/p2p', 'admin', async (req, res, c) => {
+  if (!hasKeys()) return deny(res, 400, 'أدخل مفتاح API من الإعدادات أولًا');
+  const days = Math.min(Math.max(Number(c.url.searchParams.get('days')) || 3, 1), 29);
+  const ctx = await binanceCtx();
+  recordLogin(c.role, req, 'scan');
+  const end = Date.now();
+  const start = end - days * 86400000;
+  const list = [];
+  const c2cBudget = { left: 40 };
+  const warnings = [];
+  for (const tradeType of ['SELL', 'BUY']) {
+    const got = await bn.fetchC2C(ctx, tradeType, start, end, (r) => {
+      const n = String(r.orderNumber || '').trim();
+      list.push({ orderNumber: n, tail: n.slice(-4), tradeType: String(r.tradeType || ''), amount: num(r.amount), totalPrice: num(r.totalPrice),
+        status: String(r.orderStatus || ''), time: Number(r.createTime) || 0, stored: Object.prototype.hasOwnProperty.call(orders, n) });
+    }, undefined, c2cBudget);
+    if (got.truncated) warnings.push((tradeType === 'SELL' ? 'البيع: ' : 'الشراء: ') + bn.c2cWarn(got));
+  }
+  list.sort((a, b) => b.time - a.time);
+  const fromApi = new Set(list.map((x) => x.orderNumber));
+  const onlyOurs = Object.values(orders)
+    .filter((o) => o.createTime >= start && o.createTime <= end && !fromApi.has(o.orderNumber))
+    .map((o) => ({ orderNumber: o.orderNumber, tail: String(o.orderNumber).slice(-4), tradeType: o.tradeType, amount: o.amount,
+      totalPrice: o.totalPrice, status: o.orderStatus, time: o.createTime, source: o.source }))
+    .sort((a, b) => b.time - a.time);
+  sendJSON(res, 200, { days, from: start, to: end, fromPlatform: list, notStored: list.filter((x) => !x.stored).length, onlyOurs, storedTotal: Object.keys(orders).length, warnings });
+});
+
+/** أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ (UID يظهر في تطبيق Binance) */
+route('GET', '/api/diag/whoami', 'admin', async (req, res) => {
+  if (!hasKeys()) return deny(res, 400, 'لم يُحفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
+  const ctx = await binanceCtx();
+  const j = await bn.signedGet(ctx, '/api/v3/account', { omitZeroBalances: 'true' });
+  const k = AC().apiKey;
+  sendJSON(res, 200, { uid: j.uid != null ? String(j.uid) : '', accountType: String(j.accountType || ''), keyMasked: k.slice(0, 4) + '…' + k.slice(-4), accountName: ACCOUNT_NAMES[config.active] });
+});
+
+route('POST', '/api/diag/foreign-ops', 'admin', async (req, res, c) => {
+  const body = await c.body();
+  const days = Math.min(Math.max(Math.floor(Number(body.days)) || 45, 1), 400);
+  if (!hasKeys()) return deny(res, 400, 'لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
+  if (syncRunning) return deny(res, 409, 'هناك مزامنة قيد التنفيذ — انتظر انتهاءها');
+  syncRunning = true;
+  recordLogin(c.role, req, 'scan');
+  try { await streamNdjson(res, foreignScanGenerator(days)); } finally { syncRunning = false; }
+});
+
+/** حذف ما اختاره المسؤول من نتيجة الفحص: يُقبر، ويُحفظ في سلّة trash__X للاسترجاع */
+route('POST', '/api/diag/foreign-ops/delete', 'admin', async (req, res, c) => {
+  const body = await c.body();
+  const oIds = (Array.isArray(body.orders) ? body.orders : []).map(String);
+  const tIds = (Array.isArray(body.transfers) ? body.transfers : []).map(String);
+  await mergeBoth();
+  let n = 0;
+  const gone = { orders: [], transfers: [] };
+  const trash = { orders: {}, transfers: {}, at: Date.now() };
+  for (const id of oIds) if (orders[id]) { trash.orders[id] = orders[id]; delete orders[id]; gone.orders.push(id); n++; }
+  for (const id of tIds) if (transfers[id]) { trash.transfers[id] = transfers[id]; delete transfers[id]; gone.transfers.push(id); n++; }
+  if (n) {
+    try { await saveStore('trash__' + config.active, trash); } catch (e) { console.error('trash: ' + e.message); }
+    await bury(ordersKey(), gone.orders);
+    await bury(transfersKey(), gone.transfers);
+    clearFrozen();
+    await saveOrders({ merge: false });
+    await saveTransfers({ merge: false });
+  }
+  sendJSON(res, 200, { ok: true, deleted: n, accountName: ACCOUNT_NAMES[config.active] });
+});
+
+/** استرجاع آخر حذف (سلّة المحذوف) */
+route('POST', '/api/diag/foreign-ops/undo', 'admin', async (req, res) => {
+  const trash = (await loadStore('trash__' + config.active, null)) || { orders: {}, transfers: {} };
+  await mergeBoth();
+  let n = 0;
+  const oIds = [], tIds = [];
+  for (const [id, o] of Object.entries(trash.orders || {})) if (!orders[id]) { orders[id] = o; oIds.push(id); touch(ordersKey(), id); n++; }
+  for (const [id, t] of Object.entries(trash.transfers || {})) if (!transfers[id]) { transfers[id] = t; tIds.push(id); touch(transfersKey(), id); n++; }
+  if (n) {
+    await unbury(ordersKey(), oIds);
+    await unbury(transfersKey(), tIds);
+    clearFrozen();
+    await saveOrders({ merge: false });
+    await saveTransfers({ merge: false });
+  }
+  await saveStore('trash__' + config.active, { orders: {}, transfers: {}, at: Date.now() });
+  sendJSON(res, 200, { ok: true, restored: n, accountName: ACCOUNT_NAMES[config.active] });
+});
+
+/* الاستعادة من ملف تصدير (Excel/CSV من النظام): preview يعرض ما ليس في المخزن، وapply يُعيده */
+route('POST', '/api/restore/preview', 'admin', async (req, res) => {
+  const buf = await readRaw(req);
+  if (!buf.length) return deny(res, 400, 'لم يصل ملف');
+  let rows, rec;
+  try { rows = (buf[0] === 0x50 && buf[1] === 0x4b) ? xlsxread.parseXlsx(buf) : xlsxread.parseCsv(buf.toString('utf8')); }
+  catch (e) { return deny(res, 400, 'تعذّرت قراءة الملف: ' + e.message); }
+  try { rec = N.rowsToRecords(rows); } catch (e) { return deny(res, 400, e.message); }
+  await mergeBoth();
+  sendJSON(res, 200, {
+    accountName: ACCOUNT_NAMES[config.active], rows: rows.length - 1,
+    inFile: { orders: rec.orders.length, transfers: rec.transfers.length, depwd: rec.depwd },
+    missingOrders: rec.orders.filter((o) => !orders[o.orderNumber]),
+    missingTransfers: rec.transfers.filter((t) => !transfers[t.id]),
+  });
+});
+
+route('POST', '/api/restore/apply', 'admin', async (req, res, c) => {
+  const body = await c.body();
+  await mergeBoth();
+  let n = 0;
+  const oIds = [], tIds = [];
+  for (const raw of (Array.isArray(body.orders) ? body.orders : [])) {
+    const o = N.normalizeOrder(raw, 'import');
+    if (!o.orderNumber || orders[o.orderNumber]) continue;
+    orders[o.orderNumber] = o; oIds.push(o.orderNumber); touch(ordersKey(), o.orderNumber); n++;
+  }
+  for (const raw of (Array.isArray(body.transfers) ? body.transfers : [])) {
+    const id = String(raw.id || '');
+    if (!id || transfers[id] || !N.TX_GROUP[raw.kind]) continue;
+    transfers[id] = Object.assign({}, raw, { id, source: 'import', status: String(raw.status || 'COMPLETED') });
+    tIds.push(id); touch(transfersKey(), id); n++;
+  }
+  if (n) {
+    await unbury(ordersKey(), oIds);   // ما استُعيد لا يبقى مقبورًا
+    await unbury(transfersKey(), tIds);
+    clearFrozen();
+    await saveOrders({ merge: false });
+    await saveTransfers({ merge: false });
+  }
+  sendJSON(res, 200, { ok: true, restored: n, accountName: ACCOUNT_NAMES[config.active] });
+});
+
+/* أرشفةُ كل ما قبل تاريخ (أو إرجاعه بـ undo): يخرج من الجدول ومن «الباقي» ويبقى في الأرشيف */
+route('POST', '/api/archive/before', 'admin', async (req, res, c) => {
+  const body = await c.body();
+  const before = Number(body.before);
+  if (!Number.isFinite(before) || before <= 0) return deny(res, 400, 'حدّد التاريخ أولًا');
+  const undo = !!body.undo;
+  await mergeBoth();
+  let no = 0, nt = 0;
+  for (const [id, o] of Object.entries(orders)) {
+    if (!(o.createTime < before) || !!o.archived === !undo) continue;
+    if (undo) delete o.archived; else o.archived = true;
+    touch(ordersKey(), id); no++;
+  }
+  for (const [id, t] of Object.entries(transfers)) {
+    if (!(t.time < before) || !!t.archived === !undo) continue;
+    if (undo) delete t.archived; else t.archived = true;
+    touch(transfersKey(), id); nt++;
+  }
+  if (no + nt) {
+    clearFrozen();
+    await saveOrders({ merge: false });
+    await saveTransfers({ merge: false });
+  }
+  sendJSON(res, 200, { ok: true, orders: no, transfers: nt, undo, accountName: ACCOUNT_NAMES[config.active] });
+});
+
+/* بيانات الحساب الآخر في قاعدة هذا السستم (بعد الفصل): تُعرض ثم تُحذف بأمر صريح */
+const LEGACY_SHARED = ['orders', 'transfers', 'config', 'loginlog', 'syncusage'];   // مفاتيح ما قبل الفصل، بلا لاحقة
+async function foreignKeys() {
+  const other = ACCOUNTS.find((a) => a !== LOCKED) || 'p2p';
+  const keys = await store.listStoreKeys();
+  return { other, keys: keys.filter((k) => k.endsWith('__' + other) || LEGACY_SHARED.includes(k)) };
+}
+route('GET', '/api/system/foreign', 'admin', async (req, res) => {
+  if (!LOCKED) return deny(res, 400, 'هذا الإجراء للسستم المقفول على حسابٍ واحد (متغيّر ACCOUNT)');
+  let f;
+  try { f = await foreignKeys(); } catch (e) { return deny(res, 500, 'تعذّر قراءة مفاتيح القاعدة: ' + e.message); }
+  const items = [];
+  for (const k of f.keys) {
+    const v = await loadStore(k, null);
+    items.push({ key: k, rows: Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : 1) });
+  }
+  sendJSON(res, 200, { otherName: ACCOUNT_NAMES[f.other], count: f.keys.length, items });
+});
+route('DELETE', '/api/system/foreign', 'admin', async (req, res) => {
+  if (!LOCKED) return deny(res, 400, 'هذا الإجراء للسستم المقفول على حسابٍ واحد (متغيّر ACCOUNT)');
+  let f;
+  try { f = await foreignKeys(); } catch (e) { return deny(res, 500, 'تعذّر قراءة مفاتيح القاعدة: ' + e.message); }
+  let n = 0;
+  try { for (const k of f.keys) { await store.deleteStore(k); n++; } }
+  catch (e) { return deny(res, 500, `تعذّر الحذف بعد ${n} مفتاحًا: ` + e.message); }
+  sendJSON(res, 200, { ok: true, deleted: n, otherName: ACCOUNT_NAMES[f.other] });
+});
+
+/* ---------- الموزّع ---------- */
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
-
   try {
     if (!p.startsWith('/api/')) {
       if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
-      serveStatic(res, p, req);
+      serveStatic(req, res, p);
       return;
     }
-
-    /* ---------- حالة الصيانة (عامة للقراءة) ---------- */
-    if (p === '/api/maintenance' && req.method === 'GET') {
-      // تُقرأ من القاعدة في كل مرة، فأي تغيير من أي نسخة من الخادم يظهر فورًا
-      sendJSON(res, 200, await loadMaintenance(req));
-      return;
-    }
-
-    /* ---------- المصادقة ---------- */
-    if (p === '/api/auth/status' && req.method === 'GET') {
-      sendJSON(res, 200, {
-        configured: isConfigured(),
-        hasUser: !!(config.auth.user && config.auth.user.hash),
-        hasUser2: !!(config.auth.user2 && config.auth.user2.hash),
-        // السستم المقفول يُعلن حسابه قبل الدخول، فتأخذ شاشةُ الدخول لونَه (لكل سستم لونه)
-        account: LOCKED ? { id: LOCKED, name: ACCOUNT_NAMES[LOCKED] } : null,
-      });
-      return;
-    }
-
-    if (p === '/api/auth/setup' && req.method === 'POST') {
-      if (isConfigured()) { sendJSON(res, 409, { error: 'تم الإعداد مسبقًا — سجّل الدخول' }); return; }
-      const body = await readBody(req);
-      const ap = String(body.adminPassword || '');
-      const up = String(body.userPassword || '');
-      const up2 = String(body.user2Password || '');
-      if (ap.length < 4) { sendJSON(res, 400, { error: 'كلمة سر المسؤول يجب ألا تقل عن 4 خانات' }); return; }
-      config.auth.admin = makeCredential(ap);
-      config.auth.user = up ? makeCredential(up) : {};
-      config.auth.user2 = up2 ? makeCredential(up2) : {};
-      await saveConfig();
-      const token = newToken('admin');
-      recordLogin('admin', req);
-      sendJSON(res, 200, { ok: true, token, role: 'admin' });
-      return;
-    }
-
-    if (p === '/api/auth/login' && req.method === 'POST') {
-      const body = await readBody(req);
-      const role = ['admin', 'user', 'user2'].includes(body.role) ? body.role : 'user';
-      const cred = config.auth[role];
-      if (!cred || !cred.hash) {
-        const msg = role === 'admin' ? 'لم يتم الإعداد بعد'
-          : (role === 'user2' ? 'لا يوجد حساب «مستخدم 2» — عيّنه من «تغيير كلمات السر»' : 'لا يوجد حساب مستخدم — ادخل كمسؤول');
-        sendJSON(res, 400, { error: msg }); return;
-      }
-      if (!verifyPassword(String(body.password || ''), cred)) { sendJSON(res, 401, { error: 'كلمة السر غير صحيحة' }); return; }
-      const token = newToken(role);
-      recordLogin(role, req);
-      sendJSON(res, 200, { ok: true, token, role });
-      return;
-    }
-
-    if (p === '/api/auth/logout' && req.method === 'POST') {
-      const token = req.headers['x-auth-token'];
-      if (token) sessions.delete(String(token));
-      sendJSON(res, 200, { ok: true });
-      return;
-    }
-
-    if (p === '/api/auth/password' && req.method === 'POST') {
-      if (roleOf(req) !== 'admin') { sendJSON(res, 403, { error: 'هذه العملية للمسؤول فقط' }); return; }
-      const body = await readBody(req);
-      if (typeof body.adminPassword === 'string' && body.adminPassword) {
-        if (body.adminPassword.length < 4) { sendJSON(res, 400, { error: 'كلمة سر المسؤول قصيرة جدًا' }); return; }
-        config.auth.admin = makeCredential(body.adminPassword);
-      }
-      if (typeof body.userPassword === 'string') {
-        config.auth.user = body.userPassword ? makeCredential(body.userPassword) : {};
-      }
-      if (typeof body.user2Password === 'string') {
-        config.auth.user2 = body.user2Password ? makeCredential(body.user2Password) : {};
-      }
-      await saveConfig();
-      sendJSON(res, 200, { ok: true });
-      return;
-    }
-
-    /* ---------- بوابة الصلاحيات ---------- */
-    const role = roleOf(req);
-    const gate = (list) => list.some((x) => x[0] === req.method && x[1] === p);
-    // للمسؤول فقط
-    const ADMIN_ROUTES = [
-      ['POST', '/api/orders'], ['DELETE', '/api/orders'], ['POST', '/api/orders/bulk'],
-      ['POST', '/api/orders/clear'], ['POST', '/api/transfers/clear'],
-      ['POST', '/api/settings'], ['GET', '/api/auth/log'],
-      ['POST', '/api/maintenance'], ['GET', '/api/diag/p2p'], ['POST', '/api/sync/day'],
-      ['GET', '/api/system/foreign'], ['DELETE', '/api/system/foreign'], ['GET', '/api/diag/whoami'],
-      ['POST', '/api/diag/foreign-ops'], ['POST', '/api/diag/foreign-ops/delete'], ['POST', '/api/diag/foreign-ops/undo'],
-      ['POST', '/api/restore/preview'], ['POST', '/api/restore/apply'], ['POST', '/api/archive/before'],
-    ];
-    // للمسؤول و«مستخدم 2»: الإشاري والملاحظة والسعر والمبلغ (تصحيحُ صفٍّ واحد)
-    const ANNOTATE_ROUTES = [
-      ['POST', '/api/orders/annotate'], ['POST', '/api/transfers/annotate'],
-    ];
-    // لأي مستخدم مسجّل دخوله
-    const LOGIN_ROUTES = [
-      ['POST', '/api/sync'], ['GET', '/api/sync/quota'],
-      ['GET', '/api/balance'], ['GET', '/api/balance/snapshots'],
-      // الإلغاء متاحٌ لكل داخل: لا يمحو بيانات، بل أرقامًا مشتقّة تُحسب فورًا
-      // من جديد — والإصلاح الذاتي يحتاجه أيًّا كان الدور الذي فتح النظام
-      ['POST', '/api/balance/freeze'], ['POST', '/api/balance/unfreeze'],
-      ['GET', '/api/orders'], ['GET', '/api/transfers'], ['GET', '/api/settings'],
-      ['GET', '/api/account'],
-    ];
-    if (gate(ADMIN_ROUTES) && role !== 'admin') { sendJSON(res, 403, { error: 'هذه العملية للمسؤول فقط' }); return; }
-    if (gate(ANNOTATE_ROUTES) && role !== 'admin' && role !== 'user2') { sendJSON(res, 403, { error: 'لا تملك صلاحية التعديل في السجل' }); return; }
-    if (gate(LOGIN_ROUTES) && !role) { sendJSON(res, 401, { error: 'يلزم تسجيل الدخول' }); return; }
-
-    /* ---------- ضبط وضع الصيانة (للمسؤول فقط) ---------- */
-    if (p === '/api/maintenance' && req.method === 'POST') {
-      const body = await readBody(req);
-      const m = await loadMaintenance(req);
-      if (typeof body.on === 'boolean') m.on = body.on;
-      if (typeof body.message === 'string') m.message = body.message.slice(0, 2000);
-      if (typeof body.link === 'string') m.link = body.link.slice(0, 1000);
-      // يُوقف هذا السستم فقط (النطاق الحالي)، والسستم الثاني يبقى شغّالًا
-      await saveStore(maintKey(req), m);
-      sendJSON(res, 200, { ok: true, maintenance: m });
-      return;
-    }
-
-    /* ---------- فحص المزامنة: ما تُرجعه المنصة فعلًا مقابل ما هو محفوظ ----------
-       يفصل السببين نهائيًا: إن ظهرت العملية هنا ولم تُحفظ فالخلل عندنا،
-       وإن لم تظهر أصلًا فالمنصة لا تُرجعها لهذا المفتاح. (للمسؤول فقط) */
-    if (p === '/api/diag/p2p' && req.method === 'GET') {
-      if (!AC().apiKey || !AC().apiSecret) {
-        sendJSON(res, 400, { error: 'أدخل مفتاح API من الإعدادات أولًا' });
-        return;
-      }
-      const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 3, 1), 29);
-      const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
-      const offset = await timeOffset(base);
-      recordLogin(role, req, 'scan');
-      const end = Date.now();
-      const start = end - days * 86400000;
-      const list = [];
-      /* نفس آلية الجلب في المزامنة (نوافذ تنشطر) بسقف أربعين طلبًا للفحص كله —
-         كان الفحص يُقلّب ستين صفحة لكل نوعٍ حين تُكرّر المنصةُ الصفحة، فيستهلك
-         مئةً وعشرين طلبًا على مئة صفٍّ ويقرّب الحظر */
-      const c2cBudget = { left: 40 };
-      const warnings = [];
-      for (const tradeType of ['SELL', 'BUY']) {
-        const got = await fetchC2C(base, offset, tradeType, start, end, (r) => {
-          const n = String(r.orderNumber || '').trim();
-          list.push({
-            orderNumber: n,
-            tail: n.slice(-4),
-            tradeType: String(r.tradeType || ''),
-            amount: num(r.amount),
-            totalPrice: num(r.totalPrice),
-            status: String(r.orderStatus || ''),
-            time: Number(r.createTime) || 0,
-            stored: Object.prototype.hasOwnProperty.call(orders, n),
-          });
-        }, undefined, c2cBudget);
-        if (got.truncated) warnings.push((tradeType === 'SELL' ? 'البيع: ' : 'الشراء: ') + c2cWarn(got));
-      }
-      list.sort((a, b) => b.time - a.time);
-      // ما هو محفوظ عندنا في نفس الفترة ولم تُرجعه المنصة (مُدخل يدويًا أو مزروع)
-      const fromApi = new Set(list.map((x) => x.orderNumber));
-      const onlyOurs = Object.values(orders)
-        .filter((o) => o.createTime >= start && o.createTime <= end && !fromApi.has(o.orderNumber))
-        .map((o) => ({
-          orderNumber: o.orderNumber, tail: String(o.orderNumber).slice(-4),
-          tradeType: o.tradeType, amount: o.amount, totalPrice: o.totalPrice,
-          status: o.orderStatus, time: o.createTime, source: o.source,
-        }))
-        .sort((a, b) => b.time - a.time);
-      sendJSON(res, 200, {
-        days, from: start, to: end,
-        fromPlatform: list,
-        notStored: list.filter((x) => !x.stored).length,
-        onlyOurs,
-        storedTotal: Object.keys(orders).length,
-        warnings,
-      });
-      return;
-    }
-
-    /* ---------- سجل الدخول (للمسؤول فقط) ---------- */
-    if (p === '/api/auth/log' && req.method === 'GET') {
-      sendJSON(res, 200, { events: loginLog.slice().reverse() });
-      return;
-    }
-
-    /* ---------- الطلبات ---------- */
-    if (p === '/api/orders' && req.method === 'GET') {
-      sendJSON(res, 200, { orders: Object.values(orders), lastSync: AC().lastSync });
-      return;
-    }
-
-    if (p === '/api/orders' && req.method === 'POST') {
-      const body = await readBody(req);
-      const o = normalizeOrder(body, 'manual');
-      if (!(o.amount > 0)) { sendJSON(res, 400, { error: 'الكمية مطلوبة ويجب أن تكون أكبر من صفر' }); return; }
-      if (!(o.totalPrice > 0)) { sendJSON(res, 400, { error: 'المبلغ مطلوب ويجب أن يكون أكبر من صفر' }); return; }
-      const r = upsertOrder(o);
-      await saveOrders();
-      sendJSON(res, 200, { result: r, order: o });
-      return;
-    }
-
-    if (p === '/api/orders/bulk' && req.method === 'POST') {
-      await refreshActive();   // الاستيراد يقع في الحساب المفتوح فعلًا لا المحفوظ في الذاكرة
-      const body = await readBody(req);
-      const list = Array.isArray(body.orders) ? body.orders : [];
-      let added = 0, updated = 0, skipped = 0;
-      for (const raw of list) {
-        const o = normalizeOrder(raw, raw.source === 'binance' ? 'binance' : 'import');
-        if (!(o.amount > 0) || !(o.totalPrice > 0)) { skipped++; continue; }
-        const r = upsertOrder(o);
-        if (r === 'added') added++;
-        else if (r === 'updated') updated++;
-        if (r !== 'same') touch('orders__' + config.active, o.orderNumber); // ما جاء في الملف أحدثُ من المخزَّن
-      }
-      await saveOrders();
-      sendJSON(res, 200, { added, updated, skipped, total: Object.keys(orders).length });
-      return;
-    }
-
-    if (p === '/api/orders' && req.method === 'DELETE') {
-      const id = url.searchParams.get('id') || '';
-      if (!orders[id]) { sendJSON(res, 404, { error: 'الطلب غير موجود' }); return; }
-      await mergeFromStore('orders__' + config.active, orders); // الدمج أولًا، فالحفظ هنا بلا دمج
-      delete orders[id];
-      await bury('orders__' + config.active, [id]); // ولا يعود من ذاكرة نسخةٍ أخرى
-      await saveOrders({ merge: false }); // بلا دمج حتى لا يعود المحذوف من المخزَّن
-      sendJSON(res, 200, { ok: true, total: Object.keys(orders).length });
-      return;
-    }
-
-    if (p === '/api/orders/clear' && req.method === 'POST') {
-      orders = {};
-      await saveOrders({ merge: false }); // مسحٌ مقصود — بلا دمج
-      sendJSON(res, 200, { ok: true });
-      return;
-    }
-
-    // تحديث الإشاري/الملاحظة لطلب (يبقى بعد المزامنة)
-    if (p === '/api/orders/annotate' && req.method === 'POST') {
-      const body = await readBody(req);
-      const id = String(body.id || '');
-      if (!Object.prototype.hasOwnProperty.call(orders, id)) { sendJSON(res, 404, { error: 'الطلب غير موجود' }); return; }
-      const o = orders[id];
-      if (typeof body.note === 'string') o.note = body.note.slice(0, 2000);
-      if (typeof body.reference === 'string') o.reference = body.reference.slice(0, 2000);
-      // تعديل يدوي للسعر/المبلغ يبقى بعد المزامنة ('' يعني إلغاء التعديل والرجوع لقيمة المنصة)
-      if ('unitPrice' in body) {
-        const s = String(body.unitPrice).trim();
-        if (s === '') delete o.unitPriceOverride;
-        else { const v = Number(s); if (Number.isFinite(v) && v >= 0) o.unitPriceOverride = v; }
-      }
-      if ('totalPrice' in body) {
-        const s = String(body.totalPrice).trim();
-        if (s === '') delete o.totalPriceOverride;
-        else { const v = Number(s); if (Number.isFinite(v) && v >= 0) o.totalPriceOverride = v; }
-      }
-      /* مرساة الرصيد وتسمية الشبكة تمسّان الدفتر كلّه لا صفًّا واحدًا، فتبقيان
-         للمسؤول. الواجهة تُخفيهما عن «مستخدم 2» أصلًا، وهذا يجعل الخادم يُلزمهما. */
-      const mayAll = role === 'admin';
-      if (mayAll && 'networkLabel' in body) {
-        const s = String(body.networkLabel).trim();
-        if (s === '') delete o.networkLabelOverride;
-        else o.networkLabelOverride = s.slice(0, 40);
-      }
-      // علامة «الرصيد صفر بعد هذه العملية»: يعرفها المستخدم ولا تعرفها المنصة،
-      // وعليها يُثبَّت عمود «الباقي» فتظهر ما بعدها بقيمها الحقيقية
-      /* الأرشفة إخفاءٌ من الجدول لا محوٌ من الدفتر: تبقى العملية محسوبةً في
-         «الباقي» لأن المال تحرّك فعلًا، ومَن أراد المحو فالحذف موجود. */
-      if (mayAll && 'archived' in body) {
-        if (body.archived) o.archived = true; else delete o.archived;
-      }
-      if (mayAll && 'zeroPoint' in body) {
-        if (body.zeroPoint) o.zeroPoint = true; else delete o.zeroPoint;
-      }
-      if (mayAll && 'balanceAt' in body) {
-        const v = Number(body.balanceAt);
-        if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete o.balanceAt; delete o.zeroPoint; }
-        else { o.balanceAt = Math.round(v * 1e8) / 1e8; delete o.zeroPoint; }
-      }
-      touch('orders__' + config.active, id); // ما عُدّل هنا أحدثُ من المخزَّن حتى يُحفظ
-      await saveOrders();
-      sendJSON(res, 200, { ok: true, order: o });
-      return;
-    }
-
-    /* ---------- الإيداع والسحب ---------- */
-    if (p === '/api/transfers' && req.method === 'GET') {
-      sendJSON(res, 200, { transfers: Object.values(transfers), lastSync: AC().lastSync });
-      return;
-    }
-
-    if (p === '/api/transfers/clear' && req.method === 'POST') {
-      transfers = {};
-      await saveTransfers({ merge: false }); // مسحٌ مقصود — بلا دمج
-      sendJSON(res, 200, { ok: true });
-      return;
-    }
-
-    // تحديث الإشاري/الملاحظة لحوالة (يبقى بعد المزامنة)
-    if (p === '/api/transfers/annotate' && req.method === 'POST') {
-      const body = await readBody(req);
-      const id = String(body.id || '');
-      if (!Object.prototype.hasOwnProperty.call(transfers, id)) { sendJSON(res, 404, { error: 'الحوالة غير موجودة' }); return; }
-      const t = transfers[id];
-      if (typeof body.note === 'string') t.note = body.note.slice(0, 2000);
-      if (typeof body.reference === 'string') t.reference = body.reference.slice(0, 2000);
-      if ('unitPrice' in body) {
-        const s = String(body.unitPrice).trim();
-        if (s === '') delete t.unitPriceOverride;
-        else { const v = Number(s); if (Number.isFinite(v) && v >= 0) t.unitPriceOverride = v; }
-      }
-      if ('totalPrice' in body) {
-        const s = String(body.totalPrice).trim();
-        if (s === '') delete t.totalPriceOverride;
-        else { const v = Number(s); if (Number.isFinite(v) && v >= 0) t.totalPriceOverride = v; }
-      }
-      /* مرساة الرصيد وتسمية الشبكة تمسّان الدفتر كلّه لا صفًّا واحدًا، فتبقيان
-         للمسؤول. الواجهة تُخفيهما عن «مستخدم 2» أصلًا، وهذا يجعل الخادم يُلزمهما. */
-      const mayAll = role === 'admin';
-      if (mayAll && 'networkLabel' in body) {
-        const s = String(body.networkLabel).trim();
-        if (s === '') delete t.networkLabelOverride;
-        else t.networkLabelOverride = s.slice(0, 40);
-      }
-      // علامة «الرصيد صفر بعد هذه العملية» (انظر التعليق في annotate الطلبات)
-      /* عمليةٌ بعملةٍ غير USDT لا تدخل حساب «الباقي» لأن USDT لم يتحرّك. لكن قد
-         يريد صاحب الدفتر احتسابها بقيمتها بالـUSDT — فيكتبها هنا، وتُعامل
-         عندئذٍ معاملة USDT بمقدارها هذا (الرسوم داخلةٌ فيه، فلا تُضاف ثانية). */
-      if (mayAll && 'usdtValue' in body) {
-        const v = Number(body.usdtValue);
-        if (body.usdtValue == null || String(body.usdtValue).trim() === '' || !Number.isFinite(v) || v < 0) delete t.usdtValue;
-        else t.usdtValue = Math.round(v * 1e8) / 1e8;
-      }
-      /* الأرشفة إخفاءٌ من الجدول لا محوٌ من الدفتر: تبقى العملية محسوبةً في
-         «الباقي» لأن المال تحرّك فعلًا، ومَن أراد المحو فالحذف موجود. */
-      if (mayAll && 'archived' in body) {
-        if (body.archived) t.archived = true; else delete t.archived;
-      }
-      if (mayAll && 'zeroPoint' in body) {
-        if (body.zeroPoint) t.zeroPoint = true; else delete t.zeroPoint;
-      }
-      if (mayAll && 'balanceAt' in body) {
-        const v = Number(body.balanceAt);
-        if (body.balanceAt == null || !Number.isFinite(v) || v < 0) { delete t.balanceAt; delete t.zeroPoint; }
-        else { t.balanceAt = Math.round(v * 1e8) / 1e8; delete t.zeroPoint; }
-      }
-      touch('transfers__' + config.active, id); // ما عُدّل هنا أحدثُ من المخزَّن حتى يُحفظ
-      await saveTransfers();
-      sendJSON(res, 200, { ok: true, transfer: t });
-      return;
-    }
-
-    /* ---------- رصيد محفظة التمويل (جلب مباشر) ---------- */
-    if (p === '/api/balance' && req.method === 'GET') {
-      if (!AC().apiKey || !AC().apiSecret) {
-        sendJSON(res, 400, { error: 'أدخل مفتاح API من الإعدادات أولًا لعرض الرصيد' });
-        return;
-      }
-      const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
-      const offset = await timeOffset(base);
-      const funding = await signedGet(base, '/sapi/v1/asset/get-funding-asset', { needBtcValuation: 'true' }, offset, 'POST');
-      // الحساب الفوري (Spot): نجمعه مع التمويل لأن التحويل بينهما لا يغيّر ما نملكه فعلًا.
-      // فشلُه غير قاتل — نعرض التمويل وحده بدل أن نُفشل الطلب كله.
-      let spot = [];
-      let spotError = '';
-      try {
-        spot = await signedGet(base, '/sapi/v3/asset/getUserAsset', {}, offset, 'POST');
-      } catch (e) { spotError = e.message || 'تعذّر الجلب'; console.error('spot balance: ' + spotError); }
-
-      const NUMS = ['free', 'locked', 'freeze', 'withdrawing', 'btcValuation'];
-      const usdtTotal = (list) => (Array.isArray(list) ? list : [])
-        .filter((a) => String(a.asset || '').toUpperCase() === 'USDT')
-        .reduce((s, a) => s + num(a.free) + num(a.locked) + num(a.freeze) + num(a.withdrawing), 0);
-
-      const merged = new Map();
-      for (const a of [...(Array.isArray(funding) ? funding : []), ...(Array.isArray(spot) ? spot : [])]) {
-        const key = String(a.asset || '').toUpperCase();
-        if (!key) continue;
-        const cur = merged.get(key) || { asset: key };
-        for (const f of NUMS) cur[f] = num(cur[f]) + num(a[f]);
-        merged.set(key, cur);
-      }
-      const now = Date.now();
-      /* لا نسجّل لقطةً إلا إذا وصلت المحفظتان معًا: رقمُ التمويل وحده ناقصٌ،
-         ولقطةٌ ناقصة تصير أساسًا خاطئًا يثبّت عليه عمودُ «الباقي» كل صفوف اليوم. */
-      let snapshots = null;
-      if (!spotError) {
-        try { snapshots = await saveBalSnap(usdtTotal(funding) + usdtTotal(spot), now); }
-        catch (e) { console.error('balsnap: ' + e.message); }
-      }
-      sendJSON(res, 200, {
-        assets: [...merged.values()],
-        spotIncluded: !spotError,
-        spotError,
-        usdtFunding: usdtTotal(funding),
-        usdtSpot: usdtTotal(spot),
-        snapshots: snapshots || await loadBalSnaps(),
-        updatedAt: now,
-      });
-      return;
-    }
-
-    /* ---------- جلب يومٍ واحد بعينه (إصلاح موضعي) ----------
-       المزامنة الكاملة تسأل المنصة عشرات الأسئلة فتُرهق الحصّة وتقرّب الحظر،
-       ومَن ينقصه يومٌ واحد لا يحتاجها. هنا نسأل عن ذلك اليوم وحده — ستة طلبات
-       تغطّي كل الأنواع — ثم نُبلّغ بما وجدناه وما كان جديدًا. (للمسؤول) */
-    if (p === '/api/sync/day' && req.method === 'POST') {
-      if (!AC().apiKey || !AC().apiSecret) {
-        sendJSON(res, 400, { error: 'أدخل مفتاح API من الإعدادات أولًا' });
-        return;
-      }
-      const body = await readBody(req);
-      await refreshActive();
-      const m = String(body.day || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (!m) { sendJSON(res, 400, { error: 'حدّد اليوم بصيغة YYYY-MM-DD' }); return; }
-      // حدود اليوم المحاسبي: من الثانية ليلًا إلى الثانية ليلًا — نفس ما يعرضه الجدول
-      const s = dayStartMs(+m[1], +m[2], +m[3]);
-      const e = s + 86400000 - 1;
-      if (s > Date.now()) { sendJSON(res, 400, { error: 'هذا اليوم لم يأتِ بعد' }); return; }
-      const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
-      const offset = await timeOffset(base);
-      recordLogin(role, req, 'day');
-      await mergeFromStore('orders__' + config.active, orders);
-      await mergeFromStore('transfers__' + config.active, transfers);
-
-      const found = { p2p: 0, deposit: 0, withdraw: 0, pay: 0, convert: 0 };
-      const added = { p2p: 0, deposit: 0, withdraw: 0, pay: 0, convert: 0 };
-      const skipped = [];
-      const rowsOf = (j, key) => (Array.isArray(j) ? j : (Array.isArray(j && j[key]) ? j[key] : []));
-      const take = (kind, list, norm, isOrder) => {
-        for (const raw of list) {
-          found[kind]++;
-          const r = isOrder ? upsertOrder(norm(raw)) : upsertTransfer(norm(raw));
-          if (r === 'added') added[kind]++;
-        }
-      };
-      try {
-        const c2cBudget = { left: 60 }; // يومٌ واحد: ستون طلبًا تكفي ستة آلاف طلبٍ في اليوم
-        for (const tradeType of ['SELL', 'BUY']) {
-          const got = await fetchC2C(base, offset, tradeType, s, e, (raw) => take('p2p', [raw], (r) => normalizeOrder(r, 'binance'), true), undefined, c2cBudget);
-          if (got.truncated) skipped.push('p2p: ' + c2cWarn(got));
-        }
-        take('deposit', rowsOf(await signedGet(base, '/sapi/v1/capital/deposit/hisrec',
-          { startTime: s, endTime: e, offset: 0, limit: 1000 }, offset)), (raw) => normalizeTransfer(raw, 'deposit'), false);
-        await sleep(300);
-        take('withdraw', rowsOf(await signedGet(base, '/sapi/v1/capital/withdraw/history',
-          { startTime: s, endTime: e, offset: 0, limit: 1000 }, offset)), (raw) => normalizeTransfer(raw, 'withdraw'), false);
-        await sleep(300);
-      } catch (err) {
-        sendJSON(res, 502, { error: err && err.message ? err.message : 'تعذّر سؤال المنصة' });
-        return;
-      }
-      // النوعان التاليان قد يُمنعان بصلاحية المفتاح أو المنطقة — فشلهما لا يُفشل الباقي
-      for (const [kind, path, key, norm] of [
-        ['pay', '/sapi/v1/pay/transactions', 'data', normalizePay],
-        ['convert', '/sapi/v1/convert/tradeFlow', 'list', normalizeConvert],
-      ]) {
-        try {
-          if (kind === 'pay') {
-            /* نفس حدّ المئة بلا ترقيم صفحات (انظر المزامنة الشاملة): يومٌ مزدحم
-               يمتلئ فيسقط باقيه صامتًا، فنشطر اليوم زمنيًّا حتى تعود ناقصة. */
-            const parts = [[s, e]];
-            let calls = 0;
-            while (parts.length && calls < PAY_MAX_CALLS) {
-              const [ps, pe] = parts.pop();
-              calls++;
-              const rows = rowsOf(await signedGet(base, path,
-                { startTime: ps, endTime: pe, limit: PAY_PAGE }, offset), key);
-              take(kind, rows, norm, false);
-              if (rows.length >= PAY_PAGE && pe - ps > 60000) {
-                const mid = Math.floor((ps + pe) / 2);
-                parts.push([mid + 1, pe], [ps, mid]);
-              }
-              await sleep(PAY_GAP_MS);
-              await coolIfHeavy(PAY_WEIGHT);
-            }
-            if (parts.length) skipped.push('pay: عمليات كثيرة جدًّا في هذا اليوم — قد تبقى عمليات لم تصل');
-          } else {
-            const j = await signedGet(base, path, { startTime: s, endTime: e, limit: 1000 }, offset);
-            take(kind, rowsOf(j, key), norm, false);
-            await sleep(500);
-          }
-        } catch (err) { skipped.push(kind + ': ' + (err && err.message ? err.message : 'خطأ')); }
-      }
-      try { await saveOrders(); await saveTransfers(); } catch (err) { console.error(err.message); }
-      const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
-      // المحفوظ فعلًا في ذلك اليوم — به نفرّق: أهي لم تصل، أم وصلت والجدول يخفيها؟
-      const inDay = (t) => t >= s && t <= e;
-      const stored = Object.values(orders).filter((o) => inDay(o.createTime)).length
-        + Object.values(transfers).filter((t) => inDay(t.time)).length;
-      sendJSON(res, 200, {
-        ok: true, day: body.day, from: s, to: e, found, added, skipped,
-        total: sum(found), totalAdded: sum(added), stored,
-      });
-      return;
-    }
-
-    /* ---------- لقطات الرصيد اليومية (تُقرأ بلا اتصال بالمنصة) ---------- */
-    if (p === '/api/balance/snapshots' && req.method === 'GET') {
-      sendJSON(res, 200, { snapshots: await loadBalSnaps() });
-      return;
-    }
-
-    /* ---------- تثبيت «الباقي من USDT» على العمليات المكتملة ----------
-       العملية متى اكتملت صار باقيها رقمًا نهائيًا يُكتب على الصفّ نفسه، فلا
-       يعود يُحسب ولا يتحرّك مهما دخل بعده من عمليات أو تغيّر رصيد المحفظة.
-       أول قيمة تُكتب هي النهائية — الكتابةُ فوقها ممنوعة، وإلا عاد يتحرّك. */
-    if (p === '/api/balance/freeze' && req.method === 'POST') {
-      const body = await readBody(req);
-      let n = 0;
-      const put = (store, id, v) => {
-        const rec = store[id];
-        if (!rec || rec.balAfter != null) return;
-        const x = Number(v);
-        if (!Number.isFinite(x)) return;
-        rec.balAfter = Math.round(x * 1e8) / 1e8;
-        touch((store === orders ? 'orders__' : 'transfers__') + config.active, id);
-        n++;
-      };
-      for (const [id, v] of Object.entries(body.orders || {})) put(orders, id, v);
-      for (const [id, v] of Object.entries(body.transfers || {})) put(transfers, id, v);
-      if (n) { await saveOrders(); await saveTransfers(); }
-      sendJSON(res, 200, { ok: true, frozen: n });
-      return;
-    }
-
-    /* إلغاء التثبيت وإعادة الحساب من الصفر (للمسؤول): مخرجٌ إن ثُبِّتت أرقام
-       خاطئة يومًا — كأن يُثبَّت العمود قبل وصول عملية ناقصة من المنصة. */
-    if (p === '/api/balance/unfreeze' && req.method === 'POST') {
-      // ادمج أولًا حتى تشمل الإزالةُ ما كتبه السستم الآخر، فالحفظ هنا بلا دمج
-      await mergeFromStore('orders__' + config.active, orders);
-      await mergeFromStore('transfers__' + config.active, transfers);
-      let n = 0;
-      for (const o of Object.values(orders)) if (o.balAfter != null) { delete o.balAfter; n++; }
-      for (const t of Object.values(transfers)) if (t.balAfter != null) { delete t.balAfter; n++; }
-      await saveOrders({ merge: false });
-      await saveTransfers({ merge: false });
-      sendJSON(res, 200, { ok: true, cleared: n });
-      return;
-    }
-
-    /* ---------- الحسابات (P2P / P3P) ---------- */
-    if (p === '/api/account' && req.method === 'GET') {
-      await refreshActive();   // تعرض الواجهة الحسابَ الحقيقي لا نسخةً قديمة
-      sendJSON(res, 200, {
-        active: config.active,
-        locked: !!LOCKED,        // سستمٌ لحسابٍ واحد: لا زرّ تبديل
-        accounts: (LOCKED ? [LOCKED] : ACCOUNTS).map((id) => ({
-          id, name: ACCOUNT_NAMES[id],
-          hasKey: !!(config.accounts[id] && config.accounts[id].apiKey && config.accounts[id].apiSecret),
-          lastSync: config.accounts[id] ? config.accounts[id].lastSync : null,
-        })),
-      });
-      return;
-    }
-
-    /* ---------- عملياتٌ محفوظة هنا لا يُرجعها مفتاح هذا الحساب (للمسؤول) ----------
-       الفحص يبثّ تقدّمه ثم قائمة المرشَّحين؛ والحذفُ طلبٌ منفصل بمعرّفات يختارها
-       المسؤول بعينها — يُقبر المحذوف حتى لا تُعيده نسخةٌ قديمة، ويُمحى المثبَّت
-       ليُعاد حساب «الباقي». */
-    if (p === '/api/diag/foreign-ops' && req.method === 'POST') {
-      const body = await readBody(req);
-      const days = Math.min(Math.max(Math.floor(Number(body.days)) || 45, 1), 400); // حتى سنةٍ ونيّف: التسرّب قد يكون قديمًا
-      if (syncRunning) { sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ — انتظر انتهاءها' }); return; }
-      syncRunning = true;
-      recordLogin(role, req, 'scan');
-      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
-      try {
-        for await (const ev of foreignScanGenerator(days)) res.write(JSON.stringify(ev) + '\n');
-      } catch (e) {
-        res.write(JSON.stringify({ error: e.isUser ? e.message : 'خطأ غير متوقع: ' + e.message }) + '\n');
-      } finally {
-        syncRunning = false;
-        res.end();
-      }
-      return;
-    }
-    if (p === '/api/diag/foreign-ops/delete' && req.method === 'POST') {
-      const body = await readBody(req);
-      const oIds = (Array.isArray(body.orders) ? body.orders : []).map(String);
-      const tIds = (Array.isArray(body.transfers) ? body.transfers : []).map(String);
-      // الدمج أولًا كي يشمل الحذفُ ما كتبته نسخةٌ أخرى، ثم الحفظ بلا دمج
-      await mergeFromStore('orders__' + config.active, orders);
-      await mergeFromStore('transfers__' + config.active, transfers);
-      let n = 0;
-      const gone = { orders: [], transfers: [] };
-      // سلّةُ المحذوف: نسخةٌ من كل صفٍّ قبل حذفه، فيُسترجع آخرُ حذفٍ بضغطة إن أخطأ الاختيار
-      const trash = { orders: {}, transfers: {}, at: Date.now() };
-      for (const id of oIds) if (orders[id]) { trash.orders[id] = orders[id]; delete orders[id]; gone.orders.push(id); n++; }
-      for (const id of tIds) if (transfers[id]) { trash.transfers[id] = transfers[id]; delete transfers[id]; gone.transfers.push(id); n++; }
-      if (n) {
-        try { await saveStore('trash__' + config.active, trash); } catch (e) { console.error('trash: ' + e.message); }
-        await bury('orders__' + config.active, gone.orders);
-        await bury('transfers__' + config.active, gone.transfers);
-        // الدفتر تغيّر، فالمثبَّت لم يعد صحيحًا — يُعاد حسابه من جديد
-        for (const o of Object.values(orders)) if (o.balAfter != null) delete o.balAfter;
-        for (const t of Object.values(transfers)) if (t.balAfter != null) delete t.balAfter;
-        await saveOrders({ merge: false });
-        await saveTransfers({ merge: false });
-      }
-      sendJSON(res, 200, { ok: true, deleted: n, accountName: ACCOUNT_NAMES[config.active] });
-      return;
-    }
-
-    /* ---------- الاستعادة من ملف تصدير (للمسؤول) ----------
-       preview: يُرفع ملف Excel/CSV صدّره النظام، فتُعرض صفوفه غير الموجودة في
-       المخزن. apply: تُعاد الصفوف المختارة، وتُخرَج من المقبرة إن كانت قد حُذفت. */
-    if (p === '/api/restore/preview' && req.method === 'POST') {
-      const buf = await readRaw(req);
-      if (!buf.length) { sendJSON(res, 400, { error: 'لم يصل ملف' }); return; }
-      let rows;
-      try {
-        rows = (buf[0] === 0x50 && buf[1] === 0x4b) ? xlsxread.parseXlsx(buf) : xlsxread.parseCsv(buf.toString('utf8'));
-      } catch (e) { sendJSON(res, 400, { error: 'تعذّرت قراءة الملف: ' + e.message }); return; }
-      let rec;
-      try { rec = rowsToRecords(rows); } catch (e) { sendJSON(res, 400, { error: e.message }); return; }
-      await mergeFromStore('orders__' + config.active, orders);
-      await mergeFromStore('transfers__' + config.active, transfers);
-      const missingOrders = rec.orders.filter((o) => !orders[o.orderNumber]);
-      const missingTransfers = rec.transfers.filter((t) => !transfers[t.id]);
-      sendJSON(res, 200, {
-        accountName: ACCOUNT_NAMES[config.active], rows: rows.length - 1,
-        inFile: { orders: rec.orders.length, transfers: rec.transfers.length, depwd: rec.depwd },
-        missingOrders, missingTransfers,
-      });
-      return;
-    }
-    if (p === '/api/restore/apply' && req.method === 'POST') {
-      const body = await readBody(req);
-      const os = Array.isArray(body.orders) ? body.orders : [];
-      const ts = Array.isArray(body.transfers) ? body.transfers : [];
-      await mergeFromStore('orders__' + config.active, orders);
-      await mergeFromStore('transfers__' + config.active, transfers);
-      let n = 0;
-      const oIds = [], tIds = [];
-      for (const raw of os) {
-        const o = normalizeOrder(raw, 'import');
-        if (!o.orderNumber || orders[o.orderNumber]) continue;
-        orders[o.orderNumber] = o; oIds.push(o.orderNumber); touch('orders__' + config.active, o.orderNumber); n++;
-      }
-      for (const raw of ts) {
-        const id = String(raw.id || '');
-        if (!id || transfers[id] || !TX_GROUP[raw.kind]) continue;
-        transfers[id] = Object.assign({}, raw, { id, source: 'import', status: String(raw.status || 'COMPLETED') });
-        tIds.push(id); touch('transfers__' + config.active, id); n++;
-      }
-      if (n) {
-        await unbury('orders__' + config.active, oIds);      // ما استُعيد لا يبقى مقبورًا
-        await unbury('transfers__' + config.active, tIds);
-        for (const o of Object.values(orders)) if (o.balAfter != null) delete o.balAfter;
-        for (const t of Object.values(transfers)) if (t.balAfter != null) delete t.balAfter;
-        await saveOrders({ merge: false });
-        await saveTransfers({ merge: false });
-      }
-      sendJSON(res, 200, { ok: true, restored: n, accountName: ACCOUNT_NAMES[config.active] });
-      return;
-    }
-    /* ---------- استرجاع آخر حذف (سلّة المحذوف من أداة «ما لا يخصّ هذا الحساب») ---------- */
-    if (p === '/api/diag/foreign-ops/undo' && req.method === 'POST') {
-      const trash = (await loadStore('trash__' + config.active, null)) || { orders: {}, transfers: {} };
-      await mergeFromStore('orders__' + config.active, orders);
-      await mergeFromStore('transfers__' + config.active, transfers);
-      let n = 0;
-      const oIds = [], tIds = [];
-      for (const [id, o] of Object.entries(trash.orders || {})) if (!orders[id]) { orders[id] = o; oIds.push(id); touch('orders__' + config.active, id); n++; }
-      for (const [id, t] of Object.entries(trash.transfers || {})) if (!transfers[id]) { transfers[id] = t; tIds.push(id); touch('transfers__' + config.active, id); n++; }
-      if (n) {
-        await unbury('orders__' + config.active, oIds);
-        await unbury('transfers__' + config.active, tIds);
-        for (const o of Object.values(orders)) if (o.balAfter != null) delete o.balAfter;
-        for (const t of Object.values(transfers)) if (t.balAfter != null) delete t.balAfter;
-        await saveOrders({ merge: false });
-        await saveTransfers({ merge: false });
-      }
-      await saveStore('trash__' + config.active, { orders: {}, transfers: {}, at: Date.now() });
-      sendJSON(res, 200, { ok: true, restored: n, accountName: ACCOUNT_NAMES[config.active] });
-      return;
-    }
-
-    /* ---------- أرشفةُ كل ما قبل تاريخ (للمسؤول) ----------
-       عهدٌ قديم للحساب (عملةٌ أخرى، أو حسابٌ كان يُستعمل لغرضٍ آخر) يُطوى دفعةً
-       واحدة: يخرج من الجدول ومن حساب «الباقي» ويبقى في الأرشيف يُرجَع متى شئت.
-       undo يُرجع ما قبل التاريخ من الأرشيف كله. المثبَّت يُمحى في الحالين لأن
-       الدفتر تغيّر. */
-    if (p === '/api/archive/before' && req.method === 'POST') {
-      const body = await readBody(req);
-      const before = Number(body.before);
-      if (!Number.isFinite(before) || before <= 0) { sendJSON(res, 400, { error: 'حدّد التاريخ أولًا' }); return; }
-      const undo = !!body.undo;
-      await mergeFromStore('orders__' + config.active, orders);
-      await mergeFromStore('transfers__' + config.active, transfers);
-      let no = 0, nt = 0;
-      for (const [id, o] of Object.entries(orders)) {
-        if (!(o.createTime < before) || !!o.archived === !undo) continue;
-        if (undo) delete o.archived; else o.archived = true;
-        touch('orders__' + config.active, id); no++;
-      }
-      for (const [id, t] of Object.entries(transfers)) {
-        if (!(t.time < before) || !!t.archived === !undo) continue;
-        if (undo) delete t.archived; else t.archived = true;
-        touch('transfers__' + config.active, id); nt++;
-      }
-      if (no + nt) {
-        for (const o of Object.values(orders)) if (o.balAfter != null) delete o.balAfter;
-        for (const t of Object.values(transfers)) if (t.balAfter != null) delete t.balAfter;
-        await saveOrders({ merge: false });
-        await saveTransfers({ merge: false });
-      }
-      sendJSON(res, 200, { ok: true, orders: no, transfers: nt, undo, accountName: ACCOUNT_NAMES[config.active] });
-      return;
-    }
-
-    /* ---------- أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ (للمسؤول) ----------
-       المعرّف UID يظهر في تطبيق Binance (الصفحة الشخصية)، فالمقارنة تحسم إن كان
-       المفتاحُ المحفوظ هنا مفتاحَ الحساب المقصود أو مفتاحَ الحساب الآخر. */
-    if (p === '/api/diag/whoami' && req.method === 'GET') {
-      if (!AC().apiKey || !AC().apiSecret) { sendJSON(res, 400, { error: 'لم يُحفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا' }); return; }
-      const base = (AC().baseUrl || 'https://api.binance.com').replace(/\/+$/, '');
-      const offset = await timeOffset(base);
-      const j = await signedGet(base, '/api/v3/account', { omitZeroBalances: 'true' }, offset);
-      const k = AC().apiKey;
-      sendJSON(res, 200, {
-        uid: j.uid != null ? String(j.uid) : '',
-        accountType: String(j.accountType || ''),
-        keyMasked: k.slice(0, 4) + '…' + k.slice(-4),
-        accountName: ACCOUNT_NAMES[config.active],
-      });
-      return;
-    }
-
-    /* ---------- بيانات الحساب الآخر في قاعدة هذا السستم (للمسؤول، في السستم المقفول) ----------
-       بعد الفصل التام تكون بيانات الحساب الآخر قد نُقلت إلى قاعدته؛ ما بقي منها هنا
-       نسخةٌ ميتة: تُعرض أولًا (المفاتيح وعدد صفوفها) ثم تُحذف بأمرٍ صريح لا تلقائيًا.
-       تشمل المفاتيح المشتركة القديمة التي سبقت الفصل (orders/transfers/config بلا لاحقة). */
-    if (p === '/api/system/foreign' && (req.method === 'GET' || req.method === 'DELETE')) {
-      if (!LOCKED) { sendJSON(res, 400, { error: 'هذا الإجراء للسستم المقفول على حسابٍ واحد (متغيّر ACCOUNT)' }); return; }
-      const other = ACCOUNTS.find((a) => a !== LOCKED) || 'p2p';
-      let keys;
-      try { keys = await listStoreKeys(); }
-      catch (e) { sendJSON(res, 500, { error: 'تعذّر قراءة مفاتيح القاعدة: ' + e.message }); return; }
-      const LEGACY_SHARED = ['orders', 'transfers', 'config', 'loginlog', 'syncusage']; // مفاتيح ما قبل الفصل، بلا لاحقة حساب
-      const foreign = keys.filter((k) => k.endsWith('__' + other) || LEGACY_SHARED.includes(k));
-      if (req.method === 'GET') {
-        const items = [];
-        for (const k of foreign) {
-          const v = await loadStore(k, null);
-          const rows = Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : 1);
-          items.push({ key: k, rows });
-        }
-        sendJSON(res, 200, { otherName: ACCOUNT_NAMES[other], count: foreign.length, items });
-        return;
-      }
-      let n = 0;
-      try { for (const k of foreign) { await deleteStore(k); n++; } }
-      catch (e) { sendJSON(res, 500, { error: `تعذّر الحذف بعد ${n} مفتاحًا: ` + e.message }); return; }
-      sendJSON(res, 200, { ok: true, deleted: n, otherName: ACCOUNT_NAMES[other] });
-      return;
-    }
-
-    /* ---------- الإعدادات ---------- */
-    if (p === '/api/settings' && req.method === 'GET') {
-      const k = AC().apiKey || '';
-      sendJSON(res, 200, {
-        apiKeyMasked: k ? k.slice(0, 4) + '…' + k.slice(-4) : '',
-        hasSecret: !!AC().apiSecret,
-        baseUrl: AC().baseUrl,
-        rangeHours: AC().rangeHours,
-        syncQuota: syncQuotaValue(),
-        lastSync: AC().lastSync,
-      });
-      return;
-    }
-
-    if (p === '/api/settings' && req.method === 'POST') {
-      const body = await readBody(req);
-      if (typeof body.apiKey === 'string' && body.apiKey.trim()) AC().apiKey = body.apiKey.trim();
-      if (typeof body.apiSecret === 'string' && body.apiSecret.trim()) AC().apiSecret = body.apiSecret.trim();
-      if (typeof body.baseUrl === 'string' && /^https:\/\/[\w.-]+$/.test(body.baseUrl.trim().replace(/\/+$/, ''))) {
-        AC().baseUrl = body.baseUrl.trim().replace(/\/+$/, '');
-      }
-      if (body.rangeHours != null) AC().rangeHours = Math.min(Math.max(Number(body.rangeHours) || 720, 1), 26280);
-      if (body.syncQuota != null) config.syncQuota = Math.min(Math.max(Math.floor(Number(body.syncQuota)) || 0, 0), 500);
-      await saveConfig();
-      sendJSON(res, 200, { ok: true });
-      return;
-    }
-
-    /* ---------- رصيد مرات المزامنة المتبقية لهذا الدور اليوم ---------- */
-    if (p === '/api/sync/quota' && req.method === 'GET') {
-      // blockedFor: ثواني الحظر الباقية إن كانت المنصة قد حظرت العنوان — فيُقفل زر المزامنة عند كل من يفتح الصفحة
-      sendJSON(res, 200, Object.assign(await syncQuotaFor(role), { blockedFor: Math.ceil(banLeft() / 1000) }));
-      return;
-    }
-
-    /* ---------- المزامنة (بث التقدم NDJSON) ---------- */
-    if (p === '/api/sync' && req.method === 'POST') {
-      // في أثناء الحظر لا تبدأ المزامنة أصلًا — ولا تُخصم من حصّة أحد
-      if (banLeft() > 0) { sendJSON(res, 429, { error: banMessage(banLeft()) }); return; }
-      // الحصّة تُفحص قبل أي شيء: المسؤول بلا حد، وغيره بعدد مرات يوميًا
-      const q = await syncQuotaFor(role);
-      if (!q.unlimited && q.left <= 0) {
-        sendJSON(res, 429, {
-          error: q.quota === 0
-            ? 'المزامنة غير مسموحة لحسابك — راجع المسؤول'
-            : `انتهى عدد مرات المزامنة اليوم (${q.quota}) — جرّب بكرة أو راجع المسؤول`,
-          quota: q.quota, used: q.used, left: 0,
-        });
-        return;
-      }
-      if (syncRunning) { sendJSON(res, 409, { error: 'هناك مزامنة قيد التنفيذ بالفعل' }); return; }
-      // خلل في الإعداد ليس محاولة مزامنة — لا يُحسب من حصّة المستخدم
-      if (!AC().apiKey || !AC().apiSecret) {
-        sendJSON(res, 400, { error: 'لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا' });
-        return;
-      }
-      if (!q.unlimited) await bumpSyncUsage(role);
-      syncRunning = true;
-      recordLogin(role, req, 'sync');
-      res.writeHead(200, {
-        'Content-Type': 'application/x-ndjson; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Accel-Buffering': 'no',
-      });
-      try {
-        for await (const ev of syncGenerator()) {
-          res.write(JSON.stringify(ev) + '\n');
-        }
-      } catch (e) {
-        res.write(JSON.stringify({ error: e.isUser ? e.message : 'خطأ غير متوقع: ' + e.message }) + '\n');
-      } finally {
-        syncRunning = false;
-        res.end();
-      }
-      return;
-    }
-
-    sendJSON(res, 404, { error: 'not found' });
+    const r = routes.get(req.method + ' ' + p);
+    if (!r) return deny(res, 404, 'not found');
+    const role = auth.roleOf(req);
+    if (r.scope === 'admin' && role !== 'admin') return deny(res, 403, 'هذه العملية للمسؤول فقط');
+    if (r.scope === 'annotate' && role !== 'admin' && role !== 'user2') return deny(res, 403, 'لا تملك صلاحية التعديل في السجل');
+    if (r.scope === 'login' && !role) return deny(res, 401, 'يلزم تسجيل الدخول');
+    await r.handler(req, res, { url, role, body: () => readBody(req) });
   } catch (e) {
     try { sendJSON(res, 500, { error: e.isUser ? e.message : 'خطأ داخلي: ' + e.message }); } catch {}
   }
 });
 
+/* ===================== ٨. التشغيل ===================== */
+
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
-    console.log('');
-    console.log('  يبدو أن النظام يعمل بالفعل — افتح المتصفح على: http://' + HOST + ':' + PORT);
-    if (process.argv.includes('--open')) {
-      execFile('cmd', ['/c', 'start', '', 'http://' + HOST + ':' + PORT]);
-    }
+    console.log('\n  يبدو أن النظام يعمل بالفعل — افتح المتصفح على: http://' + HOST + ':' + PORT);
+    if (process.argv.includes('--open')) execFile('cmd', ['/c', 'start', '', 'http://' + HOST + ':' + PORT]);
     setTimeout(() => process.exit(0), 1500);
   } else {
     console.error('تعذّر تشغيل الخادم:', e.message);
@@ -2398,13 +1214,11 @@ initStore().then(() => {
   server.listen(PORT, HOST, () => {
     const shownHost = HOST === '0.0.0.0' ? 'localhost' : HOST;
     console.log('');
-    console.log('  ✅ سجل ' + (LOCKED ? ACCOUNT_NAMES[LOCKED] + ' (سستم مقفول على هذا الحساب)' : 'حوالات P2P') + ' يعمل الآن' + (USE_SUPABASE ? '  (التخزين: Supabase)' : ''));
+    console.log('  ✅ سجل ' + (LOCKED ? ACCOUNT_NAMES[LOCKED] + ' (سستم مقفول على هذا الحساب)' : ACCOUNT_NAMES[config.active]) + ' يعمل الآن' + (store.USE_SUPABASE ? '  (التخزين: Supabase)' : ''));
     console.log('  العنوان: http://' + shownHost + ':' + PORT);
     console.log('  لإيقاف النظام أغلق هذه النافذة أو اضغط Ctrl+C');
     console.log('');
-    if (process.argv.includes('--open')) {
-      execFile('cmd', ['/c', 'start', '', 'http://127.0.0.1:' + PORT]);
-    }
+    if (process.argv.includes('--open')) execFile('cmd', ['/c', 'start', '', 'http://127.0.0.1:' + PORT]);
   });
 }).catch((e) => {
   console.error('تعذّر تحميل التخزين عند الإقلاع:', e.message);

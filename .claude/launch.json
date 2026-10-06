@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["server.js"],
       "port": 3131
+    },
+    {
+      "name": "p2p-test",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["test/dev-server.js"],
+      "port": 3147
     }
   ]
 }

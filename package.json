@@ -5,7 +5,9 @@
   "description": "سجل حوالات P2P — نظام عرض وتحليل سجل صفقات P2P وحوالات الإيداع/السحب",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node test/dev-server.js",
+    "test": "node test/run.js"
   },
   "engines": {
     "node": ">=18"
