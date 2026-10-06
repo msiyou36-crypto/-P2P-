@@ -26,11 +26,11 @@
   --critical: #d03b3b;
 }
 
-/* لكل سستم لونه: P2P بنفسجي، وP3P بالذهبي الافتراضي — فيُعرف الحساب من أول
-   نظرة لا من قراءة العنوان. السمة يضعها app.js على الجذر حين يعرف الحساب. */
+/* لكل سستم لونه: P2P برغندي (عنّابي)، وP3P بالذهبي الافتراضي — فيُعرف الحساب من أول
+   نظرة. السمة يضعها الخادم (renderIndex) ثم js/session.js على الجذر (data-account). */
 :root[data-account="p2p"] {
-  /* برغندي (عنّابي) كلون آيفون 18: داكنٌ فلا يصلح نصًّا على الأسود بنفسه — الأزرار
-     والشعار بالبرغندي ونصُّه فاتح، والأرقامُ والنصوص الملوّنة بدرجةٍ أفتح منه تُقرأ */
+  /* البرغندي داكنٌ فلا يصلح نصًّا على الأسود بنفسه — الأزرار والشعار بالبرغندي
+     ونصُّه فاتح، والأرقامُ والنصوص الملوّنة بدرجةٍ أفتح منه تُقرأ */
   --accent: #8e1f3f;
   --accent-ink: #fbeef2;
   --accent-text: #c94b6e;
@@ -130,11 +130,6 @@ h3 { font-size: 15px; }
 .wallet-side .sub { text-align: left; }
 #walletExtra { max-width: 340px; line-height: 1.7; }
 
-/* ============ تبويبات العرض ============ */
-.viewtabs { width: fit-content; margin: 2px 0; }
-.viewtabs button { font-size: 14px; padding: 8px 18px; }
-.wide-chart { padding: 14px 16px 8px; }
-
 /* ============ التخطيط العام ============ */
 main {
   max-width: 1600px;
@@ -180,10 +175,8 @@ main {
 }
 .seg button:hover { color: var(--ink); }
 .seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
-.custom-range { display: flex; gap: 8px; align-items: center; }
-.custom-range label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
 
-.filters select, .filters input, .custom-range input {
+.filters select, .filters input {
   background: var(--surface-2);
   color: var(--ink);
   border: 1px solid var(--border);
@@ -287,10 +280,10 @@ th.col-idx { width: 46px; text-align: center; }
   content: '📌'; margin-inline-end: 4px; font-size: 11px;
 }
 
-/* مفتاح «رصيدي كان صفرًا بعد هذه العملية» داخل نافذة التفاصيل */
-.zero-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
-.zero-toggle input { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
-.zero-toggle input:disabled { cursor: default; }
+/* صفوف الأفعال داخل نافذة التفاصيل (تثبيت الباقي، احتساب بالـUSDT، الأرشفة): حقلٌ وزرّان */
+.zero-toggle { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.zero-toggle .num-input { width: 150px; background: var(--surface-2); border-color: var(--border); }
+.zero-toggle input:disabled, .zero-toggle button:disabled { cursor: default; }
 .detail-hint { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.5; }
 
 /* شارات النوع والحالة: نقطة ملونة + نص بلون النص دائمًا */
@@ -491,8 +484,8 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .diag-ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); background: color-mix(in srgb, var(--good) 10%, transparent); }
 .diag-bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
 .diag-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.diag-table th, .diag-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
-.diag-table th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background: var(--card); }
+.diag-table th, .diag-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: center; white-space: nowrap; }
+.diag-table th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
 .diag-table tr.diag-miss td { color: var(--critical); font-weight: 600; }
 
 /* صف مفتاح التبديل داخل النماذج */
