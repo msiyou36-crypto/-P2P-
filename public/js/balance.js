@@ -316,6 +316,6 @@ async function refreshBalance() {
     if (btn) btn.disabled = false;
     state.balMap = computeBalanceMap();   // «الباقي» مثبّت على الرصيد، فتُعاد الخريطة قبل العرض
     renderBalance();
-    renderTable();
+    renderLedger();
   }
 }

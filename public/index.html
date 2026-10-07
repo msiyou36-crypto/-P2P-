@@ -182,13 +182,40 @@
   <!-- الجدول الموحّد: كل العمليات -->
   <section class="card table-card">
     <div class="table-head">
-      <h2>العمليات</h2>
+      <div class="table-title">
+        <h2>العمليات</h2>
+        <span class="sub" id="tableCount"></span>
+      </div>
+      <!-- شكل العرض (js/views.js) -->
+      <div class="seg view-seg" id="viewSeg" role="radiogroup" aria-label="شكل عرض العمليات">
+        <button type="button" data-view="table" role="radio" aria-checked="true" title="جدولٌ كامل بكل الأعمدة">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M10 10v10"/></svg><span>جدول</span>
+        </button>
+        <button type="button" data-view="daily" role="radio" aria-checked="false" title="الجدول مجمَّعًا بالأيام، وفوق كل يومٍ ملخّصه">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M7 14h4M7 17h7"/></svg><span>يومي</span>
+        </button>
+        <button type="button" data-view="cards" role="radio" aria-checked="false" title="بطاقات كبطاقات تطبيق Binance — الأنسب للهاتف">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/></svg><span>بطاقات</span>
+        </button>
+        <button type="button" data-view="tiles" role="radio" aria-checked="false" title="مربّعات صغيرة متراصّة — لمسح يومٍ مزدحم بنظرة">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span>مربعات</span>
+        </button>
+      </div>
+      <label class="date-lbl hidden" id="sortWrap">ترتيب
+        <select id="sortSel" class="sort-sel">
+          <option value="_t:-1">الأحدث أولًا</option>
+          <option value="_t:1">الأقدم أولًا</option>
+          <option value="_amount:-1">الأكبر كمية</option>
+          <option value="_amount:1">الأصغر كمية</option>
+          <option value="_total:-1">الأكبر مبلغًا</option>
+          <option value="" hidden>كما في الجدول</option>
+        </select>
+      </label>
       <div class="table-tools">
         <label class="date-lbl">من <input type="date" id="xFrom" aria-label="من تاريخ"></label>
         <label class="date-lbl">إلى <input type="date" id="xTo" aria-label="إلى تاريخ"></label>
         <button id="btnExportXlsx" class="btn accent" title="تنزيل ملف Excel بالعمليات المعروضة">⬇ تصدير Excel</button>
       </div>
-      <div class="sub" id="tableCount"></div>
     </div>
     <div id="archiveBar" class="archive-bar hidden">
       <span>🗄 <b>الأرشيف</b> — هذه العمليات خارج الجدول وخارج الحساب. افتح أي صفٍّ لإرجاعه.</span>
@@ -222,6 +249,8 @@
           أو أضف عملية عبر <b>«+ إضافة يدوية»</b> أو <b>«استيراد CSV»</b>.</p>
       </div>
     </div>
+    <!-- البطاقات والمربعات (js/views.js) -->
+    <div id="ledgerGrid" class="op-grid hidden"></div>
     <div class="pager" id="pager">
       <button id="pgPrev" class="btn small">السابق</button>
       <span id="pgInfo" class="sub"></span>
@@ -565,6 +594,7 @@
 <script src="js/filters.js"></script>
 <script src="js/charts.js"></script>
 <script src="js/table.js"></script>
+<script src="js/views.js"></script>
 <script src="js/sync.js"></script>
 <script src="js/tools.js"></script>
 <script src="js/main.js"></script>

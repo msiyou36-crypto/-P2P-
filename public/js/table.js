@@ -1,5 +1,6 @@
-/* الجدول الموحّد: الفرز والصفحات، الخانات القابلة للتحرير (إشاري، ملاحظة، سعر، مبلغ،
-   تسمية الشبكة)، ونوافذ تفاصيل الطلب والحوالة بما فيها مرساة الرصيد والأرشفة */
+/* الجدول الموحّد: الفرز، صفّ الجدول، الخانات القابلة للتحرير (إشاري، ملاحظة، سعر، مبلغ،
+   تسمية الشبكة — تستعملها البطاقات أيضًا)، ونوافذ تفاصيل الطلب والحوالة بما فيها مرساة
+   الرصيد والأرشفة. اختيار شكل العرض (جدول/يومي/بطاقات/مربعات) والرسم في js/views.js */
 'use strict';
 
 function sortLedger() {
@@ -26,15 +27,14 @@ const stopRowClick = (input) => {
   input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') input.blur(); });
 };
 
-/** خانة الإشاري/الملاحظة داخل الجدول */
-function annotCell(entity, field, kind) {
-  const td = document.createElement('td');
-  td.className = 'col-note ' + (field === 'note' ? 'is-note' : 'is-ref');
+/** حقل الإشاري/الملاحظة (في الجدول والبطاقات): يكتب فيه المسؤول و«مستخدم 2» */
+function annotInput(entity, field, kind) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'note-input';
   input.value = entity[field] || '';
   input.placeholder = field === 'reference' ? 'إشاري…' : 'ملاحظة…';
+  input.setAttribute('aria-label', field === 'reference' ? 'الإشاري' : 'الملاحظة');
   stopRowClick(input);
   if (canAnnotate()) {
     input.title = field === 'reference' ? 'الإشاري — يُحفظ تلقائيًا' : 'الملاحظة — تُحفظ تلقائيًا';
@@ -44,7 +44,12 @@ function annotCell(entity, field, kind) {
     input.classList.add('readonly');
     input.title = 'الكتابة للمسؤول و«مستخدم 2» فقط';
   }
-  td.append(input);
+  return input;
+}
+function annotCell(entity, field, kind) {
+  const td = document.createElement('td');
+  td.className = 'col-note ' + (field === 'note' ? 'is-note' : 'is-ref');
+  td.append(annotInput(entity, field, kind));
   return td;
 }
 async function saveAnnotation(kind, entity, field, value, inputEl) {
@@ -55,7 +60,24 @@ async function saveAnnotation(kind, entity, field, value, inputEl) {
   } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
 }
 
-/** خانة السعر/المبلغ (تعديلها يبقى بعد المزامنة) */
+/** حقل تعديل السعر/المبلغ (في الجدول والبطاقات، لمن يملك التعديل) — يبقى بعد المزامنة */
+function makePriceInput(entity, field, kind) {
+  const overKey = field === 'unitPrice' ? 'unitPriceOverride' : 'totalPriceOverride';
+  const cur = field === 'unitPrice' ? effUnitPrice(entity) : effTotalPrice(entity);
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'decimal';
+  input.className = 'num-input';
+  input.value = cur ? String(cur) : '';
+  input.placeholder = '—';
+  input.title = 'اضغط للتعديل — يُحفظ تلقائيًا ويبقى بعد المزامنة';
+  input.setAttribute('aria-label', field === 'unitPrice' ? 'السعر' : 'المبلغ');
+  if (entity[overKey] != null) input.classList.add('is-edited');
+  stopRowClick(input);
+  input.addEventListener('change', () => savePriceEdit(entity, field, input, kind || 'order'));
+  return input;
+}
+/** خانة السعر/المبلغ في الجدول */
 function priceCell(entity, field, display, kind) {
   const td = document.createElement('td');
   td.className = 'num strong editable';
@@ -66,18 +88,7 @@ function priceCell(entity, field, display, kind) {
     if (edited) td.classList.add('is-edited');
     return td;
   }
-  const cur = field === 'unitPrice' ? effUnitPrice(entity) : effTotalPrice(entity);
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.inputMode = 'decimal';
-  input.className = 'num-input';
-  input.value = cur ? String(cur) : '';
-  input.placeholder = '—';
-  input.title = 'اضغط للتعديل — يُحفظ تلقائيًا ويبقى بعد المزامنة';
-  if (edited) input.classList.add('is-edited');
-  stopRowClick(input);
-  input.addEventListener('change', () => savePriceEdit(entity, field, input, kind || 'order'));
-  td.append(input);
+  td.append(makePriceInput(entity, field, kind));
   return td;
 }
 async function savePriceEdit(entity, field, inputEl, kind) {
@@ -134,89 +145,64 @@ async function saveLabelEdit(entity, inputEl, kind, defaultDisplay) {
   } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
 }
 
-/* ============================ الجدول ============================ */
+/* ============================ صفّ الجدول ============================ */
 
-function renderTable() {
-  sortLedger();
-  const tbody = $('#tbody');
-  tbody.textContent = '';
-  const total = state.ledger.length;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  if (state.page > pages) state.page = pages;
-  const startIdx = (state.page - 1) * PAGE_SIZE;
-  const slice = state.ledger.slice(startIdx, state.page * PAGE_SIZE);
+/** صفّ جدولٍ لعملية (n رقمها التسلسلي؛ mixed: عملاتٌ محلية متعدّدة في المعروض) */
+function ledgerTr(row, n, mixed) {
+  const isP2P = row._kind === 'p2p';
+  const it = row.raw;
+  const kind = isP2P ? 'order' : 'transfer';
+  const tr = document.createElement('tr');
 
-  const hasData = state.orders.length > 0 || state.transfers.length > 0;
-  $('#emptyState').classList.toggle('hidden', hasData);
-  $('#ledgerTable').style.display = hasData ? '' : 'none';
-  $('#pager').style.display = total > PAGE_SIZE ? '' : 'none';
-  const mixed = distinctFiats(state.filtered).length > 1;
-  $('#tableCount').textContent = total ? `${fmt0(total)} عملية` : (hasData ? 'لا نتائج مطابقة للفلاتر' : '');
+  tdText(tr, fmt0(n), 'col-idx');
+  tdText(tr, fmtDT(row._t));
+  const tdType = document.createElement('td');
+  const ki = typeInfoOf(it, isP2P);
+  tdType.append(chip(ki.ar, ki.color));
+  tr.append(tdType);
 
-  slice.forEach((row, i) => {
-    const isP2P = row._kind === 'p2p';
-    const it = row.raw;
-    const kind = isP2P ? 'order' : 'transfer';
-    const tr = document.createElement('tr');
+  // عمليةٌ قُوّمت بالـUSDT يدويًا تُعرض بقيمتها تلك — فهي ما دخل الدفتر فعلًا
+  const tdAmt = tdText(tr, fmt2(usdtOf(it, isP2P)), 'num strong');
+  if (!isP2P && it.usdtValue != null) {
+    tdAmt.classList.add('is-edited');
+    tdAmt.title = `قوّمتَها بالـUSDT يدويًا — الأصل ${fmt2(it.amount)} ${it.coin || ''}`;
+  }
+  if (isP2P) {
+    tr.append(priceCell(it, 'unitPrice', fmt2p(effUnitPrice(it)), kind));
+    tr.append(priceCell(it, 'totalPrice', mixed ? fmt0(effTotalPrice(it)) + ' ' + fiatSymOf(it) : fmt0(effTotalPrice(it)), kind));
+  } else {
+    tr.append(priceCell(it, 'unitPrice', it.unitPriceOverride != null ? fmt2p(it.unitPriceOverride) : '—', kind));
+    tr.append(priceCell(it, 'totalPrice', it.totalPriceOverride != null ? fmt0(it.totalPriceOverride) : '—', kind));
+  }
+  const coinLabel = !isP2P && it.usdtValue != null ? 'USDT' : (it.network || it.coin || '—');
+  tr.append(labelCell(it, kind, isP2P ? fiatSymOf(it) : coinLabel));
 
-    tdText(tr, fmt0(startIdx + i + 1), 'col-idx');
-    tdText(tr, fmtDT(row._t));
-    const tdType = document.createElement('td');
-    const ki = isP2P ? TYPE_INFO[it.tradeType] : (TX_KIND[it.kind] || { ar: it.kind, color: 'var(--muted)' });
-    tdType.append(chip(ki.ar, ki.color));
-    tr.append(tdType);
+  const bal = balOf(it, isP2P);
+  const tdBal = tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
+  if (it.balAfter != null) tdBal.title = 'رقم مثبَّت — ثُبِّت ساعة اكتمال العملية ولا يتغيّر';
+  if (it.balanceAt != null || it.zeroPoint) {
+    tdBal.classList.add('is-zeropoint');
+    tdBal.title = `نقطة التثبيت — أنت كتبت أن رصيدك بعد هذه العملية كان ${fmt2(it.balanceAt != null ? it.balanceAt : 0)} USDT، والعمود كلّه محسوب منها`;
+  }
+  tdText(tr, it.counterPart || '—');
+  const tdSt = document.createElement('td');
+  const si = statusOf(it, isP2P);
+  tdSt.append(chip(si.ar, si.color));
+  tr.append(tdSt);
+  tr.append(annotCell(it, 'reference', kind));
+  tr.append(annotCell(it, 'note', kind));
+  const tdId = document.createElement('td');
+  tdId.className = 'mono col-id';
+  const fullId = opId(it, isP2P);
+  tdId.textContent = tinyId(fullId);
+  tdId.title = fullId;
+  tr.append(tdId);
 
-    // عمليةٌ قُوّمت بالـUSDT يدويًا تُعرض بقيمتها تلك — فهي ما دخل الدفتر فعلًا
-    const tdAmt = tdText(tr, fmt2(isP2P ? grossUSDT(it) : (it.usdtValue != null ? it.usdtValue : row._amount)), 'num strong');
-    if (!isP2P && it.usdtValue != null) {
-      tdAmt.classList.add('is-edited');
-      tdAmt.title = `قوّمتَها بالـUSDT يدويًا — الأصل ${fmt2(it.amount)} ${it.coin || ''}`;
-    }
-    if (isP2P) {
-      tr.append(priceCell(it, 'unitPrice', fmt2p(effUnitPrice(it)), kind));
-      tr.append(priceCell(it, 'totalPrice', mixed ? fmt0(effTotalPrice(it)) + ' ' + fiatSymOf(it) : fmt0(effTotalPrice(it)), kind));
-    } else {
-      tr.append(priceCell(it, 'unitPrice', it.unitPriceOverride != null ? fmt2p(it.unitPriceOverride) : '—', kind));
-      tr.append(priceCell(it, 'totalPrice', it.totalPriceOverride != null ? fmt0(it.totalPriceOverride) : '—', kind));
-    }
-    const coinLabel = !isP2P && it.usdtValue != null ? 'USDT' : (it.network || it.coin || '—');
-    tr.append(labelCell(it, kind, isP2P ? fiatSymOf(it) : coinLabel));
-
-    const bal = balOf(it, isP2P);
-    const tdBal = tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
-    if (it.balAfter != null) tdBal.title = 'رقم مثبَّت — ثُبِّت ساعة اكتمال العملية ولا يتغيّر';
-    if (it.balanceAt != null || it.zeroPoint) {
-      tdBal.classList.add('is-zeropoint');
-      tdBal.title = `نقطة التثبيت — أنت كتبت أن رصيدك بعد هذه العملية كان ${fmt2(it.balanceAt != null ? it.balanceAt : 0)} USDT، والعمود كلّه محسوب منها`;
-    }
-    tdText(tr, it.counterPart || '—');
-    const tdSt = document.createElement('td');
-    const si = isP2P ? statusInfo(it.orderStatus) : txStatusInfo(it.status);
-    tdSt.append(chip(si.ar, si.color));
-    tr.append(tdSt);
-    tr.append(annotCell(it, 'reference', kind));
-    tr.append(annotCell(it, 'note', kind));
-    const tdId = document.createElement('td');
-    tdId.className = 'mono col-id';
-    const fullId = isP2P ? it.orderNumber : (it.txId || it.id);
-    tdId.textContent = tinyId(fullId);
-    tdId.title = fullId;
-    tr.append(tdId);
-
-    tr.addEventListener('click', () => (isP2P ? openDetails(it) : openTransferDetails(it)));
-    tbody.append(tr);
-  });
-
-  $('#pgInfo').textContent = `صفحة ${fmt0(state.page)} من ${fmt0(pages)}`;
-  $('#pgPrev').disabled = state.page <= 1;
-  $('#pgNext').disabled = state.page >= pages;
-  $$('#ledgerTable th').forEach((th) => {
-    th.classList.remove('sorted-asc', 'sorted-desc');
-    if (th.dataset.sort === state.sort.key) th.classList.add(state.sort.dir === 1 ? 'sorted-asc' : 'sorted-desc');
-  });
+  tr.addEventListener('click', () => openOp(it, isP2P));
+  return tr;
 }
 
-/** إعادة رسم كل شيء من الحالة الحالية (الفلاتر ← الباقي ← البطاقات ← الرسوم ← الجدول) */
+/** إعادة رسم كل شيء من الحالة الحالية (الفلاتر ← الباقي ← البطاقات ← الرسوم ← العمليات) */
 function renderAll() {
   applyFilters();
   state.balMap = computeBalanceMap();
@@ -224,7 +210,7 @@ function renderAll() {
   renderTiles();
   renderVolChart();
   renderPriceChart();
-  renderTable();
+  renderLedger();
   scheduleFreeze();   // ما اكتمل يُثبَّت باقيه في الخادم مرّةً واحدة
   const ls = state.settings.lastSync;
   $('#lastSync').textContent = ls ? 'آخر مزامنة: ' + fmtDT(ls) : 'لم تتم مزامنة بعد';
@@ -342,6 +328,9 @@ function annotDetailRow(entity, field, kind, label) {
   else { input.readOnly = true; input.classList.add('readonly'); }
   return detailRow(label, input);
 }
+
+/** نافذة تفاصيل العملية (طلبًا كانت أو حوالة) */
+const openOp = (it, isP2P) => (isP2P ? openDetails(it) : openTransferDetails(it));
 
 function openDetails(o) {
   state.detailsOrder = o;

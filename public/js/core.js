@@ -5,7 +5,8 @@
  *   session.js  الدخول والأدوار، تحميل البيانات، سمة السستم، وضع الصيانة
  *   filters.js  اليوم المحاسبي والفلاتر وبناء الجدول الموحّد
  *   charts.js   بطاقات الأرقام والرسوم البيانية
- *   table.js    الجدول الموحّد وخاناته القابلة للتحرير ونوافذ التفاصيل
+ *   table.js    صفّ الجدول وخاناته القابلة للتحرير ونوافذ التفاصيل
+ *   views.js    شكل عرض العمليات (جدول، يومي، بطاقات، مربعات) والصفحات والفرز
  *   sync.js     المزامنة وقفل الحظر وقراءة البثّ
  *   tools.js    أدوات المسؤول: الفحص، جلب يوم، الاستعادة، الإضافة، الاستيراد/التصدير، الإعدادات
  *   main.js     ربط الأحداث والبداية
@@ -51,6 +52,7 @@ const state = {
   filters: { range: '1', from: null, to: null, type: 'all', status: 'all', fiat: 'all', q: '' },
   sort: { key: '_t', dir: -1 },
   page: 1,
+  view: 'table',      // شكل عرض العمليات: table | daily | cards | tiles (يُحفظ في المتصفح)
   detailsOrder: null,
   importRows: null,
   showArchive: false, // عرض المؤرشَف وحده بدل الجدول العادي (للمسؤول)
@@ -130,6 +132,16 @@ const TX_STATUS = {
   CANCELLED: { ar: 'ملغى', color: 'var(--muted)' },
 };
 const txStatusInfo = (s) => TX_STATUS[s] || { ar: s, color: 'var(--warn)' };
+
+/* ===== عمليةٌ واحدة كما تُعرض (طلب P2P أو حوالة) — للجدول والبطاقات والمربعات ===== */
+const typeInfoOf = (it, isP2P) => (isP2P ? TYPE_INFO[it.tradeType] : (TX_KIND[it.kind] || { ar: it.kind, color: 'var(--muted)' }));
+const statusOf = (it, isP2P) => (isP2P ? statusInfo(it.orderStatus) : txStatusInfo(it.status));
+/** قيمتها كما تدخل الدفتر: P2P شاملةً العمولة، والحوالة بتقويمها اليدوي بالـUSDT إن وُجد */
+const usdtOf = (it, isP2P) => (isP2P ? grossUSDT(it) : (it.usdtValue != null ? it.usdtValue : (it.amount || 0)));
+const unitOf = (it, isP2P) => (isP2P || it.usdtValue != null ? 'USDT' : (it.coin || 'USDT'));
+const opId = (it, isP2P) => (isP2P ? it.orderNumber : (it.txId || it.id));
+/** ملغاةٌ أو فاشلة: تُخفَّف في البطاقات (المعلّقة تبقى ظاهرة لأنها تنتظر انتباهك) */
+const isVoid = (it, isP2P) => (isP2P ? isCancelled(it.orderStatus) : (it.status === 'CANCELLED' || it.status === 'FAILED'));
 const WALLET_AR = { 0: 'الحساب الفوري (Spot)', 1: 'محفظة التمويل (Funding)' };
 const shortId = (s) => { s = String(s || ''); return s.length > 18 ? s.slice(0, 10) + '…' + s.slice(-6) : s; };
 // معرّفات المنصة عشرون رقمًا: أربعةٌ من كل طرف تكفي للتمييز في الجدول، والكامل في التلميح والتفاصيل

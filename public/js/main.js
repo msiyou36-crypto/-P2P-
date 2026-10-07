@@ -75,11 +75,12 @@ function wireEvents() {
       const key = th.dataset.sort;
       if (state.sort.key === key) state.sort.dir *= -1;
       else { state.sort.key = key; state.sort.dir = key === '_t' ? -1 : 1; }
-      renderTable();
+      renderLedger();
     });
   });
-  $('#pgPrev').addEventListener('click', () => { if (state.page > 1) { state.page--; renderTable(); } });
-  $('#pgNext').addEventListener('click', () => { state.page++; renderTable(); });
+  $('#pgPrev').addEventListener('click', () => { if (state.page > 1) { state.page--; renderLedger(); } });
+  $('#pgNext').addEventListener('click', () => { state.page++; renderLedger(); });
+  wireViewControls();   // شكل العرض: جدول، يومي، بطاقات، مربعات
 
   // --- القائمة ---
   $('#btnMenu').addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });

@@ -644,6 +644,79 @@ td.editable { padding: 4px 6px; }
 }
 .table-tools input[type="date"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* ============ أشكال عرض العمليات (js/views.js) ============ */
+.table-title { display: flex; align-items: baseline; gap: 10px; }
+.view-seg button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; }
+.view-seg svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.view-seg button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.sort-sel { background: var(--surface-2); color: var(--ink); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font: inherit; font-size: 12.5px; }
+.sort-sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (pointer: coarse) { .view-seg button { min-height: 44px; } }
+
+/* يومي: رأس كل يوم داخل الجدول — تاريخه وملخّصه */
+#ledgerTable tr.day-row, #ledgerTable tr.day-row:hover { cursor: default; background: transparent; }
+#ledgerTable tr.day-row td { padding: 14px 14px 8px; border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); white-space: normal; }
+.day-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.day-head .dh-date { color: var(--ink); font-size: 14.5px; }
+.day-head .dh-bal { color: var(--accent-text); font-weight: 700; }
+
+/* البطاقات والمربعات: شبكةٌ تتكيّف مع العرض (عمودٌ واحد على الهاتف) */
+.op-grid { display: grid; gap: 10px; padding: 4px 16px 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); align-items: start; }
+.op-grid.is-tiles { gap: 8px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); align-items: stretch; }
+.op-grid > .day-head {
+  grid-column: 1 / -1; margin-top: 6px; padding: 10px 14px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.op-empty { grid-column: 1 / -1; color: var(--muted); text-align: center; padding: 32px 10px; }
+
+.op-card, .op-tile {
+  min-width: 0; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.op-card:hover, .op-tile:hover { background: var(--surface-3); border-color: color-mix(in srgb, var(--k) 40%, var(--border)); }
+.op-card:focus-visible, .op-tile:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.op-card.is-muted, .op-tile.is-muted { opacity: 0.6; }
+
+/* البطاقة: على نمط بطاقات الطلبات في تطبيق Binance — شريطٌ بلون النوع على حافتها */
+.op-card { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-inline-start: 3px solid var(--k); }
+.op-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.op-amount { display: flex; align-items: baseline; gap: 6px; }
+.op-amount .op-num { color: var(--ink); font-size: 24px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.op-amount .unit, .op-row .unit { color: var(--ink-2); font-size: 12.5px; font-weight: 400; }
+.op-rows { display: flex; flex-direction: column; gap: 4px; }
+.op-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 30px; font-size: 13px; }
+.op-row .k { flex: none; color: var(--muted); }
+.op-row .v { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink); font-weight: 600; text-align: left; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.op-row .v .num-input { width: 130px; min-width: 0; }
+.op-row .v.is-bal { color: var(--accent-text); font-weight: 700; }
+.op-row .v.is-edited { color: var(--accent-text); }
+.op-row .v.is-zeropoint::before { content: '📌'; font-size: 11px; }
+.op-notes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.op-notes .note-input { min-width: 0; }
+.op-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.06); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.op-foot .op-n { margin-inline-start: auto; }
+
+/* المربّع: صغيرٌ متراصّ، شريط النوع في أعلاه */
+.op-tile { display: flex; flex-direction: column; gap: 2px; min-height: 150px; padding: 10px 12px; border-top: 3px solid var(--k); }
+.tile-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.tile-time { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile-num { margin-top: 6px; color: var(--ink); font-size: 20px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.tile-unit { color: var(--muted); font-size: 11.5px; }
+.tile-sub { margin-top: 4px; color: var(--ink-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.tile-party { color: var(--ink-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile-foot { margin-top: auto; padding-top: 6px; display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+.tile-ref { min-width: 0; color: var(--accent-text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 640px) {
+  .op-grid { padding: 4px 10px 12px; }
+  .view-seg button { padding: 6px 9px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .op-card, .op-tile { transition: none; }
+}
+
 /* حقول التحرير داخل نافذة التفاصيل */
 .detail-annot {
   background: var(--surface-2);
