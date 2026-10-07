@@ -111,24 +111,46 @@ h3 { font-size: 15px; }
 .syncbar-track { height: 4px; background: var(--surface-3); border-radius: 2px; overflow: hidden; }
 .syncbar-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 2px; transition: width 0.4s; }
 
-/* ============ بطاقة محفظة التمويل ============ */
+/* أيقونات خطّية (svgIcon في js/core.js) تأخذ لون النص */
+.ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ============ بطاقة الرصيد ============
+   الرقم الكبير، ثم رقائق (فوري، تمويل، متاح، أصول أخرى)، ثم تنبيهٌ منظّم إن وُجد */
 .wallet-card {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px 24px;
-  flex-wrap: wrap;
-  padding: 14px 18px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 3%, transparent)), rgba(26, 26, 25, 0.82);
-  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 12%, transparent), color-mix(in srgb, var(--accent) 3%, transparent)), rgba(26, 26, 25, 0.82);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
 }
-.wallet-main { display: flex; flex-direction: column; gap: 3px; min-width: 200px; }
-.wallet-label { color: var(--ink-2); font-size: 13px; }
-.wallet-value { font-size: clamp(24px, 6vw, 30px); font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
-.wallet-value .unit { font-size: 15px; font-weight: 400; color: var(--ink-2); margin-inline-start: 6px; }
-.wallet-side { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
-.wallet-side .sub { text-align: left; }
-#walletExtra { max-width: 340px; line-height: 1.7; }
+.wallet-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; }
+.wallet-title { display: flex; align-items: center; gap: 10px; }
+.wallet-title .kpi-icon { --c: var(--accent-text); width: 36px; height: 36px; border-radius: 10px; }
+.wallet-title .kpi-icon .ic { width: 18px; height: 18px; }
+.wallet-label { color: var(--ink); font-size: 15px; font-weight: 600; }
+.wallet-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wallet-value { display: flex; align-items: baseline; gap: 8px; }
+.wallet-value .num { font-size: clamp(30px, 7vw, 40px); font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.wallet-value .unit { font-size: 15px; color: var(--ink-2); }
+.wallet-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wallet-chips:empty, .wallet-notes:empty, #walletSub:empty { display: none; }
+.wchip { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 11px; border-radius: 999px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); font-size: 12.5px; }
+.wchip-k { color: var(--muted); }
+.wchip-v { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.wchip-asset .wchip-k { color: var(--ink-2); font-weight: 600; }
+.wallet-notes { display: flex; flex-direction: column; gap: 8px; }
+.wnote { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255, 255, 255, 0.03); font-size: 13px; line-height: 1.7; }
+.wnote > .ic { width: 18px; height: 18px; margin-top: 3px; color: var(--ink-2); }
+.wnote-text { min-width: 0; }
+.wnote-text b { display: block; color: var(--ink); font-size: 13.5px; font-weight: 600; }
+.wnote-text > div { color: var(--ink-2); }
+.wnote-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.wnote-warn { border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.wnote-warn > .ic { color: var(--warn); }
+.wnote-danger { border-color: color-mix(in srgb, var(--critical) 50%, transparent); background: color-mix(in srgb, var(--critical) 9%, transparent); }
+.wnote-danger > .ic { color: var(--critical); }
 
 /* ============ التخطيط العام ============ */
 main {
@@ -191,37 +213,39 @@ main {
   outline-offset: 1px;
 }
 
-/* ============ بطاقات الأرقام ============ */
-.tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 8px;
+/* ============ بطاقات الأرقام ============
+   أربعة أعمدة بنفس فجوة الرسمين تحتها، فيقع كل رسمٍ تحت بطاقتين تمامًا. الصفّ الأول
+   (kpi-lg) أرقام P2P بخطٍّ أكبر وحافّةٍ علوية بلونها؛ ولكل بطاقة أيقونة بلونها (--c). */
+.tiles { display: grid; gap: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } }
+.kpi { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px 16px; }
+.kpi-lg { border-top: 2px solid color-mix(in srgb, var(--c) 55%, transparent); }
+.kpi-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.kpi-icon { display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 9px; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.kpi-label { color: var(--ink-2); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; min-width: 0; }
+.kpi-num { color: var(--ink); font-size: 21px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.kpi-lg .kpi-num { font-size: 27px; }
+.kpi-unit { color: var(--muted); font-size: 12.5px; }
+.kpi-sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 520px) {
+  .kpi { padding: 12px; gap: 6px; }
+  .kpi-num { font-size: 18px; }
+  .kpi-lg .kpi-num { font-size: 21px; }
 }
-/* على الشاشات العريضة: كل البطاقات في صف واحد */
-@media (min-width: 1180px) {
-  .tiles {
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(0, 1fr);
-    grid-template-columns: none;
-  }
-}
-.tile { padding: 12px 13px; }
-.tile .t-label { color: var(--muted); font-size: 11.5px; margin-bottom: 5px; }
-.tile .t-value { font-size: 21px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
-.tile .t-value .unit { font-size: 12px; font-weight: 400; color: var(--ink-2); margin-inline-start: 4px; }
-.tile .t-sub { color: var(--muted); font-size: 11px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ============ الرسوم البيانية ============ */
-.charts {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-@media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 900px) { .charts { grid-template-columns: minmax(0, 1fr); } }
 
-.chart-card { padding: 14px 16px 8px; }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
-.legend { display: flex; gap: 14px; }
+.chart-card { padding: 16px 18px 10px; min-width: 0; }
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.chart-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.chart-stat { display: flex; align-items: baseline; gap: 6px; }
+.chart-stat .num { color: var(--ink); font-size: 22px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.chart-stat .unit { color: var(--muted); font-size: 12.5px; }
+.chart-range { padding-top: 2px; font-variant-numeric: tabular-nums; }
+.legend { display: flex; gap: 14px; padding-top: 2px; }
 .lg { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; }
 .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 
@@ -233,7 +257,7 @@ main {
 .chart .hover-line { stroke: var(--baseline); stroke-width: 1; }
 .chart .bar { transition: opacity 0.1s; }
 .chart .bar.dim { opacity: 0.45; }
-.chart .end-label { fill: var(--ink-2); font-size: 11px; font-family: inherit; font-weight: 600; }
+.chart .end-label { fill: var(--ink); font-size: 11.5px; font-family: inherit; font-weight: 700; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
 .chart-note { color: var(--muted); font-size: 12px; text-align: center; padding: 40px 10px; }
 
 /* ============ الجدول ============ */
@@ -809,5 +833,5 @@ td.editable { padding: 4px 6px; }
 @media (max-width: 640px) {
   .topbar { padding: 10px 12px; }
   main { padding: 12px 12px 40px; }
-  .tile .t-value { font-size: 20px; }
+  .wallet-card { padding: 14px; }
 }

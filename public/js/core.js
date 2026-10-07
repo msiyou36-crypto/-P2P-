@@ -201,6 +201,31 @@ function payFiatCode(t) {
 // عملية Pay إرسال تُعامَل كبيع إن أُدخل لها مبلغ محلي وعملة محلية معروفة
 const isPaySale = (t) => t.kind === 'pay-out' && t.status === 'COMPLETED' && t.totalPriceOverride != null && !!payFiatCode(t);
 
+/* ============================ أيقونات ============================
+ * أيقونات خطّية (SVG بمقاس 24 وخطّ 2) بدل الرموز التعبيرية، فتأخذ لون النص ومقاسه وتبدو
+ * واحدةً على كل جهاز. svgIcon(name) يُرجع عنصرًا جاهزًا. */
+const ICONS = {
+  wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
+  up: '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+  down: '<path d="M17 7 7 17"/><path d="M17 17H7V7"/>',
+  cash: '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
+  trend: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/>',
+  in: '<path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/>',
+  out: '<path d="m18 9-6-6-6 6"/><path d="M12 3v14"/><path d="M5 21h14"/>',
+  percent: '<path d="M19 5 5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
+  hash: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+};
+function svgIcon(name) {
+  const s = document.createElementNS(SVGNS, 'svg');
+  s.setAttribute('viewBox', '0 0 24 24');
+  s.setAttribute('aria-hidden', 'true');
+  s.setAttribute('class', 'ic');
+  s.innerHTML = ICONS[name] || '';
+  return s;
+}
+
 /* ============================ عناصر صغيرة ============================ */
 
 function chip(text, color) {

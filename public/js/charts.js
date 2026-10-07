@@ -1,27 +1,41 @@
-/* بطاقات الأرقام والرسمان البيانيان (SVG يدوي): حجم التداول ومتوسط سعر البيع */
+/* بطاقات الأرقام والرسمان البيانيان (SVG يدوي): حجم التداول ومتوسط سعر البيع.
+ * التخطيط شبكةٌ من أربعة أعمدة: الصفّ الأول أرقام P2P الرئيسية بخطٍّ أكبر، والثاني أرقام
+ * المحفظة؛ والرسمان تحتها كلٌّ بعرض عمودين، فتصطفّ الحوافّ كلها. */
 'use strict';
 
 /* ============================ بطاقات الأرقام ============================ */
 
+/** بطاقة رقم: أيقونة بلونها، العنوان، الرقم ووحدته، وسطرٌ تحته. size: 'lg' للصفّ الرئيسي */
 function tileCard(t) {
   const card = document.createElement('div');
-  card.className = 'card tile';
-  const l = document.createElement('div');
-  l.className = 't-label';
-  l.textContent = t.label;
+  card.className = 'card kpi' + (t.size === 'lg' ? ' kpi-lg' : '');
+  card.style.setProperty('--c', t.color);
+  const top = document.createElement('div');
+  top.className = 'kpi-top';
+  const icon = document.createElement('span');
+  icon.className = 'kpi-icon';
+  icon.append(svgIcon(t.icon));
+  const label = document.createElement('span');
+  label.className = 'kpi-label';
+  label.textContent = t.label;
+  top.append(icon, label);
   const v = document.createElement('div');
-  v.className = 't-value';
-  v.textContent = t.value;
+  v.className = 'kpi-value';
+  const n = document.createElement('span');
+  n.className = 'kpi-num';
+  n.textContent = t.value;
+  v.append(n);
   if (t.unit) {
     const u = document.createElement('span');
-    u.className = 'unit';
+    u.className = 'kpi-unit';
     u.textContent = t.unit;
     v.append(u);
   }
   const s = document.createElement('div');
-  s.className = 't-sub';
+  s.className = 'kpi-sub';
   s.textContent = t.sub;
-  card.append(l, v, s);
+  s.title = t.sub;
+  card.append(top, v, s);
   return card;
 }
 
@@ -56,15 +70,16 @@ function renderTiles() {
   const wdSum = wd.reduce((s, t) => s + t.amount, 0);
   const nOps = state.filtered.length + state.filteredTx.length;
 
+  // الصفّ الأول: P2P (الأهمّ للبائع، بخطٍّ أكبر)؛ الثاني: المحفظة والرسوم والعدد
   const tiles = [
-    { label: 'مبيعات', value: fmt2(sellAmt), unit: 'USDT', sub: `${fmt0(sells.length)} P2P${paySales.length ? ' · ' + fmt0(paySales.length) + ' Pay' : ''}` },
-    { label: 'مشتريات', value: fmt2(buyAmt), unit: 'USDT', sub: `${fmt0(buys.length)} طلب مكتمل` },
-    { label: 'مقبوضات البيع', value: fmt0(sellFiat), unit: sym, sub: multi ? `بعملة ${sym} · اختر العملة للتفصيل` : `${fmt0(sellCount)} عملية بيع` },
-    { label: 'متوسط سعر البيع', value: avgPrice ? fmt2p(avgPrice) : '—', unit: avgPrice ? `${sym}/USDT` : '', sub: multi ? `بعملة ${sym}` : 'مرجّح بالكمية' },
-    { label: 'إجمالي الإيداع', value: fmt2(depSum), unit: 'USDT', sub: `${fmt0(dep.length)} عملية مكتملة` },
-    { label: 'إجمالي السحب', value: fmt2(wdSum), unit: 'USDT', sub: `${fmt0(wd.length)} عملية مكتملة` },
-    { label: 'العمولات', value: fmt2(commission), unit: 'USDT', sub: 'رسوم المنصة' },
-    { label: 'عدد العمليات', value: fmt0(nOps), unit: '', sub: `${fmt0(state.filtered.length)} P2P · ${fmt0(state.filteredTx.length)} حوالة` },
+    { size: 'lg', icon: 'up', color: 'var(--sell)', label: 'مبيعات', value: fmt2(sellAmt), unit: 'USDT', sub: `${fmt0(sells.length)} طلب P2P${paySales.length ? ' · ' + fmt0(paySales.length) + ' Pay' : ''}` },
+    { size: 'lg', icon: 'cash', color: 'var(--accent-text)', label: 'مقبوضات البيع', value: fmt0(sellFiat), unit: sym, sub: multi ? `بعملة ${sym} · اختر العملة للتفصيل` : `${fmt0(sellCount)} عملية بيع` },
+    { size: 'lg', icon: 'trend', color: 'var(--accent-text)', label: 'متوسط سعر البيع', value: avgPrice ? fmt2p(avgPrice) : '—', unit: avgPrice ? `${sym}/USDT` : '', sub: multi ? `بعملة ${sym}` : 'مرجّح بالكمية' },
+    { size: 'lg', icon: 'down', color: 'var(--buy-text)', label: 'مشتريات', value: fmt2(buyAmt), unit: 'USDT', sub: `${fmt0(buys.length)} طلب مكتمل` },
+    { icon: 'in', color: 'var(--good)', label: 'إجمالي الإيداع', value: fmt2(depSum), unit: 'USDT', sub: `${fmt0(dep.length)} عملية مكتملة` },
+    { icon: 'out', color: 'var(--critical)', label: 'إجمالي السحب', value: fmt2(wdSum), unit: 'USDT', sub: `${fmt0(wd.length)} عملية مكتملة` },
+    { icon: 'percent', color: 'var(--warn)', label: 'العمولات', value: fmt2(commission), unit: 'USDT', sub: 'رسوم المنصة' },
+    { icon: 'hash', color: 'var(--ink-2)', label: 'عدد العمليات', value: fmt0(nOps), unit: '', sub: `${fmt0(state.filtered.length)} P2P · ${fmt0(state.filteredTx.length)} حوالة` },
   ];
   for (const t of tiles) wrap.append(tileCard(t));
 }
@@ -205,6 +220,9 @@ function renderVolChart() {
   el.textContent = '';
   const completed = state.filtered.filter((o) => o.orderStatus === 'COMPLETED');
   const { buckets } = makeBuckets(completed);
+  // الرقم في رأس البطاقة: حجم الفترة كلها (بيعًا وشراءً)
+  const volume = buckets.reduce((s, b) => s + b.sell + b.buy, 0);
+  $('#volTotal').textContent = volume ? fmt2(volume) : '—';
   if (!buckets.length || buckets.every((b) => b.sell === 0 && b.buy === 0)) return emptyChart(el, 'لا توجد طلبات مكتملة في هذا النطاق');
   const w = Math.max(el.clientWidth || 0, 320), h = 250;
   const pad = { t: 14, r: 8, b: 26, l: 52 };
@@ -282,10 +300,14 @@ function renderPriceChart() {
   const completed = completedAll.filter((o) => fiatCode(o) === useFiat);
   const { buckets } = makeBuckets(completed);
   const fiat = symForCode(useFiat) || 'العملة';
-  $('#priceUnit').textContent = buckets.some((b) => b.sellAmt > 0) ? `${fiat} / USDT` : '';
 
   const pts = [];
   buckets.forEach((b, i) => { if (b.sellAmt > 0) pts.push({ i, title: b.title, price: b.sellFiat / b.sellAmt }); });
+  // رأس البطاقة: آخر متوسط، ومدى الفترة (أدنى وأعلى)
+  const prices = pts.map((p) => p.price);
+  $('#priceLast').textContent = pts.length ? fmt2p(pts[pts.length - 1].price) : '—';
+  $('#priceUnit').textContent = pts.length ? `${fiat}/USDT` : '';
+  $('#priceRange').textContent = pts.length > 1 ? `أدنى ${fmt2p(Math.min(...prices))} · أعلى ${fmt2p(Math.max(...prices))}` : '';
   if (!pts.length) return emptyChart(el, 'لا توجد مبيعات مكتملة في هذا النطاق');
   const w = Math.max(el.clientWidth || 0, 320), h = 250;
   const pad = { t: 16, r: 14, b: 26, l: 52 };
@@ -310,8 +332,17 @@ function renderPriceChart() {
       svg.append(txt);
     }
   });
-  const d = pts.map((p, k) => `${k === 0 ? 'M' : 'L'}${X(p.i).toFixed(1)},${Y(p.price).toFixed(1)}`).join(' ');
-  svg.append(svgEl('path', { d, fill: 'none', stroke: 'var(--sell)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  const line = pts.map((p, k) => `${k === 0 ? 'M' : 'L'}${X(p.i).toFixed(1)},${Y(p.price).toFixed(1)}`).join(' ');
+  // تعبئةٌ متدرّجة تحت الخطّ تُبرز الاتجاه دون أن تُزاحم الشبكة
+  const defs = svgEl('defs', {});
+  const grad = svgEl('linearGradient', { id: 'priceFill', x1: 0, y1: 0, x2: 0, y2: 1 });
+  grad.append(svgEl('stop', { offset: '0%', style: 'stop-color:var(--sell);stop-opacity:0.28' }), svgEl('stop', { offset: '100%', style: 'stop-color:var(--sell);stop-opacity:0' }));
+  defs.append(grad);
+  svg.append(defs);
+  const base = (pad.t + ph).toFixed(1);
+  svg.append(svgEl('path', { d: `${line} L${X(pts[pts.length - 1].i).toFixed(1)},${base} L${X(pts[0].i).toFixed(1)},${base} Z`, fill: 'url(#priceFill)', stroke: 'none' }));
+  svg.append(svgEl('path', { d: line, fill: 'none', stroke: 'var(--sell)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  if (pts.length <= 45) for (const p of pts) svg.append(svgEl('circle', { cx: X(p.i), cy: Y(p.price), r: 2.5, fill: 'var(--sell)' }));
   for (const p of [pts[0], pts[pts.length - 1]]) {
     svg.append(svgEl('circle', { cx: X(p.i), cy: Y(p.price), r: 4.5, fill: 'var(--sell)', stroke: 'var(--surface)', 'stroke-width': 2 }));
   }
@@ -320,7 +351,8 @@ function renderPriceChart() {
   endTxt.textContent = fmt2p(last.price);
   svg.append(endTxt);
   const hoverLine = svgEl('line', { y1: pad.t, y2: pad.t + ph, x1: -9, x2: -9, class: 'hover-line' });
-  svg.append(hoverLine);
+  const hoverDot = svgEl('circle', { cx: -9, cy: -9, r: 5, fill: 'var(--sell)', stroke: 'var(--surface)', 'stroke-width': 2 });
+  svg.append(hoverLine, hoverDot);
   const hit = svgEl('rect', { x: pad.l, y: pad.t, width: pw, height: ph, fill: 'transparent' });
   hit.addEventListener('pointermove', (evt) => {
     const rect = svg.getBoundingClientRect();
@@ -329,9 +361,13 @@ function renderPriceChart() {
     for (const p of pts) { const dd = Math.abs(X(p.i) - mx); if (dd < bd) { bd = dd; nearest = p; } }
     hoverLine.setAttribute('x1', X(nearest.i));
     hoverLine.setAttribute('x2', X(nearest.i));
+    hoverDot.setAttribute('cx', X(nearest.i));
+    hoverDot.setAttribute('cy', Y(nearest.price));
     showTooltip(evt, nearest.title, [{ color: 'var(--sell)', value: fmt2p(nearest.price), name: fiat + '/USDT' }]);
   });
   hit.addEventListener('pointerleave', () => {
+    hoverDot.setAttribute('cx', -9);
+    hoverDot.setAttribute('cy', -9);
     hoverLine.setAttribute('x1', -9);
     hoverLine.setAttribute('x2', -9);
     hideTooltip();

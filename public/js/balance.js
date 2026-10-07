@@ -245,58 +245,130 @@ async function freezeSettled() {
   } catch (e) { console.error('freeze: ' + e.message); }
 }
 
-/* ============================ بطاقة الرصيد ============================ */
+/* ============================ بطاقة الرصيد ============================
+ * الرقم الكبير، وتحته رقائق صغيرة (فوري، تمويل، متاح، مجمّد، أصول أخرى)، وتحتها
+ * تنبيهٌ منظّم واحد — عنوانٌ وشرحٌ وأزرار — يقول لماذا قد يكون عمود «الباقي» ناقصًا. */
 
-function renderBalance() {
-  const valEl = $('#walletUsdt'), subEl = $('#walletSub'), extraEl = $('#walletExtra'), updEl = $('#walletUpdated');
-  if (!valEl) return;
-  if (state.balanceLoading) { subEl.textContent = 'جارٍ جلب الرصيد من المنصة…'; return; }
-  // سببُ فراغ عمود «الباقي» يُقال هنا، فالمستخدم يرى «—» في العمود ولا يعرف أن سببها هذه البطاقة
-  const colHint = state.balAnchorOld
-    ? ' ونقطة التثبيت (📌) عندك على عملية قديمة جدًّا؛ ما بعدها لا تفسّره السلسلة فيبقى «—». الحل: افتح أحدث عملية واكتب رصيدك الحقيقي بعدها في «تثبيت الباقي».'
-    : (state.balNeedsWallet
-      ? ' عمود «الباقي من USDT» فارغ لهذا السبب — أول قراءة ناجحة للرصيد تُسجَّل لقطةً لليوم، وبها يشتغل العمود ويثبت تلقائيًا بعدها.'
-      : '');
-  if (state.balanceError) {
-    valEl.textContent = '—'; subEl.textContent = '⚠ ' + state.balanceError + colHint; extraEl.textContent = ''; updEl.textContent = '';
-    return;
+/** رقاقة «اسم قيمة» صغيرة تحت الرصيد */
+function walletChip(label, value, cls) {
+  const c = document.createElement('span');
+  c.className = 'wchip' + (cls ? ' ' + cls : '');
+  const k = document.createElement('span');
+  k.className = 'wchip-k';
+  k.textContent = label;
+  const v = document.createElement('span');
+  v.className = 'wchip-v';
+  v.textContent = value;
+  c.append(k, v);
+  return c;
+}
+
+/** تنبيهٌ تحت الرصيد: kind = danger | warn | info، وactions = [[نصّ الزر، الدالة], …] */
+function walletNote({ kind, title, body, actions }) {
+  const n = document.createElement('div');
+  n.className = 'wnote wnote-' + kind;
+  const text = document.createElement('div');
+  text.className = 'wnote-text';
+  const t = document.createElement('b');
+  t.textContent = title;
+  const p = document.createElement('div');
+  p.textContent = body;
+  text.append(t, p);
+  if (actions && actions.length) {
+    const bar = document.createElement('div');
+    bar.className = 'wnote-actions';
+    for (const [label, fn] of actions) {
+      const b = document.createElement('button');
+      b.className = 'btn small';
+      b.textContent = label;
+      b.addEventListener('click', fn);
+      bar.append(b);
+    }
+    text.append(bar);
   }
-  if (!state.balance) {
-    valEl.textContent = '—';
-    subEl.textContent = 'اضغط «⟳ تحديث الرصيد» لعرض رصيدك الحالي في الحساب الفوري ومحفظة التمويل معًا.' + colHint;
-    return;
+  n.append(svgIcon(kind === 'info' ? 'info' : 'alert'), text);
+  return n;
+}
+
+/** يفتح العملية التي في سلسلة «الباقي» بمفتاحها (o:رقم الطلب أو t:معرّف الحوالة) */
+function openByBalKey(k) {
+  const id = k.slice(2);
+  if (k.startsWith('o:')) { const o = state.orders.find((x) => x.orderNumber === id); if (o) openDetails(o); }
+  else { const t = state.transfers.find((x) => x.id === id); if (t) openTransferDetails(t); }
+}
+
+/** لماذا قد يكون عمود «الباقي» ناقصًا أو مؤقتًا — تنبيهٌ واحد بالأهمّ أولًا.
+ *  loaded: هل جُلب الرصيد (بدونه لا يُقال إلا سببُ فراغ العمود) */
+function balanceNotes(loaded) {
+  const fix = canEdit() ? [['فحص المزامنة', openDiag], ['إضافة يدوية', openAdd]] : null;
+  const oldPin = { kind: 'info', title: 'نقطة التثبيت (📌) على عملية قديمة جدًّا',
+    body: 'الحساب يمتدّ منها شهورًا وسجلُّ المنصة البعيد ناقص، فيبقى كثيرٌ من عمود «الباقي» فارغًا. افتح أحدث عملية واكتب رصيدك الحقيقي بعدها في «تثبيت الباقي» — يُحسب العمود منها ويستقيم.' };
+  if (!loaded) {
+    if (state.balAnchorOld) return [oldPin];
+    if (state.balNeedsWallet) return [{ kind: 'info', title: 'عمود «الباقي» فارغ حتى يُجلب الرصيد', body: 'أول قراءة ناجحة للرصيد تُسجَّل لقطةً لليوم، وبها يشتغل العمود ويثبت تلقائيًا بعدها.' }];
+    return [];
   }
-  const assets = state.balance.assets || [];
-  const usdt = assets.find((a) => String(a.asset).toUpperCase() === 'USDT');
-  const free = usdt ? num(usdt.free) : 0;
-  const held = usdt ? num(usdt.locked) + num(usdt.freeze) + num(usdt.withdrawing) : 0;
-  valEl.textContent = fmt2(free + held);
-  const b = state.balance;
-  const split = b.spotIncluded
-    ? `فوري ${fmt2(b.usdtSpot || 0)} · تمويل ${fmt2(b.usdtFunding || 0)}`
-    : `⚠ التمويل فقط — تعذّر جلب الحساب الفوري: ${b.spotError || 'خطأ'}`;
-  let gap = '';
   if (state.balAbsurd) {
     const a = state.balAbsurd;
-    gap = ` · ⚠ توجد عملية بتاريخ ${fmtDT(a.t)} كميتها ${fmt2(Math.abs(a.d))} USDT — رقم غير معقول (غالبًا مبلغ بالعملة المحلية كُتب في خانة الكمية). صحّح كميتها أو احذفها، فهي تُفسد عمود «الباقي» كله.`;
-  } else if (state.balBroke) {
-    const when = state.balBrokeAt ? ` عند ${fmtDT(state.balBrokeAt)}` : '';
-    gap = ` · ⚠ ينقص السجلَّ دخلٌ (إيداع أو شراء أو استلام Pay) لا يقلّ عن ${fmt2(state.balBrokeMissing)} USDT${when} — والرصيد لا ينزل تحت الصفر، فما بعد تلك اللحظة لا يُعرف باقيه: تُرك فارغًا («—») بدل رقمٍ مخترَع (${fmt0(state.balBrokeRows)} صفوف). ابحث عنه في تطبيق Binance وأضفه من «الإضافة اليدوية»، أو جرّب «🔍 فحص المزامنة» لذلك اليوم.`;
-  } else if (state.balAnchorOld) {
-    gap = ' · ℹ نقطة التثبيت (📌) عندك على عملية قديمة جدًّا، فالحساب يمتدّ شهورًا وسجلُّ المنصة البعيد ناقص. الأفضل: افتح أحدث عملية واكتب رصيدك الحقيقي بعدها في «تثبيت الباقي» — يُحسب العمود منها ويستقيم.';
-  } else if (state.balFloating) {
-    gap = ' · ℹ أرقام عمود «الباقي من USDT» مثبَّتة على رصيدك الحالي مؤقتًا، فتتغيّر كلّما دخلت عملية جديدة. أول قراءة ناجحة للرصيد تُسجَّل لقطةً لهذا اليوم، وبمجرّد دخول يومٍ جديد تثبت أرقام اليوم الماضي ولا تعود تتحرّك.';
-  } else if (state.balGap > 1) {
-    const when = state.balGapAt ? ` بعد ${fmtDT(state.balGapAt)}` : '';
-    const what = state.balGapOut ? 'خرج (بيع أو سحب)' : 'دخل (إيداع أو شراء)';
-    gap = ` · ⚠ عمليات ${what} بمقدار ${fmt2(state.balGap)} USDT ناقصة من السجل${when} — أرقام العمود صحيحة، والفرق كله في هذه العمليات وحدها. ابحث عنها في تطبيق Binance بعد هذا الوقت وأضفها من «الإضافة اليدوية»، أو افحصها من «🔍 فحص المزامنة».`;
+    return [{ kind: 'danger', title: 'عملية بكمية غير معقولة',
+      body: `بتاريخ ${fmtDT(a.t)} كميتها ${fmt2(Math.abs(a.d))} USDT — غالبًا مبلغ بالعملة المحلية كُتب في خانة الكمية. صحّح كميتها أو احذفها، فهي تُفسد عمود «الباقي» كله.`,
+      actions: [['افتح العملية', () => openByBalKey(a.k)]] }];
   }
-  subEl.textContent = `${split} · متاح ${fmt2(free)}${held > 0 ? ` · مُجمّد/قيد التنفيذ ${fmt2(held)}` : ''} USDT${gap}`;
-  const others = assets
-    .filter((a) => String(a.asset).toUpperCase() !== 'USDT' && num(a.free) + num(a.locked) + num(a.freeze) > 0)
-    .map((a) => `${a.asset} ${fmt2(num(a.free) + num(a.locked) + num(a.freeze))}`);
-  extraEl.textContent = others.length ? 'أصول أخرى: ' + others.slice(0, 8).join(' · ') : '';
-  updEl.textContent = state.balance.updatedAt ? 'آخر تحديث: ' + fmtDT(state.balance.updatedAt) : '';
+  if (state.balBroke) {
+    return [{ kind: 'warn', title: `ينقص السجلَّ دخلٌ لا يقلّ عن ${fmt2(state.balBrokeMissing)} USDT`,
+      body: `${state.balBrokeAt ? 'عند ' + fmtDT(state.balBrokeAt) + ' — ' : ''}والرصيد لا ينزل تحت الصفر، فما بعد تلك اللحظة تُرك باقيه فارغًا («—») بدل رقمٍ مخترَع (${fmt0(state.balBrokeRows)} صفوف). ابحث عنه في تطبيق Binance — إيداع أو شراء أو استلام Pay — وأضفه.`,
+      actions: fix }];
+  }
+  if (state.balAnchorOld) return [oldPin];
+  if (state.balFloating) {
+    return [{ kind: 'info', title: 'أرقام «الباقي» مؤقتة اليوم',
+      body: 'مثبَّتة على رصيدك الحالي فتتغيّر كلّما دخلت عملية جديدة؛ وبمجرّد دخول يومٍ جديد تثبت أرقام اليوم الماضي ولا تعود تتحرّك.' }];
+  }
+  if (state.balGap > 1) {
+    return [{ kind: 'warn', title: `عمليات ${state.balGapOut ? 'خرج (بيع أو سحب)' : 'دخل (إيداع أو شراء)'} بمقدار ${fmt2(state.balGap)} USDT ناقصة من السجل`,
+      body: `${state.balGapAt ? 'بعد ' + fmtDT(state.balGapAt) + ' — ' : ''}أرقام العمود صحيحة، والفرق كله في هذه العمليات وحدها. ابحث عنها في تطبيق Binance بعد هذا الوقت وأضفها.`,
+      actions: fix }];
+  }
+  return [];
+}
+
+function renderBalance() {
+  const valEl = $('#walletUsdt'), subEl = $('#walletSub'), chipsEl = $('#walletChips'), notesEl = $('#walletNotes'), updEl = $('#walletUpdated');
+  if (!valEl) return;
+  if (state.balanceLoading) { subEl.textContent = 'جارٍ جلب الرصيد من المنصة…'; return; }
+  subEl.textContent = '';
+  chipsEl.textContent = '';
+  notesEl.textContent = '';
+  const b = state.balance;
+  const loaded = !state.balanceError && !!b;
+  const notes = balanceNotes(loaded);
+  if (state.balanceError) {
+    valEl.textContent = '—';
+    updEl.textContent = '';
+    notes.unshift({ kind: 'warn', title: 'تعذّر جلب الرصيد', body: state.balanceError });
+  } else if (!b) {
+    valEl.textContent = '—';
+    subEl.textContent = 'اضغط «تحديث الرصيد» لعرض رصيدك الحالي في الحساب الفوري ومحفظة التمويل معًا.';
+  } else {
+    const assets = b.assets || [];
+    const usdt = assets.find((a) => String(a.asset).toUpperCase() === 'USDT');
+    const free = usdt ? num(usdt.free) : 0;
+    const held = usdt ? num(usdt.locked) + num(usdt.freeze) + num(usdt.withdrawing) : 0;
+    valEl.textContent = fmt2(free + held);
+    if (b.spotIncluded) {
+      chipsEl.append(walletChip('فوري', fmt2(b.usdtSpot || 0)), walletChip('تمويل', fmt2(b.usdtFunding || 0)));
+    } else {
+      notes.unshift({ kind: 'warn', title: 'الرقم أعلاه لمحفظة التمويل وحدها', body: 'تعذّر جلب الحساب الفوري: ' + (b.spotError || 'خطأ') });
+    }
+    chipsEl.append(walletChip('متاح', fmt2(free)));
+    if (held > 0) chipsEl.append(walletChip('مُجمّد/قيد التنفيذ', fmt2(held)));
+    for (const a of assets) {
+      const amt = num(a.free) + num(a.locked) + num(a.freeze);
+      if (String(a.asset).toUpperCase() !== 'USDT' && amt > 0 && chipsEl.children.length < 12) chipsEl.append(walletChip(a.asset, fmt2(amt), 'wchip-asset'));
+    }
+    updEl.textContent = b.updatedAt ? 'آخر تحديث ' + fmtDT(b.updatedAt) : '';
+  }
+  for (const n of notes) notesEl.append(walletNote(n));
 }
 
 async function refreshBalance() {
