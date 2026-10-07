@@ -1,10 +1,29 @@
 /* ربط الأحداث والبداية (آخر ملف يُحمَّل) */
 'use strict';
 
+/* ===== القائمة المنسدلة =====
+ * تُفتح بالنقر أو بسهم الأسفل على زرّها، فيتركّز أول بند؛ الأسهم وHome/End تنقل بين
+ * البنود الظاهرة، وEscape يغلقها ويعيد التركيز إلى الزرّ، والنقر خارجها يغلقها. */
+const menuItems = () => $$('#menuDropdown .menu-item').filter((b) => b.offsetParent !== null);
+function openMenu() {
+  $('#menuDropdown').classList.remove('hidden');
+  $('#btnMenu').setAttribute('aria-expanded', 'true');
+  const first = menuItems()[0];
+  if (first) first.focus({ preventScroll: true });
+}
 function closeMenu() { $('#menuDropdown').classList.add('hidden'); $('#btnMenu').setAttribute('aria-expanded', 'false'); }
-function toggleMenu() {
-  const open = $('#menuDropdown').classList.toggle('hidden');
-  $('#btnMenu').setAttribute('aria-expanded', String(!open));
+function toggleMenu() { if ($('#menuDropdown').classList.contains('hidden')) openMenu(); else closeMenu(); }
+function menuKeys(e) {
+  const items = menuItems();
+  if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  const go = (k) => { e.preventDefault(); items[(k + items.length) % items.length].focus(); };
+  if (e.key === 'ArrowDown') go(i + 1);
+  else if (e.key === 'ArrowUp') go(i - 1);
+  else if (e.key === 'Home') go(0);
+  else if (e.key === 'End') go(items.length - 1);
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(); $('#btnMenu').focus(); }
+  else if (e.key === 'Tab') closeMenu();
 }
 /** زرّ في القائمة المنسدلة: يغلقها ثم ينفّذ */
 const menuAction = (id, fn) => $(id).addEventListener('click', () => { closeMenu(); fn(); });
@@ -16,6 +35,8 @@ function confirmThen(id, message, fn, done) {
 }
 
 function wireEvents() {
+  decorateIcons();   // أيقونات الأزرار والقائمة الثابتة في الصفحة (data-icon)
+
   // --- تسجيل الدخول ---
   $('#setupForm').addEventListener('submit', doSetup);
   $('#loginForm').addEventListener('submit', doLogin);
@@ -84,7 +105,9 @@ function wireEvents() {
 
   // --- القائمة ---
   $('#btnMenu').addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });
+  $('#btnMenu').addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); openMenu(); } });
   $('#menuDropdown').addEventListener('click', (e) => e.stopPropagation());
+  $('#menuDropdown').addEventListener('keydown', menuKeys);
   document.addEventListener('click', closeMenu);
   menuAction('#btnSync', openSyncPicker);
   applySyncCooldown();
@@ -162,7 +185,7 @@ function wireEvents() {
   });
   $$('.backdrop').forEach((bd) => bd.addEventListener('click', (e) => { if (e.target === bd) bd.classList.add('hidden'); }));
   $$('[data-close]').forEach((btn) => btn.addEventListener('click', () => btn.closest('.backdrop').classList.add('hidden')));
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllModals(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeAllModals(); closeMenu(); } });
 
   // --- إعادة رسم الرسوم عند تغيير الحجم ---
   let resizeTimer;

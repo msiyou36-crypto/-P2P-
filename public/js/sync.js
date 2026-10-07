@@ -9,28 +9,38 @@ function setSyncCooldown(ms) {
   localStorage.setItem(SYNC_COOLDOWN_KEY, String(Date.now() + ms));
   applySyncCooldown();
 }
+/** نصّ زرّ المزامنة وشارته الصغيرة (المتبقّي من الحصّة، أو دقائق الانتظار بعد الحظر) */
+function setSyncButton(text, badge) {
+  const btn = $('#btnSync');
+  btn.querySelector('.sync-label').textContent = text;
+  const b = btn.querySelector('.sync-badge');
+  b.textContent = badge || '';
+  b.hidden = !badge;
+}
 /** يضبط زر المزامنة: مقفول أثناء الحظر أو عند نفاد الحصّة، وإلا يعرض المتبقي */
 function applySyncCooldown() {
   const btn = $('#btnSync');
   if (!btn || state.syncing) return;
   const q = state.syncQuota || { unlimited: true };
-  btn.textContent = q.unlimited ? '⟳ مزامنة' : `⟳ مزامنة (${fmt0(q.left || 0)})`;
+  btn.classList.remove('is-busy');
   const rem = syncCooldownUntil() - Date.now();
   if (rem > 0) {
     btn.disabled = true;
+    setSyncButton('مزامنة', `${fmt0(Math.ceil(rem / 60000))} د`);
     btn.title = `المنصة حظرت الطلبات مؤقتًا — انتظر ${Math.ceil(rem / 60000)} دقيقة قبل إعادة المزامنة`;
     if (_cooldownTimer) clearTimeout(_cooldownTimer);
     _cooldownTimer = setTimeout(applySyncCooldown, Math.min(rem, 30000));
     return;
   }
   if (_cooldownTimer) { clearTimeout(_cooldownTimer); _cooldownTimer = null; }
+  setSyncButton('مزامنة', q.unlimited ? '' : fmt0(q.left || 0));
   if (!q.unlimited && !(q.left > 0)) {
     btn.disabled = true;
     btn.title = q.quota ? `انتهى عدد مرات المزامنة اليوم (${fmt0(q.quota)}) — يتجدّد بكرة` : 'المزامنة غير مسموحة لحسابك — راجع المسؤول';
     return;
   }
   btn.disabled = false;
-  btn.title = q.unlimited ? 'مزامنة' : `متبقّي ${fmt0(q.left)} من ${fmt0(q.quota)} مزامنة اليوم`;
+  btn.title = q.unlimited ? 'اختر ما تجلبه من المنصة ثم زامن' : `متبقّي ${fmt0(q.left)} من ${fmt0(q.quota)} مزامنة اليوم`;
 }
 /** بعد أي خطأ من المنصة: إن كان حظرًا يُقفل الزر ٣٠ دقيقة */
 function noteBanError(message) {
@@ -150,6 +160,8 @@ async function runSync(kinds) {
   if (!dataKinds.length) { refreshBalance(); return; }   // الرصيد وحده: بلا مزامنة ولا خصم من الحصّة
   state.syncing = true;
   $('#btnSync').disabled = true;
+  $('#btnSync').classList.add('is-busy');   // الأيقونة تدور حتى تنتهي
+  setSyncButton('جارٍ المزامنة…', '');
   $('#syncBar').classList.remove('hidden');
   $('#syncMsg').textContent = 'جارٍ بدء المزامنة…';
   $('#syncPct').style.width = '2%';
@@ -180,6 +192,7 @@ async function runSync(kinds) {
     noteBanError(e.message);
   } finally {
     state.syncing = false;
+    applySyncCooldown();                                 // يعيد الزرّ فورًا، ثم الحصّة الجديدة
     loadSyncQuota().catch(() => applySyncCooldown());   // الخادم خصم مرّة قبل البدء
     setTimeout(() => $('#syncBar').classList.add('hidden'), 800);
   }

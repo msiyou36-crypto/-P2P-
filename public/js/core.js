@@ -216,14 +216,33 @@ const ICONS = {
   hash: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
   alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  // الشريط العلوي والقائمة
+  refresh: '<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  archive: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  sliders: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
+  key: '<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>',
+  ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
 };
-function svgIcon(name) {
+function svgIcon(name, cls) {
   const s = document.createElementNS(SVGNS, 'svg');
   s.setAttribute('viewBox', '0 0 24 24');
   s.setAttribute('aria-hidden', 'true');
-  s.setAttribute('class', 'ic');
+  s.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''));
   s.innerHTML = ICONS[name] || '';
   return s;
+}
+/** عناصر الصفحة الثابتة تطلب أيقونتها بالسمة: data-icon في أولها، وdata-icon-end في آخرها */
+function decorateIcons(root = document) {
+  for (const el of root.querySelectorAll('[data-icon]')) if (!el.querySelector(':scope > .ic')) el.prepend(svgIcon(el.dataset.icon));
+  for (const el of root.querySelectorAll('[data-icon-end]')) if (!el.querySelector(':scope > .ic-end')) el.append(svgIcon(el.dataset.iconEnd, 'ic-end'));
 }
 
 /* ============================ عناصر صغيرة ============================ */

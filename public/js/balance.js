@@ -300,7 +300,6 @@ function openByBalKey(k) {
 /** لماذا قد يكون عمود «الباقي» ناقصًا أو مؤقتًا — تنبيهٌ واحد بالأهمّ أولًا.
  *  loaded: هل جُلب الرصيد (بدونه لا يُقال إلا سببُ فراغ العمود) */
 function balanceNotes(loaded) {
-  const fix = canEdit() ? [['فحص المزامنة', openDiag], ['إضافة يدوية', openAdd]] : null;
   const oldPin = { kind: 'info', title: 'نقطة التثبيت (📌) على عملية قديمة جدًّا',
     body: 'الحساب يمتدّ منها شهورًا وسجلُّ المنصة البعيد ناقص، فيبقى كثيرٌ من عمود «الباقي» فارغًا. افتح أحدث عملية واكتب رصيدك الحقيقي بعدها في «تثبيت الباقي» — يُحسب العمود منها ويستقيم.' };
   if (!loaded) {
@@ -316,8 +315,7 @@ function balanceNotes(loaded) {
   }
   if (state.balBroke) {
     return [{ kind: 'warn', title: `ينقص السجلَّ دخلٌ لا يقلّ عن ${fmt2(state.balBrokeMissing)} USDT`,
-      body: `${state.balBrokeAt ? 'عند ' + fmtDT(state.balBrokeAt) + ' — ' : ''}والرصيد لا ينزل تحت الصفر، فما بعد تلك اللحظة تُرك باقيه فارغًا («—») بدل رقمٍ مخترَع (${fmt0(state.balBrokeRows)} صفوف). ابحث عنه في تطبيق Binance — إيداع أو شراء أو استلام Pay — وأضفه.`,
-      actions: fix }];
+      body: `${state.balBrokeAt ? 'عند ' + fmtDT(state.balBrokeAt) + ' — ' : ''}والرصيد لا ينزل تحت الصفر، فما بعد تلك اللحظة تُرك باقيه فارغًا («—») بدل رقمٍ مخترَع (${fmt0(state.balBrokeRows)} صفوف). ابحث عنه في تطبيق Binance — إيداع أو شراء أو استلام Pay — وأضفه.` }];
   }
   if (state.balAnchorOld) return [oldPin];
   if (state.balFloating) {
@@ -326,8 +324,7 @@ function balanceNotes(loaded) {
   }
   if (state.balGap > 1) {
     return [{ kind: 'warn', title: `عمليات ${state.balGapOut ? 'خرج (بيع أو سحب)' : 'دخل (إيداع أو شراء)'} بمقدار ${fmt2(state.balGap)} USDT ناقصة من السجل`,
-      body: `${state.balGapAt ? 'بعد ' + fmtDT(state.balGapAt) + ' — ' : ''}أرقام العمود صحيحة، والفرق كله في هذه العمليات وحدها. ابحث عنها في تطبيق Binance بعد هذا الوقت وأضفها.`,
-      actions: fix }];
+      body: `${state.balGapAt ? 'بعد ' + fmtDT(state.balGapAt) + ' — ' : ''}أرقام العمود صحيحة، والفرق كله في هذه العمليات وحدها. ابحث عنها في تطبيق Binance بعد هذا الوقت وأضفها.` }];
   }
   return [];
 }
