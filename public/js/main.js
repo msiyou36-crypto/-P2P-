@@ -85,8 +85,10 @@ function wireEvents() {
   $('#btnMenu').addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });
   $('#menuDropdown').addEventListener('click', (e) => e.stopPropagation());
   document.addEventListener('click', closeMenu);
-  menuAction('#btnSync', runSync);
+  menuAction('#btnSync', openSyncPicker);
   applySyncCooldown();
+  $('#btnSyncStart').addEventListener('click', startSync);
+  $('#syncAll').addEventListener('change', (e) => toggleAllSyncKinds(e.target.checked));
   menuAction('#btnArchive', () => setArchiveView(true));
   $('#btnArchiveBack').addEventListener('click', () => setArchiveView(false));
   menuAction('#btnDiag', openDiag);

@@ -457,6 +457,26 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .maint-link { text-decoration: none; }
 .maint-link, .maint-box .btn { min-width: 180px; }
 
+/* نافذة المزامنة: مربّعات اختيار ما يُجلب */
+#mSync .modal { max-width: 500px; }
+.sync-kinds { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 12px; }
+.sync-kind {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.sync-kind.on { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); }
+.sync-kind input { width: 18px; height: 18px; flex: none; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.sk-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.sk-label { color: var(--ink); font-size: 14px; font-weight: 600; }
+.sk-hint { color: var(--muted); font-size: 12px; }
+.sk-last { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.sync-all { background: transparent; }
+@media (max-width: 520px) {
+  .sync-kind { flex-wrap: wrap; }
+  .sk-last { width: 100%; padding-inline-start: 28px; }
+}
+
 /* نافذة فحص المزامنة */
 #mDiag .modal { max-width: 760px; }
 /* شريط وضع الأرشيف: يُميّز الجدولَ بوضوح فلا يظنّ المستخدم أن عملياته ضاعت */

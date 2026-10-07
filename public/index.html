@@ -79,7 +79,7 @@
   </div>
   <div class="actions">
     <span id="roleBadge" class="role-badge"></span>
-    <button id="btnSync" class="btn accent" title="جلب أحدث الطلبات من المنصة">⟳ مزامنة</button>
+    <button id="btnSync" class="btn accent" title="اختر ما تجلبه من المنصة ثم زامن">⟳ مزامنة</button>
     <div class="menu-wrap">
       <button id="btnMenu" class="btn ghost" title="القائمة" aria-haspopup="true" aria-expanded="false">☰ القائمة</button>
       <div id="menuDropdown" class="menu-dropdown hidden" role="menu">
@@ -232,6 +232,23 @@
 </main>
 
 </div><!-- /app -->
+
+<!-- نافذة المزامنة: اختيار ما يُجلب من المنصة (تُملأ المربّعات من js/sync.js) -->
+<div class="backdrop hidden" id="mSync">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="المزامنة">
+    <div class="modal-head"><h3>⟳ المزامنة — ماذا نجلب؟</h3><button class="x" data-close>&times;</button></div>
+    <div class="modal-body">
+      <p class="hint">حدّد ما تريد جلبه من المنصة: الكل، أو بعضه، أو نوعًا واحدًا. كل عملية تُوضع في مكانها بتاريخها مهما تأخّر جلبها، ويُعاد حساب «الباقي من USDT» تلقائيًا. اختيارك يُحفظ للمرّة القادمة.</p>
+      <label class="sync-kind sync-all"><input type="checkbox" id="syncAll"><span class="sk-text"><span class="sk-label">الكل</span></span></label>
+      <div class="sync-kinds" id="syncKinds"></div>
+      <p class="hint">التحقق من التوقيت مع المنصة يتمّ تلقائيًا في كل مزامنة (طلبٌ واحد خفيف). ونوعٌ تتركه بلا مزامنةٍ مدةً طويلة قد يُظهر نقصًا في «الباقي» حتى تُزامنه.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn accent" id="btnSyncStart">⟳ زامن الكل</button>
+      <button class="btn" data-close>إلغاء</button>
+    </div>
+  </div>
+</div>
 
 <!-- نافذة تفاصيل الطلب -->
 <div class="backdrop hidden" id="mDetails">

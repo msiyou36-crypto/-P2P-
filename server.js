@@ -226,7 +226,7 @@ async function saveBalSnap(bal, at) {
  * مزامنة (sync) وفحص (scan) وجلب يوم (day) — بمن شغّله ومتى، فيُفسَّر أي حظر. */
 let loginLog = [];
 const LOGIN_LOG_MAX = 300;
-function recordLogin(role, req, kind = 'login') {
+function recordLogin(role, req, kind = 'login', kinds = null) {
   let ip = '';
   try {
     ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || (req.socket && req.socket.remoteAddress) || '';
@@ -234,6 +234,7 @@ function recordLogin(role, req, kind = 'login') {
   } catch {}
   const ev = { role, time: Date.now(), ip };
   if (kind !== 'login') ev.kind = kind;
+  if (kinds) ev.kinds = kinds;   // مزامنةٌ لبعض الأنواع: أيّها
   loginLog.push(ev);
   if (loginLog.length > LOGIN_LOG_MAX) loginLog = loginLog.slice(-LOGIN_LOG_MAX);
   saveStore(sysKey('loginlog'), loginLog).catch(() => {});
@@ -327,11 +328,20 @@ async function binanceCtx() {
 const WIN_30 = 29 * 86400000;
 const WIN_90 = 89 * 86400000;
 
+/* أنواع المزامنة: يختار المستخدم منها ما يشاء (الكل افتراضًا)، ولكلٍّ وقتُ آخر مزامنةٍ له
+ * (lastSyncBy). ترتيب الجلب لا يهمّ: كل سجلٍّ يُحفظ بمعرّفه ويُعرض بتاريخه في المنصة، فما
+ * يُجلب لاحقًا يقع في مكانه من الجدول ومن سلسلة «الباقي». */
+const SYNC_KINDS = ['p2p', 'deposit', 'withdraw', 'pay', 'convert', 'spot'];
+/** وقت آخر مزامنة لكل نوع؛ قبل الاختيار كانت كل مزامنةٍ تشمل الكل، فيُشتقّ من lastSync */
+const lastSyncByOf = (a) => a.lastSyncBy || Object.fromEntries(SYNC_KINDS.map((k) => [k, a.lastSync || null]));
+
 /**
- * مزامنة شاملة: طلبات P2P ثم الإيداع والسحب وPay والتحويل والسوق الفوري، على نوافذ
- * زمنية، وتبثّ تقدّمها سطرًا سطرًا (NDJSON). ما جُلب يُحفظ ولو فشلت في منتصفها.
+ * المزامنة: الأنواع المختارة (kinds) من طلبات P2P والإيداع والسحب وPay والتحويل والسوق
+ * الفوري، على نوافذ زمنية، وتبثّ تقدّمها سطرًا سطرًا (NDJSON). ما جُلب يُحفظ ولو فشلت
+ * في منتصفها، ويُختم وقتُ كل نوعٍ اكتمل.
  */
-async function* syncGenerator() {
+async function* syncGenerator(kinds = SYNC_KINDS) {
+  const want = new Set(kinds);
   yield { msg: 'جارٍ الاتصال بالمنصة والتحقق من التوقيت…', pct: 1 };
   await mergeBoth();   // دمج ما كتبته نسخةٌ أخرى قبل الجلب حتى لا نمحوه عند الحفظ
   const ctx = await binanceCtx();
@@ -346,25 +356,30 @@ async function* syncGenerator() {
   let added = 0, updated = 0, fetched = 0;
   let depAdded = 0, wdAdded = 0, payAdded = 0, cvtAdded = 0, sptAdded = 0, txUpdated = 0;
   let step = 0;
-  const totalSteps = p2pWindows.length * 2 + txWindows.length * 3 + convertWindows.length + 4;
+  const steps = { p2p: p2pWindows.length * 2, deposit: txWindows.length, withdraw: txWindows.length, pay: txWindows.length, convert: convertWindows.length, spot: 4 };
+  const totalSteps = Math.max(kinds.reduce((s, k) => s + steps[k], 0), 1);
   const prog = (msg) => { step++; return { msg, pct: Math.min(1 + Math.round((step / totalSteps) * 96), 97) }; };
   const countTx = (r, onAdd) => { if (r === 'added') onAdd(); else if (r === 'updated') txUpdated++; };
+  const done = [];   // الأنواع التي اكتملت — يُختم وقتها ولو فشل ما بعدها
 
   const result = { done: true };
   try {
     /* ---- طلبات P2P (بيع ثم شراء) — رصيدٌ واحد للمزامنة كلها ---- */
-    const c2cBudget = { left: 300 };
-    for (const tradeType of ['SELL', 'BUY']) {
-      const label = tradeType === 'SELL' ? 'مبيعات' : 'مشتريات';
-      for (const [s, e] of p2pWindows) {
-        yield prog(`جلب ${label} P2P: ${dayLabel(s)} ← ${dayLabel(e)}`);
-        const got = await bn.fetchC2C(ctx, tradeType, s, e, (raw) => {
-          const r = upsertOrder(N.normalizeOrder(raw, 'binance'));
-          if (r === 'added') added++; else if (r === 'updated') updated++;
-        }, undefined, c2cBudget);
-        fetched += got.count;
-        if (got.truncated) yield { msg: `⚠ ${label} P2P ${dayLabel(s)} ← ${dayLabel(e)}: ${bn.c2cWarn(got)}`, pct: null };
+    if (want.has('p2p')) {
+      const c2cBudget = { left: 300 };
+      for (const tradeType of ['SELL', 'BUY']) {
+        const label = tradeType === 'SELL' ? 'مبيعات' : 'مشتريات';
+        for (const [s, e] of p2pWindows) {
+          yield prog(`جلب ${label} P2P: ${dayLabel(s)} ← ${dayLabel(e)}`);
+          const got = await bn.fetchC2C(ctx, tradeType, s, e, (raw) => {
+            const r = upsertOrder(N.normalizeOrder(raw, 'binance'));
+            if (r === 'added') added++; else if (r === 'updated') updated++;
+          }, undefined, c2cBudget);
+          fetched += got.count;
+          if (got.truncated) yield { msg: `⚠ ${label} P2P ${dayLabel(s)} ← ${dayLabel(e)}: ${bn.c2cWarn(got)}`, pct: null };
+        }
       }
+      done.push('p2p');
     }
 
     /* ---- الإيداع والسحب (حتى ألف سجل في الطلب، مع ترقيم offset) ---- */
@@ -372,6 +387,7 @@ async function* syncGenerator() {
       ['deposit', '/sapi/v1/capital/deposit/hisrec', 'الإيداعات', 300],
       ['withdraw', '/sapi/v1/capital/withdraw/history', 'عمليات السحب', 400],
     ]) {
+      if (!want.has(kind)) continue;
       for (const [s, e] of txWindows) {
         yield prog(`جلب ${label}: ${dayLabel(s)} ← ${dayLabel(e)}`);
         for (let off = 0; ; off += 1000) {
@@ -384,65 +400,83 @@ async function* syncGenerator() {
         }
         await sleep(gap);
       }
+      done.push(kind);
     }
 
     /* ---- Binance Pay (فشلها غير قاتل: صلاحية أو منطقة) ---- */
-    try {
-      for (const [ws, we] of txWindows) {
-        yield prog(`جلب عمليات Binance Pay: ${dayLabel(ws)} ← ${dayLabel(we)}`);
-        const got = await bn.fetchPay(ctx, ws, we, (raw) => countTx(upsertTransfer(N.normalizePay(raw)), () => payAdded++));
-        if (got.capped) yield { msg: '⚠ عمليات Binance Pay كثيرة جدًّا في هذه الفترة — جُلب أقصى ما يسمح به الحد، وقد تبقى عمليات لم تصل.', pct: 97 };
+    if (want.has('pay')) {
+      try {
+        for (const [ws, we] of txWindows) {
+          yield prog(`جلب عمليات Binance Pay: ${dayLabel(ws)} ← ${dayLabel(we)}`);
+          const got = await bn.fetchPay(ctx, ws, we, (raw) => countTx(upsertTransfer(N.normalizePay(raw)), () => payAdded++));
+          if (got.capped) yield { msg: '⚠ عمليات Binance Pay كثيرة جدًّا في هذه الفترة — جُلب أقصى ما يسمح به الحد، وقد تبقى عمليات لم تصل.', pct: 97 };
+        }
+        done.push('pay');
+      } catch (err) {
+        yield { msg: 'تعذّر جلب عمليات Binance Pay (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
       }
-    } catch (err) {
-      yield { msg: 'تعذّر جلب عمليات Binance Pay (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
     }
 
     /* ---- التحويل بين العملات (Convert) ---- */
-    try {
-      for (const [s, e] of convertWindows) {
-        yield prog(`جلب سجل التحويل (Convert): ${dayLabel(s)} ← ${dayLabel(e)}`);
-        const j = await bn.signedGet(ctx, '/sapi/v1/convert/tradeFlow', { startTime: s, endTime: e, limit: 1000 });
-        for (const raw of (Array.isArray(j.list) ? j.list : [])) countTx(upsertTransfer(N.normalizeConvert(raw)), () => cvtAdded++);
-        await sleep(1000);
+    if (want.has('convert')) {
+      try {
+        for (const [s, e] of convertWindows) {
+          yield prog(`جلب سجل التحويل (Convert): ${dayLabel(s)} ← ${dayLabel(e)}`);
+          const j = await bn.signedGet(ctx, '/sapi/v1/convert/tradeFlow', { startTime: s, endTime: e, limit: 1000 });
+          for (const raw of (Array.isArray(j.list) ? j.list : [])) countTx(upsertTransfer(N.normalizeConvert(raw)), () => cvtAdded++);
+          await sleep(1000);
+        }
+        done.push('convert');
+      } catch (err) {
+        yield { msg: 'تعذّر جلب سجل التحويل Convert (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
       }
-    } catch (err) {
-      yield { msg: 'تعذّر جلب سجل التحويل Convert (تم تخطّيها): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
     }
 
     /* ---- السوق الفوري: /api/v3/myTrades تلزمها symbol، فنستنتج الأزواج من العملات
          التي مرّت على الحساب فعلًا؛ وبلا وقتٍ تُرجع أحدث ألف صفقة دفعةً واحدة ---- */
-    try {
-      const bases = new Set();
-      for (const t of Object.values(transfers)) {
-        for (const a of [t.coin, t.network, t.fromAsset, t.toAsset]) {
-          const s = String(a || '').trim().toUpperCase();
-          if (s && s !== 'USDT' && /^[A-Z0-9]{2,10}$/.test(s)) bases.add(s);
+    if (want.has('spot')) {
+      try {
+        const bases = new Set();
+        for (const t of Object.values(transfers)) {
+          for (const a of [t.coin, t.network, t.fromAsset, t.toAsset]) {
+            const s = String(a || '').trim().toUpperCase();
+            if (s && s !== 'USDT' && /^[A-Z0-9]{2,10}$/.test(s)) bases.add(s);
+          }
         }
-      }
-      for (const symbol of [...bases].slice(0, 8).map((b) => b + 'USDT')) {
-        yield prog(`جلب تداول السوق الفوري: ${symbol}`);
-        try {
-          const arr = await bn.signedGet(ctx, '/api/v3/myTrades', { symbol, limit: 1000 });
-          for (const raw of (Array.isArray(arr) ? arr : [])) countTx(upsertTransfer(N.normalizeSpotTrade(raw, symbol)), () => sptAdded++);
-        } catch (e) {
-          if (!/-1121|Invalid symbol/i.test(e.message || '')) throw e;   // زوج غير موجود: نتخطّاه
+        for (const symbol of [...bases].slice(0, 8).map((b) => b + 'USDT')) {
+          yield prog(`جلب تداول السوق الفوري: ${symbol}`);
+          try {
+            const arr = await bn.signedGet(ctx, '/api/v3/myTrades', { symbol, limit: 1000 });
+            for (const raw of (Array.isArray(arr) ? arr : [])) countTx(upsertTransfer(N.normalizeSpotTrade(raw, symbol)), () => sptAdded++);
+          } catch (e) {
+            if (!/-1121|Invalid symbol/i.test(e.message || '')) throw e;   // زوج غير موجود: نتخطّاه
+          }
+          await sleep(400);
         }
-        await sleep(400);
+        done.push('spot');
+      } catch (err) {
+        yield { msg: 'تعذّر جلب تداول السوق الفوري (تم تخطّيه): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
       }
-    } catch (err) {
-      yield { msg: 'تعذّر جلب تداول السوق الفوري (تم تخطّيه): ' + (err && err.message ? err.message : 'خطأ'), pct: 97 };
     }
 
-    AC().lastSync = Date.now();
     Object.assign(result, {
-      added, updated, fetched, depAdded, wdAdded, payAdded, cvtAdded, sptAdded, txUpdated,
-      total: Object.keys(orders).length, totalTx: Object.keys(transfers).length, lastSync: AC().lastSync,
+      kinds: done, added, updated, fetched, depAdded, wdAdded, payAdded, cvtAdded, sptAdded, txUpdated,
+      total: Object.keys(orders).length, totalTx: Object.keys(transfers).length,
     });
   } finally {
+    if (done.length) {
+      const t = Date.now();
+      const by = Object.assign({}, lastSyncByOf(AC()));
+      for (const k of done) by[k] = t;
+      AC().lastSyncBy = by;
+      AC().lastSync = t;
+    }
     await saveOrders();
     await saveTransfers();
     await saveConfig();
   }
+  result.lastSync = AC().lastSync;
+  result.lastSyncBy = lastSyncByOf(AC());
   yield result;
 }
 
@@ -775,6 +809,7 @@ route('GET', '/api/settings', 'login', (req, res) => {
     rangeHours: AC().rangeHours,
     syncQuota: syncQuotaValue(),
     lastSync: AC().lastSync,
+    lastSyncBy: lastSyncByOf(AC()),
   });
 });
 
@@ -955,8 +990,12 @@ route('GET', '/api/sync/quota', 'login', async (req, res, c) => {
   sendJSON(res, 200, Object.assign(await syncQuotaFor(c.role), { blockedFor: Math.ceil(bn.banLeft() / 1000) }));
 });
 
+/* body: { kinds: ['p2p', 'deposit', …] } — ما يُجلب؛ بلا قائمة = الكل */
 route('POST', '/api/sync', 'login', async (req, res, c) => {
   if (bn.banLeft() > 0) return deny(res, 429, bn.banMessage(bn.banLeft()));   // أثناء الحظر لا تبدأ ولا تُخصم
+  const body = await c.body();
+  const kinds = Array.isArray(body.kinds) ? SYNC_KINDS.filter((k) => body.kinds.includes(k)) : SYNC_KINDS.slice();
+  if (!kinds.length) return deny(res, 400, 'اختر نوعًا واحدًا على الأقل لتجلبه');
   const q = await syncQuotaFor(c.role);
   if (!q.unlimited && q.left <= 0) {
     return sendJSON(res, 429, {
@@ -968,8 +1007,8 @@ route('POST', '/api/sync', 'login', async (req, res, c) => {
   if (!hasKeys()) return deny(res, 400, 'لم يتم حفظ مفتاح API بعد — افتح الإعدادات وأدخل المفتاحين أولًا');
   if (!q.unlimited) await bumpSyncUsage(c.role);
   syncRunning = true;
-  recordLogin(c.role, req, 'sync');
-  try { await streamNdjson(res, syncGenerator()); } finally { syncRunning = false; }
+  recordLogin(c.role, req, 'sync', kinds.length < SYNC_KINDS.length ? kinds : null);
+  try { await streamNdjson(res, syncGenerator(kinds)); } finally { syncRunning = false; }
 });
 
 route('POST', '/api/sync/day', 'admin', async (req, res, c) => {

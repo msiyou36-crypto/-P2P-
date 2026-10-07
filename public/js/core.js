@@ -44,7 +44,7 @@ const state = {
   balance: null,      // ردّ /api/balance
   balanceLoading: false,
   balanceError: null,
-  settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', rangeHours: 720, syncQuota: 3, lastSync: null },
+  settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', rangeHours: 720, syncQuota: 3, lastSync: null, lastSyncBy: {} },
   syncQuota: { unlimited: true, quota: 0, used: 0, left: null },
   account: { active: 'p2p', name: 'حوالات P2P', list: [], locked: false },
   themeAccent: '#f0b90b',

@@ -66,8 +66,9 @@ async function runDiag() {
   btn.disabled = false;
   box.textContent = '';
   const total = d.fromPlatform.length;
-  // عمليةٌ وقعت بعد آخر مزامنة ليست خللًا — لم يأتِ دورها بعد
-  const ls = Number(state.settings.lastSync) || 0;
+  // عمليةٌ وقعت بعد آخر مزامنةٍ لطلبات P2P ليست خللًا — لم يأتِ دورها بعد
+  const by = state.settings.lastSyncBy;
+  const ls = Number(by ? by.p2p : state.settings.lastSync) || 0;
   const unsaved = d.fromPlatform.filter((x) => !x.stored);
   const fresh = ls ? unsaved.filter((x) => x.time > ls).length : 0;
   const stale = unsaved.length - fresh;
@@ -129,7 +130,7 @@ async function fetchOneDay() {
     box.append(diagLine('hint', `${NAMES[k]}: وصل ${fmt0(d.found[k])}${d.added[k] ? ` · جديد ${fmt0(d.added[k])}` : ''}`));
   }
   for (const s of (d.skipped || [])) box.append(diagLine('diag-bad', '⚠ تعذّر جلب ' + s));
-  if (d.totalAdded > 0) await Promise.all([loadOrders(), loadTransfers()]);
+  if (d.totalAdded > 0) { await Promise.all([loadOrders(), loadTransfers()]); allowHeal(); }
   // نضبط فلتر الجدول على ذلك اليوم فيرى المستخدم النتيجة أمامه فورًا
   $('#xFrom').value = d.day;
   $('#xTo').value = d.day;
@@ -614,6 +615,7 @@ async function confirmImport() {
     closeModal('#mImport');
     toast(`تم الاستيراد: ${fmt0(j.added)} جديد و ${fmt0(j.updated)} محدّث ✓`);
     await loadOrders();
+    allowHeal();
     renderAll();
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -677,7 +679,8 @@ async function openLoginLog() {
     const KIND_LABELS = { sync: '⟳ مزامنة', scan: '🔎 فحص', day: '📅 جلب يوم' };   // ما يُثقل على المنصة يُقيَّد مع الدخول
     for (const ev of events) {
       const tr = document.createElement('tr');
-      const kind = ev.kind && KIND_LABELS[ev.kind] ? ' — ' + KIND_LABELS[ev.kind] : '';
+      const kind = (ev.kind && KIND_LABELS[ev.kind] ? ' — ' + KIND_LABELS[ev.kind] : '')
+        + (Array.isArray(ev.kinds) ? ' (' + ev.kinds.map(kindLabel).join('، ') + ')' : '');   // مزامنةٌ لبعض الأنواع
       tdText(tr, (ROLE_ICONS[ev.role] ? ROLE_ICONS[ev.role] + ' ' : '') + (ROLE_NAMES[ev.role] || ev.role || '—') + kind);
       tdText(tr, ev.time ? fmtDTsec(ev.time) : '—');
       tdText(tr, ev.ip || '—', 'mono');

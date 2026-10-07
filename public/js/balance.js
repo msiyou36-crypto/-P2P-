@@ -204,8 +204,11 @@ function scheduleFreeze() {
   if (_freezeTimer) clearTimeout(_freezeTimer);
   _freezeTimer = setTimeout(() => { _freezeTimer = null; freezeSettled(); }, 1200);
 }
-/* إصلاحٌ ذاتي: أرقامٌ مثبَّتة فاسدة تُمسح ويُعاد حسابها مرّةً في الجلسة */
+/* إصلاحٌ ذاتي: أرقامٌ مثبَّتة فاسدة تُمسح ويُعاد حسابها — مرّةً واحدة بعد كل جلبٍ جديد
+   (مزامنة، جلب يوم، استيراد)، لا في كل رسم، فلا يدور الإصلاح في حلقة */
 let _healed = false;
+/** عمليةٌ وصلت متأخرة في وسط الدفتر تُبطل ما ثُبِّت بعدها: يُسمح بإصلاحٍ جديد */
+function allowHeal() { _healed = false; }
 async function healFrozen() {
   if (_healed || !state.auth.token) return;
   _healed = true;
