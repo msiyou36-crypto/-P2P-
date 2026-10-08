@@ -224,42 +224,96 @@ function setArchiveView(on) {
   renderAll();
 }
 
-/* ============================ نوافذ التفاصيل ============================ */
+/* ============================ نوافذ التفاصيل ============================
+ * ملخّصٌ كبير أعلاها (النوع والحالة والمبلغ وأرقامه الأساسية)، ثم أقسامٌ بعناوين:
+ * المعلومات، ثم ملاحظاتك (الإشاري والملاحظة)، ثم أدوات المسؤول (تثبيت الباقي، الاحتساب
+ * بالـUSDT، الأرشفة) — وهذه للمسؤول وحده فلا يرى غيرُه أزرارًا معطّلة. */
 
-/** زرّان بجانب حقل رقم: «تثبيت» و«إلغاء»، للمسؤول */
+/** الملخّص: النوع والحالة، ثم المبلغ كبيرًا، ثم أرقامٌ صغيرة [[العنوان، القيمة]…] (الفارغ يُترك) */
+function detailHero(typeChip, statusChip, color, amount, unit, stats) {
+  const hero = mk('div', 'd-hero');
+  hero.style.setProperty('--k', color);
+  const top = mk('div', 'd-hero-top');
+  top.append(typeChip, statusChip);
+  const amt = mk('div', 'd-hero-amt');
+  amt.append(mk('span', 'num', amount), mk('span', 'unit', unit));
+  hero.append(top, amt);
+  const list = stats.filter(Boolean);
+  if (list.length) {
+    const grid = mk('div', 'd-stats');
+    for (const [k, v] of list) {
+      const s = mk('div', 'd-stat');
+      s.append(mk('span', 'k', k), mk('span', 'v', v));
+      grid.append(s);
+    }
+    hero.append(grid);
+  }
+  return hero;
+}
+/** قسمٌ بعنوان؛ محتواه صفوفٌ في إطار (الفارغ منها يُترك) */
+function detailSection(title, items, cls) {
+  const sec = mk('section', 'd-sec');
+  const box = mk('div', cls || 'detail-rows');
+  box.append(...items.filter(Boolean));
+  sec.append(mk('h4', 'd-sec-title', title), box);
+  return sec;
+}
+/** الإشاري أو الملاحظة: حقلٌ عنوانه فوقه، يُحفظ تلقائيًا (للمسؤول و«مستخدم 2») */
+function annotField(entity, field, kind) {
+  const lab = mk('label', 'field', field === 'reference' ? 'الإشاري' : 'الملاحظة');
+  const input = document.createElement(field === 'note' ? 'textarea' : 'input');
+  if (field === 'note') input.rows = 2; else input.type = 'text';
+  input.className = 'd-annot';
+  input.value = entity[field] || '';
+  input.placeholder = field === 'reference' ? 'علامة أو مرجع خاص بك' : 'ملاحظتك على العملية';
+  if (canAnnotate()) input.addEventListener('change', () => saveAnnotation(kind, entity, field, input.value, input));
+  else { input.readOnly = true; input.classList.add('readonly'); }
+  lab.append(input);
+  return lab;
+}
+/** صفّ أداةٍ للمسؤول: عنوانٌ وشرحه، وأزرارها جانبه */
+function toolRow(title, hint, ...actions) {
+  const row = mk('div', 'dz-row');
+  const text = mk('div', 'dz-text');
+  text.append(mk('b', null, title), mk('span', null, hint));
+  const acts = mk('div', 'dz-actions');
+  acts.append(...actions);
+  row.append(text, acts);
+  return row;
+}
+
+/** حقل رقمٍ وزرّا «تثبيت» و«إلغاء» (الثاني يظهر حين توجد قيمةٌ تُلغى) */
 function numberActionRow(label, hint, current, placeholder, labels, onSet, onClear) {
-  const wrap = document.createElement('div');
-  wrap.className = 'zero-toggle';
   const inp = document.createElement('input');
   inp.type = 'number';
   inp.step = 'any';
   inp.min = '0';
   inp.dir = 'ltr';
-  inp.className = 'num-input';
+  inp.inputMode = 'decimal';
+  inp.className = 'd-num';
   inp.placeholder = placeholder;
-  inp.disabled = !canEdit();
+  inp.setAttribute('aria-label', label);
   if (current != null) inp.value = String(current);
-  const btn = document.createElement('button');
-  btn.className = 'btn';
-  btn.textContent = labels[0];
-  btn.disabled = !canEdit();
-  const clr = document.createElement('button');
-  clr.className = 'btn';
-  clr.textContent = labels[1];
-  clr.disabled = !canEdit() || current == null;
-  wrap.append(inp, btn, clr);
+  const btn = mk('button', 'btn accent', labels[0]);
+  btn.type = 'button';
   btn.addEventListener('click', async () => {
     const v = Number(inp.value);
-    if (!Number.isFinite(v) || v < 0) { toast('اكتب رقمًا صحيحًا (صفر فأكثر)', 'err'); return; }
+    if (inp.value.trim() === '' || !Number.isFinite(v) || v < 0) { toast('اكتب رقمًا صحيحًا (صفر فأكثر)', 'err'); return; }
     btn.disabled = true;
     try { await onSet(v); } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
     btn.disabled = false;
   });
-  clr.addEventListener('click', async () => {
-    clr.disabled = true;
-    try { await onClear(); } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
-  });
-  return detailRow(label, wrap, { hint });
+  const actions = [inp, btn];
+  if (current != null) {
+    const clr = mk('button', 'btn', labels[1]);
+    clr.type = 'button';
+    clr.addEventListener('click', async () => {
+      clr.disabled = true;
+      try { await onClear(); } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); clr.disabled = false; }
+    });
+    actions.push(clr);
+  }
+  return toolRow(label, hint, ...actions);
 }
 
 /* مرساةٌ بيد المستخدم: يكتب رصيده الحقيقي بعد عمليةٍ يعرفها، فيُحسب العمود كلّه منها.
@@ -295,12 +349,8 @@ function usdtValueRow(t) {
 
 /* الأرشفة: إخراجُ صفٍّ من الجدول ومن الحساب معًا دون محوه (للمسؤول) */
 function archiveRow(entity, kind) {
-  const wrap = document.createElement('div');
-  wrap.className = 'zero-toggle';
   const on = !!entity.archived;
-  const btn = iconButton('btn' + (on ? '' : ' danger'), on ? 'undo' : 'archive', on ? 'إرجاع من الأرشيف' : 'أرشفة (إخفاء من الجدول)');
-  btn.disabled = !canEdit();
-  wrap.append(btn);
+  const btn = iconButton('btn' + (on ? '' : ' danger'), on ? 'undo' : 'archive', on ? 'إرجاع من الأرشيف' : 'أرشفة');
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     try {
@@ -311,20 +361,10 @@ function archiveRow(entity, kind) {
       toast(on ? 'أُرجعت إلى الجدول ✓' : 'أُرسلت إلى الأرشيف — تجدها في القائمة ← الأرشيف');
     } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); btn.disabled = false; }
   });
-  return detailRow('الأرشيف', wrap, {
-    hint: 'الأرشفة تُخرجها من الجدول ومن الحساب معًا: لا تدخل الأرقام ولا عمود «الباقي من USDT» وكأنها لم تكن. والسجلّ محفوظ، فتُرجعها متى شئت. للحذف النهائي استخدم زر الحذف.',
-  });
-}
-
-function annotDetailRow(entity, field, kind, label) {
-  const input = document.createElement(field === 'note' ? 'textarea' : 'input');
-  if (field === 'note') input.rows = 2; else input.type = 'text';
-  input.className = 'detail-annot';
-  input.value = entity[field] || '';
-  input.placeholder = field === 'reference' ? 'علامة/مرجع خاص بك' : 'ملاحظتك على العملية';
-  if (canAnnotate()) input.addEventListener('change', () => saveAnnotation(kind, entity, field, input.value, input));
-  else { input.readOnly = true; input.classList.add('readonly'); }
-  return detailRow(label, input);
+  return toolRow('الأرشيف', on
+    ? 'هذه العملية في الأرشيف: خارج الجدول وخارج الحساب. أرجعها متى شئت.'
+    : 'تُخرجها من الجدول ومن الحساب معًا: لا تدخل الأرقام ولا «الباقي من USDT» وكأنها لم تكن، والسجلّ محفوظ فتُرجعها متى شئت.'
+      + (kind === 'order' ? ' للحذف النهائي زرّ «حذف الطلب» أسفل النافذة.' : ''), btn);
 }
 
 /** نافذة تفاصيل العملية (طلبًا كانت أو حوالة) */
@@ -334,83 +374,75 @@ function openDetails(o) {
   state.detailsOrder = o;
   const body = $('#detailsBody');
   body.textContent = '';
-  const wrap = document.createElement('div');
-  wrap.className = 'detail-rows';
   const ti = TYPE_INFO[o.tradeType];
   const si = statusInfo(o.orderStatus);
   const fiat = fiatSymOf(o);
-  wrap.append(detailRow('النوع', chip(ti.ar + ' ' + o.asset, ti.color)));
-  wrap.append(detailRow('الحالة', chip(si.ar, si.color)));
-  const feeVal = effComm(o);
-  wrap.append(detailRow('الكمية (شاملة العمولة)', fmt2(o.amount + feeVal) + ' ' + o.asset));
-  if (feeVal > 0) {
-    wrap.append(detailRow('الرسوم', fmt2(feeVal) + ' ' + o.asset));
-    wrap.append(detailRow('الكمية المُحرّرة', fmt2(o.amount) + ' ' + o.asset));
+  const inFiat = (v) => v + (fiat ? ' ' + fiat : '');
+  const fee = effComm(o);
+  $('#mDetailsSub').textContent = fmtDTsec(o.createTime);
+  // المبلغ الكبير شاملٌ العمولة (ما خرج من محفظتك في البيع)، والمحرَّر بعدها في الأرقام تحته
+  body.append(detailHero(chip(ti.ar + ' ' + o.asset, ti.color), chip(si.ar, si.color), ti.color,
+    fmt2(o.amount + fee), o.asset, [
+      ['السعر', inFiat(fmt2p(effUnitPrice(o)))],
+      ['المبلغ', inFiat(fmt0(effTotalPrice(o)))],
+      fee > 0 && ['الرسوم', fmt2(fee) + ' ' + o.asset],
+      fee > 0 && ['المُحرَّرة', fmt2(o.amount) + ' ' + o.asset],
+    ]));
+  body.append(detailSection('معلومات الطلب', [
+    detailRow('الطرف الآخر', o.counterPart || '—'),
+    o.advertisementRole && detailRow('دورك في الطلب', o.advertisementRole === 'MAKER' ? 'معلن (Maker)' : 'منفّذ (Taker)'),
+    detailRow('رقم الطلب', mk('span', 'mono', o.orderNumber), { copy: o.orderNumber }),
+    detailRow('المصدر', SOURCE_AR[o.source] || o.source),
+  ]));
+  body.append(detailSection('ملاحظاتك', [annotField(o, 'reference', 'order'), annotField(o, 'note', 'order')], 'd-annots'));
+  if (canEdit()) {
+    body.append(detailSection('أدوات المسؤول', [
+      o.orderStatus === 'COMPLETED' && zeroPointRow(o, 'order'),
+      archiveRow(o, 'order'),
+    ], 'd-tools'));
   }
-  wrap.append(detailRow('السعر', fmt2p(effUnitPrice(o)) + (fiat ? ' ' + fiat : '')));
-  wrap.append(detailRow('المبلغ بالعملة المحلية', fmt0(effTotalPrice(o)) + (fiat ? ' ' + fiat : '')));
-  wrap.append(detailRow('الطرف الآخر', o.counterPart || '—'));
-  if (o.advertisementRole) wrap.append(detailRow('دورك في الطلب', o.advertisementRole === 'MAKER' ? 'معلن (Maker)' : 'منفّذ (Taker)'));
-  wrap.append(detailRow('وقت الإنشاء', fmtDTsec(o.createTime)));
-  const noSpan = document.createElement('span');
-  noSpan.className = 'mono';
-  noSpan.textContent = o.orderNumber;
-  wrap.append(detailRow('رقم الطلب', noSpan, { copy: o.orderNumber }));
-  wrap.append(detailRow('المصدر', SOURCE_AR[o.source] || o.source));
-  wrap.append(annotDetailRow(o, 'reference', 'order', 'الإشاري'));
-  wrap.append(annotDetailRow(o, 'note', 'order', 'الملاحظة'));
-  if (o.orderStatus === 'COMPLETED') wrap.append(zeroPointRow(o, 'order'));
-  if (canEdit()) wrap.append(archiveRow(o, 'order'));
-  body.append(wrap);
   openModal('#mDetails');
+  body.scrollTop = 0;   // كل عمليةٍ تُفتح من أعلاها لا من حيث توقّف التمرير في سابقتها
 }
 
 function openTransferDetails(t) {
   const body = $('#txDetailsBody');
   body.textContent = '';
-  const wrap = document.createElement('div');
-  wrap.className = 'detail-rows';
   const ki = TX_KIND[t.kind] || { ar: t.kind, color: 'var(--muted)' };
   const si = txStatusInfo(t.status);
   const isPay = isPayKind(t.kind);
-  wrap.append(detailRow('النوع', chip(ki.ar + ' ' + (t.coin || ''), ki.color)));
-  wrap.append(detailRow('الحالة', chip(si.ar, si.color)));
-  if (isConvertKind(t.kind) && t.fromAsset && t.toAsset) {
-    wrap.append(detailRow('حوّلت من', fmt2(t.fromAmount) + ' ' + t.fromAsset));
-    wrap.append(detailRow('إلى', fmt2(t.toAmount) + ' ' + t.toAsset));
-    wrap.append(detailRow('قيمة USDT', fmt2(t.amount) + ' USDT'));
-  } else {
-    wrap.append(detailRow('الكمية', fmt2(t.amount) + ' ' + (t.coin || '')));
-  }
-  if (t.counterPart) wrap.append(detailRow(t.kind === 'pay-in' ? 'من' : 'إلى', t.counterPart));
-  if (isPay && t.orderType) wrap.append(detailRow('نوع Pay', t.orderType));
-  if (t.kind === 'withdraw') {
-    wrap.append(detailRow('رسوم الشبكة', fmt2(t.fee) + ' ' + (t.coin || '')));
-    wrap.append(detailRow('الإجمالي المخصوم', fmt2(t.amount + (t.fee || 0)) + ' ' + (t.coin || '')));
-  }
-  if (t.network) wrap.append(detailRow('الشبكة', t.network));
+  const coin = t.coin || '';
+  const conv = isConvertKind(t.kind) && t.fromAsset && t.toAsset;
   const walletLabel = isPay ? (t.walletName || '') : (t.walletType != null ? WALLET_AR[t.walletType] : '');
-  if (walletLabel) wrap.append(detailRow('المحفظة', walletLabel));
-  if (t.address) {
-    const addr = document.createElement('span');
-    addr.className = 'mono';
-    addr.textContent = t.address;
-    wrap.append(detailRow('العنوان', addr, { copy: t.address }));
+  $('#mTransferSub').textContent = fmtDTsec(t.time);
+  body.append(detailHero(chip(ki.ar + (coin ? ' ' + coin : ''), ki.color), chip(si.ar, si.color), ki.color,
+    fmt2(t.amount), conv ? 'USDT' : coin, [
+      conv && ['حوّلت من', fmt2(t.fromAmount) + ' ' + t.fromAsset],
+      conv && ['إلى', fmt2(t.toAmount) + ' ' + t.toAsset],
+      t.kind === 'withdraw' && ['رسوم الشبكة', fmt2(t.fee) + ' ' + coin],
+      t.kind === 'withdraw' && ['الإجمالي المخصوم', fmt2(t.amount + (t.fee || 0)) + ' ' + coin],
+      t.usdtValue != null && ['قيمتها بالـUSDT', fmt2(t.usdtValue) + ' USDT'],
+      t.unitPriceOverride != null && ['السعر', fmt2p(t.unitPriceOverride)],
+      t.totalPriceOverride != null && ['المبلغ', fmt0(t.totalPriceOverride)],
+    ]));
+  body.append(detailSection('معلومات الحوالة', [
+    t.counterPart && detailRow(t.kind === 'pay-in' ? 'من' : 'إلى', t.counterPart),
+    isPay && t.orderType && detailRow('نوع Pay', t.orderType),
+    t.network && detailRow('الشبكة', t.network),
+    walletLabel && detailRow('المحفظة', walletLabel),
+    t.address && detailRow('العنوان', mk('span', 'mono', t.address), { copy: t.address }),
+    t.txId && detailRow('معرّف العملية (TxID)', mk('span', 'mono', shortId(t.txId)), { copy: t.txId }),
+    t.completeTime && detailRow('وقت الاكتمال', fmtDTsec(t.completeTime)),
+    detailRow('المصدر', SOURCE_AR[t.source] || t.source || 'من المنصة'),
+  ]));
+  body.append(detailSection('ملاحظاتك', [annotField(t, 'reference', 'transfer'), annotField(t, 'note', 'transfer')], 'd-annots'));
+  if (canEdit()) {
+    body.append(detailSection('أدوات المسؤول', [
+      (String(coin).toUpperCase() !== 'USDT' || t.usdtValue != null) && usdtValueRow(t),
+      t.status === 'COMPLETED' && zeroPointRow(t, 'transfer'),
+      archiveRow(t, 'transfer'),
+    ], 'd-tools'));
   }
-  if (t.txId) {
-    const tx = document.createElement('span');
-    tx.className = 'mono';
-    tx.textContent = shortId(t.txId);
-    wrap.append(detailRow('معرّف العملية (TxID)', tx, { copy: t.txId }));
-  }
-  wrap.append(detailRow('وقت الإنشاء', fmtDTsec(t.time)));
-  if (t.completeTime) wrap.append(detailRow('وقت الاكتمال', fmtDTsec(t.completeTime)));
-  wrap.append(detailRow('المصدر', SOURCE_AR[t.source] || t.source || 'من المنصة'));
-  if (String(t.coin || '').toUpperCase() !== 'USDT' || t.usdtValue != null) wrap.append(usdtValueRow(t));
-  wrap.append(annotDetailRow(t, 'reference', 'transfer', 'الإشاري'));
-  wrap.append(annotDetailRow(t, 'note', 'transfer', 'الملاحظة'));
-  if (t.status === 'COMPLETED') wrap.append(zeroPointRow(t, 'transfer'));
-  if (canEdit()) wrap.append(archiveRow(t, 'transfer'));
-  body.append(wrap);
   openModal('#mTransfer');
+  body.scrollTop = 0;
 }

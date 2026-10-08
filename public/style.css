@@ -322,12 +322,6 @@ th.col-idx { width: 46px; text-align: center; }
   content: '📌'; margin-inline-end: 4px; font-size: 11px;
 }
 
-/* صفوف الأفعال داخل نافذة التفاصيل (تثبيت الباقي، احتساب بالـUSDT، الأرشفة): حقلٌ وزرّان */
-.zero-toggle { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.zero-toggle .num-input { width: 150px; background: var(--surface-2); border-color: var(--border); }
-.zero-toggle input:disabled, .zero-toggle button:disabled { cursor: default; }
-.detail-hint { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.5; }
-
 /* شارات النوع والحالة: نقطة ملونة + نص بلون النص دائمًا */
 .chip { display: inline-flex; align-items: center; gap: 6px; }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -441,8 +435,8 @@ th.col-idx { width: 46px; text-align: center; }
 /* ============ النماذج ============
    حقلٌ واحد الشكل في النوافذ والفلاتر: عنوانه فوقه، وارتفاعه 40px، وإطارٌ يتلوّن عند
    التركيز. القاعدة بلا وزن (:where)، فتغلبها أي فئةٍ أخصّ؛ وحقول التحرير داخل الجدول
-   والتفاصيل (num/note/label-input, detail-annot) مستثناة ولها شكلها. */
-:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input, .detail-annot), select, textarea:not(.detail-annot)) {
+   والبطاقات (num/note/label-input) مستثناة ولها شكلها. */
+:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea) {
   min-height: 40px;
   padding: 8px 12px;
   background-color: var(--surface-2);
@@ -454,10 +448,10 @@ th.col-idx { width: 46px; text-align: center; }
   font-weight: 400;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input, .detail-annot), select, textarea:not(.detail-annot)):hover {
+:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea):hover {
   border-color: rgba(255, 255, 255, 0.2);
 }
-:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input, .detail-annot), select, textarea:not(.detail-annot)):focus-visible {
+:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea):focus-visible {
   outline: none;
   border-color: var(--accent-text);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-text) 22%, transparent);
@@ -480,7 +474,7 @@ th.col-idx { width: 46px; text-align: center; }
 :where(.modal) input[type="number"]::-webkit-inner-spin-button,
 :where(.modal) input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 @media (pointer: coarse) {
-  :where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input, .detail-annot), select) { min-height: 44px; }
+  :where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select) { min-height: 44px; }
 }
 
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; }
@@ -621,28 +615,64 @@ th.col-idx { width: 46px; text-align: center; }
 .dz-compact .dz-title { font-size: 13px; }
 .dz-compact .dz-file { margin: 0; }
 
-/* تفاصيل الطلب */
+/* ============ نافذتا تفاصيل الطلب والحوالة ============
+   ملخّصٌ كبير بحافّةٍ بلون النوع (كبطاقات العمليات)، ثم أقسامٌ بعناوين في إطارات */
+.d-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-inline-start: 3px solid var(--k, var(--accent));
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.d-hero-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--ink); font-size: 13.5px; font-weight: 600; }
+.d-hero-amt { display: flex; align-items: baseline; gap: 8px; }
+.d-hero-amt .num { color: var(--ink); font-size: 30px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.d-hero-amt .unit { color: var(--ink-2); font-size: 14px; }
+.d-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.07); }
+.d-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.d-stat .k { color: var(--muted); font-size: 12px; }
+.d-stat .v { color: var(--ink); font-size: 14.5px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.d-sec { margin-top: 16px; }
+.d-sec-title { margin-bottom: 8px; color: var(--ink); font-size: 13.5px; font-weight: 700; }
+.d-sec > .detail-rows, .d-sec > .d-tools { padding: 0 14px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255, 255, 255, 0.02); }
+.d-tools .dz-row:first-child { border-top: 0; }
+.d-annots { display: flex; flex-direction: column; gap: 12px; }
+.d-annot.saved { border-color: var(--good); box-shadow: 0 0 0 3px rgba(12, 163, 12, 0.18); }
+.d-annot.readonly { background-color: transparent; color: var(--ink-2); }
+.d-num { width: 150px; }
+@media (max-width: 520px) {
+  .d-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .d-num { flex: 1; width: auto; min-width: 0; }
+}
+
+/* صفّ «مفتاح: قيمة» */
 .detail-rows { display: flex; flex-direction: column; }
 .detail-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 9px 2px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  min-height: 44px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .detail-row:last-child { border-bottom: 0; }
 .detail-row .k { color: var(--muted); font-size: 12.5px; flex: none; }
-.detail-row .v { color: var(--ink); font-size: 13.5px; text-align: left; word-break: break-all; }
+.detail-row .v { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--ink); font-size: 13.5px; font-weight: 600; text-align: left; overflow-wrap: anywhere; }
 .copy-btn {
-  background: var(--surface-2);
+  flex: none;
+  padding: 3px 10px;
   border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
   color: var(--ink-2);
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 11px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 400;
   cursor: pointer;
-  margin-inline-start: 6px;
 }
 .copy-btn:hover { color: var(--ink); background: var(--surface-3); }
 
@@ -673,7 +703,6 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .note-input.saved { border-color: var(--good); background: rgba(12, 163, 12, 0.14); }
 .note-input.readonly { background: transparent; color: var(--ink-2); cursor: default; }
 .note-input.readonly::placeholder { opacity: 0.3; }
-.detail-annot.readonly { background: transparent; color: var(--ink-2); }
 
 /* شاشة الصيانة (إيقاف العمل) */
 .maint-screen {
@@ -1174,23 +1203,6 @@ td.editable { padding: 4px 6px; }
 @media (prefers-reduced-motion: reduce) {
   .op-card, .op-tile { transition: none; }
 }
-
-/* حقول التحرير داخل نافذة التفاصيل */
-.detail-annot {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--ink);
-  font: inherit;
-  font-size: 13px;
-  padding: 6px 9px;
-  width: 100%;
-  max-width: 280px;
-  resize: vertical;
-  transition: border-color 0.15s;
-}
-.detail-annot:focus-visible { outline: none; border-color: var(--accent-text); }
-.detail-annot.saved { border-color: var(--good); }
 
 .hint { color: var(--muted); font-size: 12.5px; line-height: 1.8; margin: 0 0 12px; }
 

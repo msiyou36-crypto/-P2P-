@@ -11,14 +11,6 @@ const VIEWS = ['table', 'daily', 'cards', 'tiles'];
 const VIEW_KEY = 'p2pView';
 try { const v = localStorage.getItem(VIEW_KEY); if (VIEWS.includes(v)) state.view = v; } catch {}
 
-/** عنصرٌ بفئةٍ ونصّ */
-function mk(tag, cls, text) {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text != null) n.textContent = text;
-  return n;
-}
-
 function setView(v) {
   if (!VIEWS.includes(v) || v === state.view) return;
   state.view = v;

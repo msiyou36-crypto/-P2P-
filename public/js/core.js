@@ -328,6 +328,13 @@ function hidePasswords(root) { for (const b of root.querySelectorAll('.pw-toggle
 
 /* ============================ عناصر صغيرة ============================ */
 
+/** عنصرٌ بفئةٍ ونصّ */
+function mk(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
 function chip(text, color) {
   const span = document.createElement('span');
   span.className = 'chip';
@@ -350,7 +357,7 @@ function diagLine(cls, text) {
   d.textContent = text;
   return d;
 }
-/** صفّ «مفتاح: قيمة» في نوافذ التفاصيل؛ opts.copy زرّ نسخ، opts.hint سطر شرح */
+/** صفّ «مفتاح: قيمة» في نوافذ التفاصيل؛ opts.copy زرّ نسخ */
 function detailRow(key, value, opts = {}) {
   const row = document.createElement('div');
   row.className = 'detail-row';
@@ -370,12 +377,6 @@ function detailRow(key, value, opts = {}) {
       catch { toast('تعذّر النسخ', 'err'); }
     });
     v.append(btn);
-  }
-  if (opts.hint) {
-    const h = document.createElement('span');
-    h.className = 'detail-hint';
-    h.textContent = opts.hint;
-    v.append(h);
   }
   row.append(k, v);
   return row;
