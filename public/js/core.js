@@ -429,7 +429,23 @@ async function openStream(path, body) {
 
 /* ============================ النوافذ والتنبيهات ============================ */
 
-function openModal(id) { $(id).classList.remove('hidden'); }
+function openModal(id) {
+  $(id).classList.remove('hidden');
+  requestAnimationFrame(() => $$(id + ' .modal-body').forEach(updateScrollHint));
+}
+/* النوافذ بلا شريط تمرير ظاهر: تُصمَّم لتظهر كاملة، فإن زاد محتواها عن الشاشة (الهاتف، أو
+   نتيجة فحصٍ طويلة) تلاشى طرفها السفلي إشارةً إلى أن تحته المزيد، ويُمرَّر بالعجلة أو اللمس */
+function updateScrollHint(body) {
+  body.classList.toggle('has-more', body.scrollTop + body.clientHeight < body.scrollHeight - 4);
+}
+function wireScrollHints() {
+  for (const body of $$('.modal-body')) {
+    const upd = () => updateScrollHint(body);
+    body.addEventListener('scroll', upd, { passive: true });
+    new MutationObserver(() => requestAnimationFrame(upd)).observe(body, { childList: true, subtree: true });
+  }
+  window.addEventListener('resize', () => $$('.backdrop:not(.hidden) .modal-body').forEach(updateScrollHint));
+}
 function closeModal(id) { $(id).classList.add('hidden'); }
 function closeAllModals() { $$('.backdrop').forEach((b) => b.classList.add('hidden')); }
 

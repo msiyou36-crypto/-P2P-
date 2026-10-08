@@ -352,7 +352,7 @@ th.col-idx { width: 46px; text-align: center; }
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: max(16px, 5vh) 16px 16px;
+  padding: max(16px, 3vh) 16px 16px;
   background: rgba(0, 0, 0, 0.62);
 }
 .modal {
@@ -360,8 +360,8 @@ th.col-idx { width: 46px; text-align: center; }
   flex-direction: column;
   width: 100%;
   max-width: 560px;
-  max-height: calc(100vh - max(16px, 5vh) - 16px);
-  max-height: calc(100dvh - max(16px, 5vh) - 16px);
+  max-height: calc(100vh - max(16px, 3vh) - 16px);
+  max-height: calc(100dvh - max(16px, 3vh) - 16px);
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -372,9 +372,11 @@ th.col-idx { width: 46px; text-align: center; }
 @keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(0.99); } }
 @keyframes sheet-in { from { opacity: 0.6; transform: translateY(32px); } }
 .modal.small { max-width: 420px; }
-.modal.wide { max-width: 780px; }
+.modal.mid { max-width: 680px; }
+.modal.wide { max-width: 800px; }
+.modal.xl { max-width: 960px; }
 
-.modal-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+.modal-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
 .mh-icon {
   flex: none;
   display: grid;
@@ -409,8 +411,16 @@ th.col-idx { width: 46px; text-align: center; }
 .modal-head .x:hover { background: var(--surface-2); color: var(--ink); }
 .modal-head .x:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
 .modal-head .x .ic { width: 18px; height: 18px; }
-.modal-body { flex: 1 1 auto; min-height: 0; padding: 18px; overflow-y: auto; overscroll-behavior: contain; }
-.modal-foot { flex: none; display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
+.modal-body { flex: 1 1 auto; min-height: 0; padding: 16px 18px; overflow-y: auto; overscroll-behavior: contain; }
+/* بلا شريط تمرير ظاهر: النوافذ مصمَّمة لتظهر كاملة، وما زاد (الهاتف، نتيجة فحصٍ طويلة) يُمرَّر
+   بالعجلة أو اللمس ويتلاشى طرفه السفلي إشارةً إليه (has-more من js/core.js) */
+.modal-body, .log-wrap, .diag-result { scrollbar-width: none; }
+.modal-body::-webkit-scrollbar, .log-wrap::-webkit-scrollbar, .diag-result::-webkit-scrollbar { display: none; }
+.modal-body.has-more {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent);
+}
+.modal-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
 .modal-foot .btn { min-height: 40px; padding: 0 18px; }
 
 /* نافذة التأكيد: أيقونة تحذير بجانب السؤال */
@@ -479,7 +489,14 @@ th.col-idx { width: 46px; text-align: center; }
 
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; }
 .form-grid .full { grid-column: 1 / -1; }
+.form-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.form-grid.one-col { grid-template-columns: minmax(0, 1fr); }
+.form-grid .span-2 { grid-column: span 2; }
 @media (max-width: 520px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) {
+  .form-grid.cols-3 { grid-template-columns: minmax(0, 1fr); }
+  .form-grid .span-2 { grid-column: auto; }
+}
 
 /* الحقل: عنوانٌ فوقه، ثم الحقل، ثم سطر شرحٍ اختياري */
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--ink-2); font-size: 12.5px; font-weight: 600; }
@@ -523,8 +540,36 @@ th.col-idx { width: 46px; text-align: center; }
 @media (pointer: coarse) { .input-wrap { min-height: 44px; } .input-wrap > input { min-height: 42px; } }
 
 /* أقسام النموذج: عنوانٌ صغير وخطٌّ فاصل بين القسم والذي يليه */
-.f-section + .f-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
-.f-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; color: var(--ink); font-size: 13.5px; font-weight: 700; }
+.f-section + .f-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.f-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; color: var(--ink); font-size: 13.5px; font-weight: 700; }
+
+/* الإعدادات: عمودان (المفتاح | المزامنة) بخطٍّ فاصل، وعمودٌ واحد على الشاشة الضيقة */
+.set-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+.set-grid > .f-section + .f-section { margin-top: 0; padding-top: 0; border-top: 0; padding-inline-start: 24px; border-inline-start: 1px solid var(--border); }
+@media (max-width: 760px) {
+  .set-grid { grid-template-columns: minmax(0, 1fr); }
+  .set-grid > .f-section + .f-section { margin-top: 14px; padding-top: 14px; padding-inline-start: 0; border-top: 1px solid var(--border); border-inline-start: 0; }
+}
+/* زرّ «منطقة الخطر» في الإعدادات: يفتح نافذتها الخاصة */
+.danger-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--critical) 32%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--critical) 4%, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: right;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.danger-link:hover { background: color-mix(in srgb, var(--critical) 9%, transparent); border-color: color-mix(in srgb, var(--critical) 50%, transparent); }
+.danger-link:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.danger-link .dzs-chev .ic { transform: rotate(90deg); }   /* سهمٌ نحو اليسار: «إلى نافذةٍ أخرى» */
 
 /* ملاحظةٌ بأيقونة (أمان المفاتيح في الإعدادات) */
 .callout {
@@ -544,7 +589,7 @@ th.col-idx { width: 46px; text-align: center; }
 .callout b { color: var(--ink); }
 
 /* النوع في الإضافة اليدوية: زرّان كبيران بلون البيع والشراء */
-.type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
+.type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
 .type-toggle label { position: relative; cursor: pointer; }
 .type-toggle input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .type-toggle span {
@@ -635,7 +680,10 @@ th.col-idx { width: 46px; text-align: center; }
 .d-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .d-stat .k { color: var(--muted); font-size: 12px; }
 .d-stat .v { color: var(--ink); font-size: 14.5px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.d-sec { margin-top: 16px; }
+/* عمودان على الشاشة العريضة: الملخّص والمعلومات | ملاحظاتك وأدوات المسؤول */
+.d-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px 20px; align-items: start; }
+.d-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (min-width: 900px) { .d-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .d-sec-title { margin-bottom: 8px; color: var(--ink); font-size: 13.5px; font-weight: 700; }
 .d-sec > .detail-rows, .d-sec > .d-tools { padding: 0 14px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255, 255, 255, 0.02); }
 .d-tools .dz-row:first-child { border-top: 0; }
@@ -655,10 +703,11 @@ th.col-idx { width: 46px; text-align: center; }
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  min-height: 44px;
-  padding: 9px 0;
+  min-height: 40px;
+  padding: 7px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
+@media (pointer: coarse) { .detail-row { min-height: 44px; } }
 .detail-row:last-child { border-bottom: 0; }
 .detail-row .k { color: var(--muted); font-size: 12.5px; flex: none; }
 .detail-row .v { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--ink); font-size: 13.5px; font-weight: 600; text-align: left; overflow-wrap: anywhere; }
@@ -734,11 +783,15 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .maint-link { text-decoration: none; }
 .maint-link, .maint-box .btn { min-width: 180px; }
 
-/* نافذة المزامنة: مربّعات اختيار ما يُجلب */
-#mSync .modal { max-width: 500px; }
-.sync-kinds { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 12px; }
+/* نافذة المزامنة: مربّعات اختيار ما يُجلب — عمودان على الشاشة العريضة فتظهر كلها بلا تمرير */
+.sync-kinds { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 10px; }
+@media (min-width: 641px) {
+  .sync-kinds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .sync-kinds .sync-kind { flex-wrap: wrap; align-content: flex-start; }
+  .sync-kinds .sk-last { width: 100%; padding-inline-start: 28px; }
+}
 .sync-kind {
-  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  display: flex; align-items: center; gap: 4px 10px; padding: 8px 12px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
@@ -749,6 +802,7 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .sk-hint { color: var(--muted); font-size: 12px; }
 .sk-last { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 .sync-all { background: transparent; }
+.sync-kind + .hint, .sync-kinds + .hint { margin: 0; }
 @media (max-width: 520px) {
   .sync-kind { flex-wrap: wrap; }
   .sk-last { width: 100%; padding-inline-start: 28px; }
@@ -776,9 +830,14 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .archive-bar b { color: var(--ink); }
 
 /* ============ نافذة فحص المزامنة: بطاقةٌ لكل أداة، والنتيجة أسفلها ============ */
-.tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+/* ثلاث بطاقاتٍ في الصف (والاستعادة بعرض اثنتين) فتظهر الأدوات كلها بلا تمرير */
+.tool-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .tool { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: rgba(255, 255, 255, 0.02); }
-.tool-wide { grid-column: 1 / -1; }
+.tool-wide { grid-column: span 2; }
+@media (max-width: 900px) {
+  .tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tool-wide { grid-column: 1 / -1; }
+}
 .tool-head { display: flex; align-items: center; gap: 10px; }
 .tool-icon { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-text); }
 .tool-icon .ic { width: 17px; height: 17px; }
@@ -787,7 +846,7 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .tool-row { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; }
 .tool-row:has(.dropzone) { align-items: center; }
 .tool-row .field { flex: 1 1 130px; max-width: 210px; }
-@media (max-width: 720px) { .tool-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) { .tool-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* النتيجة: رسائل (نجاح/تنبيه/شرح) وجداول وقوائم اختيار */
 .diag-result { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); overflow-x: auto; }
@@ -869,7 +928,9 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .sw-text span { color: var(--muted); font-size: 12px; }
 
 /* ============ سجل الدخول ============ */
-.log-wrap { max-height: min(60vh, 560px); overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
+.log-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+.log-pager { display: flex; align-items: center; gap: 10px; margin-inline-start: auto; }
+.log-pager .sub { font-variant-numeric: tabular-nums; }
 .log-table { min-width: 560px; }
 .log-table th { z-index: 1; padding: 10px 14px; background: var(--surface-2); font-size: 12px; }
 .log-table td { padding: 10px 14px; font-size: 13px; }
@@ -898,26 +959,21 @@ td.col-note.is-note .note-input { min-width: 200px; }
 .role-ic.r-admin { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .role-ic.r-user2 { color: #7bd88f; background: rgba(123, 216, 143, 0.1); }
 
-/* ============ منطقة الخطر (الإعدادات): مطويّة، وفيها صفٌّ لكل فعل ============ */
-.danger-zone { margin-top: 18px; border: 1px solid color-mix(in srgb, var(--critical) 32%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--critical) 4%, transparent); }
-.danger-zone > summary { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 12px; list-style: none; cursor: pointer; }
-.danger-zone > summary::-webkit-details-marker { display: none; }
-.danger-zone > summary:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+/* ============ صفوف الأفعال: منطقة الخطر وأدوات المسؤول في التفاصيل ============
+   كل صفّ: عنوانٌ وشرحه، وأزراره جانبه (تنزل تحته إن ضاق العرض) */
 .dzs-icon { display: grid; color: #ef6b6b; }
 .dzs-icon .ic { width: 18px; height: 18px; }
 .dzs-text { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .dzs-text b { color: #ef6b6b; font-size: 13.5px; }
 .dzs-text span { color: var(--muted); font-size: 12px; }
-.dzs-chev { display: grid; color: var(--muted); transition: transform 0.2s; }
-.danger-zone[open] .dzs-chev { transform: rotate(180deg); }
-.dz-rows { padding: 0 14px 4px; }
+.dzs-chev { display: grid; color: var(--muted); }
 .dz-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 12px 0; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.dz-rows > .dz-row:first-child { padding-top: 0; border-top: 0; }
 .dz-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
 .dz-text b { color: var(--ink); font-size: 13px; font-weight: 600; }
 .dz-text span { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .dz-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .dz-actions input { width: auto; min-height: 38px; }
-@media (prefers-reduced-motion: reduce) { .dzs-chev { transition: none; } }
 
 /* خانة تعديل السعر/المبلغ داخل الجدول */
 td.editable { padding: 4px 6px; }

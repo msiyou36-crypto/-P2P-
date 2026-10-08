@@ -689,35 +689,52 @@ function openChangePass() {
   openModal('#mChangePass');
 }
 
-/* سجل الدخول: الدور، وما حدث (دخول، أو ما يُثقل على المنصة: مزامنة وفحص وجلب يوم)، والوقت، والعنوان */
+/* سجل الدخول: الدور، وما حدث (دخول، أو ما يُثقل على المنصة: مزامنة وفحص وجلب يوم)، والوقت،
+   والعنوان — في صفحاتٍ بقدر ارتفاع الشاشة بدل التمرير */
 const LOG_KINDS = { sync: ['refresh', 'مزامنة'], scan: ['search', 'فحص'], day: ['calendar', 'جلب يوم'] };
-async function openLoginLog() {
+let logEvents = [];
+let logPage = 0;
+const logPageSize = () => Math.max(5, Math.floor((window.innerHeight - 270) / 42));   // ما يتّسع له ارتفاع الشاشة
+function loginLogRow(ev) {
+  const tr = document.createElement('tr');
+  const role = mk('span', 'role-pill r-' + (ev.role || 'user'));
+  role.append(svgIcon(ROLE_SVG[ev.role] || 'user'), ROLE_NAMES[ev.role] || ev.role || '—');
+  const [icon, label] = LOG_KINDS[ev.kind] || ['login', 'دخول'];
+  const what = mk('span', 'ev-chip ev-' + (LOG_KINDS[ev.kind] ? ev.kind : 'login'));
+  what.append(svgIcon(icon, icon === 'login' ? 'flip' : ''),
+    label + (Array.isArray(ev.kinds) ? ' (' + ev.kinds.map(kindLabel).join('، ') + ')' : ''));   // مزامنةٌ لبعض الأنواع
+  for (const el of [role, what]) { const td = document.createElement('td'); td.append(el); tr.append(td); }
+  tdText(tr, ev.time ? fmtDTsec(ev.time) : '—', 'num');
+  tdText(tr, ev.ip || '—', 'mono');
+  return tr;
+}
+function renderLoginLog() {
+  const size = logPageSize();
+  const pages = Math.max(1, Math.ceil(logEvents.length / size));
+  logPage = Math.min(Math.max(logPage, 0), pages - 1);
+  const from = logPage * size;
   const tbody = $('#loginLogBody');
-  const empty = $('#loginLogEmpty');
   tbody.textContent = '';
-  empty.classList.add('hidden');
+  for (const ev of logEvents.slice(from, from + size)) tbody.append(loginLogRow(ev));
+  $('#logPager').classList.toggle('hidden', pages < 2);
+  $('#logInfo').textContent = `${fmt0(from + 1)}–${fmt0(Math.min(from + size, logEvents.length))} من ${fmt0(logEvents.length)}`;
+  $('#logNewer').disabled = logPage === 0;
+  $('#logOlder').disabled = logPage >= pages - 1;
+}
+async function openLoginLog() {
+  logEvents = [];
+  logPage = 0;
+  $('#loginLogBody').textContent = '';
+  $('#loginLogEmpty').classList.add('hidden');
+  $('#logPager').classList.add('hidden');
   openModal('#mLoginLog');
   try {
     const j = await api('/api/auth/log');
-    const events = j.events || [];
-    empty.classList.toggle('hidden', events.length > 0);
-    for (const ev of events) {
-      const tr = document.createElement('tr');
-      const role = document.createElement('span');
-      role.className = 'role-pill r-' + (ev.role || 'user');
-      role.append(svgIcon(ROLE_SVG[ev.role] || 'user'), ROLE_NAMES[ev.role] || ev.role || '—');
-      const [icon, label] = LOG_KINDS[ev.kind] || ['login', 'دخول'];
-      const what = document.createElement('span');
-      what.className = 'ev-chip ev-' + (LOG_KINDS[ev.kind] ? ev.kind : 'login');
-      what.append(svgIcon(icon, icon === 'login' ? 'flip' : ''),
-        label + (Array.isArray(ev.kinds) ? ' (' + ev.kinds.map(kindLabel).join('، ') + ')' : ''));   // مزامنةٌ لبعض الأنواع
-      for (const el of [role, what]) { const td = document.createElement('td'); td.append(el); tr.append(td); }
-      tdText(tr, ev.time ? fmtDTsec(ev.time) : '—', 'num');
-      tdText(tr, ev.ip || '—', 'mono');
-      tbody.append(tr);
-    }
+    logEvents = j.events || [];
+    $('#loginLogEmpty').classList.toggle('hidden', logEvents.length > 0);
+    renderLoginLog();
   } catch (e) {
-    empty.classList.remove('hidden');
+    $('#loginLogEmpty').classList.remove('hidden');
     toast(e.message, 'err');
   }
 }

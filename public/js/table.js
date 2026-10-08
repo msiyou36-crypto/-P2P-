@@ -250,6 +250,15 @@ function detailHero(typeChip, statusChip, color, amount, unit, stats) {
   }
   return hero;
 }
+/** عمودان على الشاشة العريضة (الملخّص والمعلومات | ملاحظاتك وأدوات المسؤول) فتظهر النافذة
+    كاملةً بلا تمرير، وعمودٌ واحد على الهاتف */
+function detailColumns(body) {
+  const grid = mk('div', 'd-grid');
+  const a = mk('div', 'd-col'), b = mk('div', 'd-col');
+  grid.append(a, b);
+  body.append(grid);
+  return [a, b];
+}
 /** قسمٌ بعنوان؛ محتواه صفوفٌ في إطار (الفارغ منها يُترك) */
 function detailSection(title, items, cls) {
   const sec = mk('section', 'd-sec');
@@ -327,8 +336,8 @@ function zeroPointRow(entity, kind) {
     renderAll();
   };
   return numberActionRow('تثبيت الباقي',
-    'اكتب رصيد USDT الحقيقي بعد هذه العملية (الفوري + التمويل معًا)، فيُحسب العمود كلّه منها — ما بعدها بالجمع وما قبلها بالطرح. اكتب صفرًا إن كنت أفرغت محفظتك بعدها.',
-    cur, 'مثلًا 1250.75', ['تثبيت', 'إلغاء التثبيت'],
+    'رصيدك الحقيقي من USDT بعد هذه العملية (الفوري + التمويل معًا) — يُحسب منه عمود «الباقي» كلّه: ما بعدها بالجمع وما قبلها بالطرح.',
+    cur, 'مثلًا 1250.75 أو 0', ['تثبيت', 'إلغاء التثبيت'],
     async (v) => { await send(v); closeAllModals(); toast(`ثُبِّت الرصيد على ${fmt2(v)} USDT — أُعيد حساب العمود ✓`); },
     async () => { await send(null); closeAllModals(); toast('أُلغي التثبيت — أُعيد حساب العمود'); });
 }
@@ -341,7 +350,7 @@ function usdtValueRow(t) {
     renderAll();
   };
   return numberActionRow('احتساب بالـUSDT',
-    `هذه العملية بعملة ${t.coin || '—'}، فلا تُغيّر رصيد USDT ولا تدخل «الباقي». اكتب قيمتها بالـUSDT لتُحتسب — وتصير عملتها USDT في الجدول. احذر الازدواج إن كنت قد حوّلت الـUSDT إلى هذه العملة أصلًا، فذلك التحويل خصمها مرّة.`,
+    `عملتها ${t.coin || '—'} فلا تدخل «الباقي». اكتب قيمتها بالـUSDT لتُحتسب — واحذر الازدواج إن كنت حوّلت الـUSDT إليها أصلًا.`,
     t.usdtValue != null ? t.usdtValue : null, 'مثلًا 309.38743608', ['احتسب', 'لا تحتسب'],
     async (v) => { await send(v); closeAllModals(); toast(`احتُسبت بـ ${fmt2(v)} USDT ✓`); },
     async () => { await send(null); closeAllModals(); toast('لم تعد تُحتسب في «الباقي»'); });
@@ -363,8 +372,8 @@ function archiveRow(entity, kind) {
   });
   return toolRow('الأرشيف', on
     ? 'هذه العملية في الأرشيف: خارج الجدول وخارج الحساب. أرجعها متى شئت.'
-    : 'تُخرجها من الجدول ومن الحساب معًا: لا تدخل الأرقام ولا «الباقي من USDT» وكأنها لم تكن، والسجلّ محفوظ فتُرجعها متى شئت.'
-      + (kind === 'order' ? ' للحذف النهائي زرّ «حذف الطلب» أسفل النافذة.' : ''), btn);
+    : 'تُخرجها من الجدول ومن الحساب معًا، والسجلّ محفوظ فتُرجعها متى شئت.'
+      + (kind === 'order' ? ' وللحذف النهائي «حذف الطلب».' : ''), btn);
 }
 
 /** نافذة تفاصيل العملية (طلبًا كانت أو حوالة) */
@@ -380,23 +389,24 @@ function openDetails(o) {
   const inFiat = (v) => v + (fiat ? ' ' + fiat : '');
   const fee = effComm(o);
   $('#mDetailsSub').textContent = fmtDTsec(o.createTime);
+  const [colA, colB] = detailColumns(body);
   // المبلغ الكبير شاملٌ العمولة (ما خرج من محفظتك في البيع)، والمحرَّر بعدها في الأرقام تحته
-  body.append(detailHero(chip(ti.ar + ' ' + o.asset, ti.color), chip(si.ar, si.color), ti.color,
+  colA.append(detailHero(chip(ti.ar + ' ' + o.asset, ti.color), chip(si.ar, si.color), ti.color,
     fmt2(o.amount + fee), o.asset, [
       ['السعر', inFiat(fmt2p(effUnitPrice(o)))],
       ['المبلغ', inFiat(fmt0(effTotalPrice(o)))],
       fee > 0 && ['الرسوم', fmt2(fee) + ' ' + o.asset],
       fee > 0 && ['المُحرَّرة', fmt2(o.amount) + ' ' + o.asset],
     ]));
-  body.append(detailSection('معلومات الطلب', [
+  colA.append(detailSection('معلومات الطلب', [
     detailRow('الطرف الآخر', o.counterPart || '—'),
     o.advertisementRole && detailRow('دورك في الطلب', o.advertisementRole === 'MAKER' ? 'معلن (Maker)' : 'منفّذ (Taker)'),
     detailRow('رقم الطلب', mk('span', 'mono', o.orderNumber), { copy: o.orderNumber }),
     detailRow('المصدر', SOURCE_AR[o.source] || o.source),
   ]));
-  body.append(detailSection('ملاحظاتك', [annotField(o, 'reference', 'order'), annotField(o, 'note', 'order')], 'd-annots'));
+  colB.append(detailSection('ملاحظاتك', [annotField(o, 'reference', 'order'), annotField(o, 'note', 'order')], 'd-annots'));
   if (canEdit()) {
-    body.append(detailSection('أدوات المسؤول', [
+    colB.append(detailSection('أدوات المسؤول', [
       o.orderStatus === 'COMPLETED' && zeroPointRow(o, 'order'),
       archiveRow(o, 'order'),
     ], 'd-tools'));
@@ -415,7 +425,8 @@ function openTransferDetails(t) {
   const conv = isConvertKind(t.kind) && t.fromAsset && t.toAsset;
   const walletLabel = isPay ? (t.walletName || '') : (t.walletType != null ? WALLET_AR[t.walletType] : '');
   $('#mTransferSub').textContent = fmtDTsec(t.time);
-  body.append(detailHero(chip(ki.ar + (coin ? ' ' + coin : ''), ki.color), chip(si.ar, si.color), ki.color,
+  const [colA, colB] = detailColumns(body);
+  colA.append(detailHero(chip(ki.ar + (coin ? ' ' + coin : ''), ki.color), chip(si.ar, si.color), ki.color,
     fmt2(t.amount), conv ? 'USDT' : coin, [
       conv && ['حوّلت من', fmt2(t.fromAmount) + ' ' + t.fromAsset],
       conv && ['إلى', fmt2(t.toAmount) + ' ' + t.toAsset],
@@ -425,7 +436,7 @@ function openTransferDetails(t) {
       t.unitPriceOverride != null && ['السعر', fmt2p(t.unitPriceOverride)],
       t.totalPriceOverride != null && ['المبلغ', fmt0(t.totalPriceOverride)],
     ]));
-  body.append(detailSection('معلومات الحوالة', [
+  colA.append(detailSection('معلومات الحوالة', [
     t.counterPart && detailRow(t.kind === 'pay-in' ? 'من' : 'إلى', t.counterPart),
     isPay && t.orderType && detailRow('نوع Pay', t.orderType),
     t.network && detailRow('الشبكة', t.network),
@@ -435,9 +446,9 @@ function openTransferDetails(t) {
     t.completeTime && detailRow('وقت الاكتمال', fmtDTsec(t.completeTime)),
     detailRow('المصدر', SOURCE_AR[t.source] || t.source || 'من المنصة'),
   ]));
-  body.append(detailSection('ملاحظاتك', [annotField(t, 'reference', 'transfer'), annotField(t, 'note', 'transfer')], 'd-annots'));
+  colB.append(detailSection('ملاحظاتك', [annotField(t, 'reference', 'transfer'), annotField(t, 'note', 'transfer')], 'd-annots'));
   if (canEdit()) {
-    body.append(detailSection('أدوات المسؤول', [
+    colB.append(detailSection('أدوات المسؤول', [
       (String(coin).toUpperCase() !== 'USDT' || t.usdtValue != null) && usdtValueRow(t),
       t.status === 'COMPLETED' && zeroPointRow(t, 'transfer'),
       archiveRow(t, 'transfer'),

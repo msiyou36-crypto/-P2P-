@@ -35,7 +35,8 @@ function confirmThen(id, message, fn, done) {
 }
 
 function wireEvents() {
-  decorateIcons();   // أيقونات الأزرار والقائمة الثابتة في الصفحة (data-icon)
+  decorateIcons();     // أيقونات الأزرار والقائمة الثابتة في الصفحة (data-icon)
+  wireScrollHints();   // النوافذ بلا شريط تمرير: تلاشٍ أسفلها إن كان تحتها المزيد
 
   // --- تسجيل الدخول ---
   $('#setupForm').addEventListener('submit', doSetup);
@@ -122,6 +123,8 @@ function wireEvents() {
   menuAction('#btnSettings', openSettings);
   menuAction('#btnChangePass', openChangePass);
   menuAction('#btnLoginLog', openLoginLog);
+  $('#logNewer').addEventListener('click', () => { logPage--; renderLoginLog(); });
+  $('#logOlder').addEventListener('click', () => { logPage++; renderLoginLog(); });
   menuAction('#btnLogout', doLogout);
   $('#btnExportXlsx').addEventListener('click', exportXlsx);
   $('#btnRefreshBal').addEventListener('click', refreshBalance);
@@ -150,6 +153,9 @@ function wireEvents() {
 
   // --- الإعدادات وكلمات السر ومنطقة الخطر ---
   wirePwToggles();   // زرّ العين بجانب كل حقل كلمة سر
+  // منطقة الخطر نافذةٌ فوق الإعدادات، و«رجوع» يغلقها فتبقى الإعدادات كما تركتها
+  $('#btnOpenDanger').addEventListener('click', () => openModal('#mDanger'));
+  $('#btnDangerBack').addEventListener('click', () => closeModal('#mDanger'));
   $('#btnSaveSettings').addEventListener('click', saveSettings);
   $('#btnSavePass').addEventListener('click', savePasswords);
   $('#btnArchiveBefore').addEventListener('click', () => archiveBefore(false));

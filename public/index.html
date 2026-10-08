@@ -302,7 +302,7 @@
 
 <!-- نافذة المزامنة: اختيار ما يُجلب من المنصة (تُملأ المربّعات من js/sync.js) -->
 <div class="backdrop hidden" id="mSync">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mSyncTitle">
+  <div class="modal mid" role="dialog" aria-modal="true" aria-labelledby="mSyncTitle">
     <div class="modal-head">
       <span class="mh-icon" data-icon="refresh" aria-hidden="true"></span>
       <div class="mh-text"><h3 id="mSyncTitle">المزامنة</h3><p class="mh-sub">اختر ما تجلبه من المنصة — اختيارك يُحفظ للمرّة القادمة</p></div>
@@ -311,7 +311,7 @@
     <div class="modal-body">
       <label class="sync-kind sync-all"><input type="checkbox" id="syncAll"><span class="sk-text"><span class="sk-label">الكل</span></span></label>
       <div class="sync-kinds" id="syncKinds"></div>
-      <p class="hint">كل عملية تُوضع في مكانها بتاريخها مهما تأخّر جلبها، ويُعاد حساب «الباقي من USDT» تلقائيًا. ونوعٌ تتركه بلا مزامنةٍ مدةً طويلة قد يُظهر نقصًا في «الباقي» حتى تُزامنه.</p>
+      <p class="hint">كل عملية تُوضع في مكانها بتاريخها ويُعاد حساب «الباقي» تلقائيًا؛ ونوعٌ تتركه طويلًا بلا مزامنة قد يُظهر نقصًا فيه.</p>
     </div>
     <div class="modal-foot">
       <button class="btn accent" id="btnSyncStart" data-icon="refresh"><span class="lbl">زامن الكل</span></button>
@@ -322,7 +322,7 @@
 
 <!-- نافذة تفاصيل الطلب -->
 <div class="backdrop hidden" id="mDetails">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mDetailsTitle">
+  <div class="modal xl" role="dialog" aria-modal="true" aria-labelledby="mDetailsTitle">
     <div class="modal-head">
       <span class="mh-icon" data-icon="receipt" aria-hidden="true"></span>
       <div class="mh-text"><h3 id="mDetailsTitle">تفاصيل الطلب</h3><p class="mh-sub" id="mDetailsSub"></p></div>
@@ -338,7 +338,7 @@
 
 <!-- نافذة تفاصيل الحوالة -->
 <div class="backdrop hidden" id="mTransfer">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTransferTitle">
+  <div class="modal xl" role="dialog" aria-modal="true" aria-labelledby="mTransferTitle">
     <div class="modal-head">
       <span class="mh-icon" data-icon="swap" aria-hidden="true"></span>
       <div class="mh-text"><h3 id="mTransferTitle">تفاصيل الحوالة</h3><p class="mh-sub" id="mTransferSub"></p></div>
@@ -353,7 +353,7 @@
 
 <!-- نافذة إضافة يدوية: النوع، ثم المبالغ، ثم التفاصيل، ثم ما هو للمرجع -->
 <div class="backdrop hidden" id="mAdd">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mAddTitle">
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="mAddTitle">
     <div class="modal-head">
       <span class="mh-icon" data-icon="plus" aria-hidden="true"></span>
       <div class="mh-text"><h3 id="mAddTitle">إضافة طلب يدويًا</h3><p class="mh-sub">طلب P2P لم يصل من المنصة — يُضاف للسجل ويدخل في الحساب</p></div>
@@ -366,9 +366,10 @@
           <label class="tt-buy"><input type="radio" name="tradeType" value="BUY"><span data-icon="down">شراء</span></label>
         </div>
 
+        <!-- ثلاثة حقولٍ في الصف، فتظهر النافذة كاملةً بلا تمرير -->
         <div class="f-section">
           <h4 class="f-title">المبالغ</h4>
-          <div class="form-grid">
+          <div class="form-grid cols-3">
             <label class="field">الكمية
               <span class="input-wrap"><input type="number" name="amount" step="any" min="0" inputmode="decimal" required placeholder="مثال: 285.15"><span class="unit">USDT</span></span>
             </label>
@@ -377,20 +378,19 @@
             </label>
             <label class="field">المبلغ
               <span class="input-wrap"><input type="number" name="totalPrice" step="any" min="0" inputmode="decimal" placeholder="يُحسب تلقائيًا"><span class="unit fiat-unit">ج.س</span></span>
-              <span class="f-hint">الكمية × السعر، ما لم تكتبه بنفسك</span>
-            </label>
-            <label class="field">العملة المحلية
-              <select name="fiat">
-                <option value="SDG">جنيه سوداني (ج.س)</option>
-                <option value="EGP">جنيه مصري (ج.م)</option>
-              </select>
             </label>
           </div>
         </div>
 
         <div class="f-section">
           <h4 class="f-title">التفاصيل</h4>
-          <div class="form-grid">
+          <div class="form-grid cols-3">
+            <label class="field">العملة المحلية
+              <select name="fiat">
+                <option value="SDG">جنيه سوداني (ج.س)</option>
+                <option value="EGP">جنيه مصري (ج.م)</option>
+              </select>
+            </label>
             <label class="field">التاريخ والوقت
               <input type="datetime-local" name="dt" required>
             </label>
@@ -408,20 +408,14 @@
             <label class="field"><span>العمولة <span class="f-opt">اختياري</span></span>
               <span class="input-wrap"><input type="number" name="commission" step="any" min="0" inputmode="decimal" placeholder="0"><span class="unit">USDT</span></span>
             </label>
-          </div>
-        </div>
-
-        <div class="f-section">
-          <h4 class="f-title">للمرجع <span class="f-opt">اختياري</span></h4>
-          <div class="form-grid">
-            <label class="field">رقم الطلب
+            <label class="field"><span>رقم الطلب <span class="f-opt">اختياري</span></span>
               <input type="text" name="orderNumber" dir="ltr" placeholder="يُولَّد تلقائيًا">
             </label>
-            <label class="field">الإشاري
+            <label class="field"><span>الإشاري <span class="f-opt">اختياري</span></span>
               <input type="text" name="reference" placeholder="علامة أو مرجع خاص بك">
             </label>
-            <label class="field full">ملاحظة
-              <textarea name="note" rows="2"></textarea>
+            <label class="field span-2"><span>ملاحظة <span class="f-opt">اختياري</span></span>
+              <textarea name="note" rows="1" placeholder="ملاحظتك على الطلب"></textarea>
             </label>
           </div>
         </div>
@@ -461,14 +455,15 @@
 
 <!-- نافذة الإعدادات: مفتاح Binance، ثم المزامنة، ثم منطقة الخطر مطويّة -->
 <div class="backdrop hidden" id="mSettings">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mSettingsTitle">
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="mSettingsTitle">
     <div class="modal-head">
       <span class="mh-icon" data-icon="sliders" aria-hidden="true"></span>
       <div class="mh-text"><h3 id="mSettingsTitle">الإعدادات</h3><p class="mh-sub">مفتاح Binance وطريقة المزامنة</p></div>
       <button class="x" data-close aria-label="إغلاق" data-icon="x"></button>
     </div>
     <div class="modal-body">
-      <form id="settingsForm" autocomplete="off">
+      <!-- عمودان: المفتاح يمينًا والمزامنة يسارًا، ومنطقة الخطر في نافذةٍ خاصة -->
+      <form id="settingsForm" class="set-grid" autocomplete="off">
         <div class="f-section">
           <h4 class="f-title">مفتاح Binance</h4>
           <div class="callout" data-icon="shield"><div>المفاتيح تُحفظ في قاعدة بيانات هذا النظام وحده، ولا تُرسل لأي جهةٍ غير المنصة نفسها. استخدم مفتاحًا بصلاحية <b>«إتاحة القراءة» فقط</b> — لا تفعّل التداول أو السحب.</div></div>
@@ -485,7 +480,7 @@
 
         <div class="f-section">
           <h4 class="f-title">المزامنة</h4>
-          <div class="form-grid">
+          <div class="form-grid one-col">
             <label class="field">مدى الجلب
               <select name="rangeHours">
                 <option value="1">آخر ساعة</option>
@@ -515,42 +510,57 @@
         </div>
       </form>
 
-      <details class="danger-zone">
-        <summary>
-          <span class="dzs-icon" data-icon="alert" aria-hidden="true"></span>
-          <span class="dzs-text"><b>منطقة الخطر</b><span>مسحٌ وإعادة حساب وأرشفة — افتحها عند الحاجة فقط</span></span>
-          <span class="dzs-chev" data-icon="chev" aria-hidden="true"></span>
-        </summary>
-        <div class="dz-rows">
-          <div class="dz-row">
-            <div class="dz-text"><b>مسح البيانات المحفوظة</b><span>لا يمسّ حسابك في المنصة — تُعيدها المزامنة.</span></div>
-            <div class="dz-actions">
-              <button class="btn danger" id="btnClearAll">مسح جميع الطلبات</button>
-              <button class="btn danger" id="btnClearTransfers">مسح الإيداع والسحب</button>
-            </div>
-          </div>
-          <div class="dz-row">
-            <div class="dz-text"><b>إعادة حساب «الباقي من USDT»</b><span>يُلغي تثبيت أرقام العمود ويحسبها من جديد — لو ثُبِّتت أرقامٌ خاطئة.</span></div>
-            <div class="dz-actions"><button class="btn danger" id="btnUnfreezeBal" data-icon="refresh">إعادة الحساب</button></div>
-          </div>
-          <div class="dz-row">
-            <div class="dz-text"><b>أرشفة ما قبل تاريخ</b><span>يخرج من الجدول ومن «الباقي» ويبقى في الأرشيف، ويُرجَع متى شئت (كلّه هنا، أو صفًّا صفًّا من الأرشيف).</span></div>
-            <div class="dz-actions">
-              <input type="datetime-local" id="archiveBefore" dir="ltr" aria-label="قبل تاريخ">
-              <button class="btn danger" id="btnArchiveBefore" data-icon="archive">أرشفة ما قبله</button>
-              <button class="btn" id="btnUnarchiveBefore" data-icon="undo">إرجاعه</button>
-            </div>
-          </div>
-          <div class="dz-row hidden" id="foreignZone">
-            <div class="dz-text"><b>حذف بيانات الحساب الآخر</b><span>نسخةٌ ميتة بقيت في قاعدة هذا السستم بعد الفصل. احذفها فقط بعد أن ترى بياناته تعمل في سستمه — لا رجعة فيه.</span></div>
-            <div class="dz-actions"><button class="btn danger" id="btnForeignClean" data-icon="trash">حذف بيانات الحساب الآخر</button></div>
-          </div>
-        </div>
-      </details>
+      <button type="button" class="danger-link" id="btnOpenDanger">
+        <span class="dzs-icon" data-icon="alert" aria-hidden="true"></span>
+        <span class="dzs-text"><b>منطقة الخطر</b><span>مسحٌ وإعادة حساب وأرشفة — تُفتح في نافذةٍ خاصة</span></span>
+        <span class="dzs-chev" data-icon="chev" aria-hidden="true"></span>
+      </button>
     </div>
     <div class="modal-foot">
       <button class="btn accent" id="btnSaveSettings" data-icon="check">حفظ الإعدادات</button>
       <button class="btn" data-close>إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- منطقة الخطر (تُفتح من الإعدادات): أفعالٌ تمسّ السجلّ كلّه، وكلٌّ منها يسأل قبل التنفيذ -->
+<div class="backdrop hidden" id="mDanger">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mDangerTitle">
+    <div class="modal-head">
+      <span class="mh-icon is-danger" data-icon="alert" aria-hidden="true"></span>
+      <div class="mh-text"><h3 id="mDangerTitle">منطقة الخطر</h3><p class="mh-sub">مسحٌ وإعادة حساب وأرشفة — كلٌّ منها يسألك قبل التنفيذ</p></div>
+      <button class="x" data-close aria-label="إغلاق" data-icon="x"></button>
+    </div>
+    <div class="modal-body">
+      <div class="dz-rows">
+        <div class="dz-row">
+          <div class="dz-text"><b>مسح البيانات المحفوظة</b><span>لا يمسّ حسابك في المنصة — تُعيدها المزامنة.</span></div>
+          <div class="dz-actions">
+            <button class="btn danger" id="btnClearAll">مسح جميع الطلبات</button>
+            <button class="btn danger" id="btnClearTransfers">مسح الإيداع والسحب</button>
+          </div>
+        </div>
+        <div class="dz-row">
+          <div class="dz-text"><b>إعادة حساب «الباقي من USDT»</b><span>يُلغي تثبيت أرقام العمود ويحسبها من جديد — لو ثُبِّتت أرقامٌ خاطئة.</span></div>
+          <div class="dz-actions"><button class="btn danger" id="btnUnfreezeBal" data-icon="refresh">إعادة الحساب</button></div>
+        </div>
+        <div class="dz-row">
+          <div class="dz-text"><b>أرشفة ما قبل تاريخ</b><span>يخرج من الجدول ومن «الباقي» ويبقى في الأرشيف، ويُرجَع متى شئت (كلّه هنا، أو صفًّا صفًّا من الأرشيف).</span></div>
+          <div class="dz-actions">
+            <input type="datetime-local" id="archiveBefore" dir="ltr" aria-label="قبل تاريخ">
+            <button class="btn danger" id="btnArchiveBefore" data-icon="archive">أرشفة ما قبله</button>
+            <button class="btn" id="btnUnarchiveBefore" data-icon="undo">إرجاعه</button>
+          </div>
+        </div>
+        <div class="dz-row hidden" id="foreignZone">
+          <div class="dz-text"><b>حذف بيانات الحساب الآخر</b><span>نسخةٌ ميتة بقيت في قاعدة هذا السستم بعد الفصل. احذفها فقط بعد أن ترى بياناته تعمل في سستمه — لا رجعة فيه.</span></div>
+          <div class="dz-actions"><button class="btn danger" id="btnForeignClean" data-icon="trash">حذف بيانات الحساب الآخر</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btnDangerBack" data-icon="undo">رجوع إلى الإعدادات</button>
+      <button class="btn" data-close>إغلاق</button>
     </div>
   </div>
 </div>
@@ -614,13 +624,19 @@
     </div>
     <div class="modal-foot">
       <button class="btn" data-close>إغلاق</button>
+      <!-- صفحاتٌ بقدر الشاشة بدل التمرير (js/tools.js) -->
+      <div class="log-pager hidden" id="logPager">
+        <button type="button" class="btn small" id="logNewer">الأحدث</button>
+        <span class="sub" id="logInfo"></span>
+        <button type="button" class="btn small" id="logOlder">الأقدم</button>
+      </div>
     </div>
   </div>
 </div>
 
 <!-- نافذة فحص المزامنة (للمسؤول فقط): كل أداةٍ في بطاقة، والنتيجة أسفلها -->
 <div class="backdrop hidden" id="mDiag">
-  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="mDiagTitle">
+  <div class="modal xl" role="dialog" aria-modal="true" aria-labelledby="mDiagTitle">
     <div class="modal-head">
       <span class="mh-icon" data-icon="activity" aria-hidden="true"></span>
       <div class="mh-text"><h3 id="mDiagTitle">فحص المزامنة</h3><p class="mh-sub">أدواتٌ تسأل المنصة مباشرةً وتقارن ما تُرجعه بالمحفوظ عندك</p></div>
@@ -630,7 +646,7 @@
       <div class="tool-grid">
         <section class="tool">
           <div class="tool-head"><span class="tool-icon" data-icon="list" aria-hidden="true"></span><h4>هل وصلت كل الطلبات؟</h4></div>
-          <p class="tool-desc">يقارن طلبات P2P التي تُرجعها المنصة بالمحفوظ عندك — فتعرف هل المفقود لم يصل من المنصة أصلًا أم وصل ولم يُحفظ.</p>
+          <p class="tool-desc">يقارن ما تُرجعه المنصة من طلبات P2P بالمحفوظ عندك: هل المفقود لم يصل أصلًا أم وصل ولم يُحفظ؟</p>
           <div class="tool-row">
             <label class="field">الفترة
               <span class="input-wrap"><input type="number" id="diagDays" value="3" min="1" max="29" inputmode="numeric" dir="ltr"><span class="unit">يوم</span></span>
@@ -640,7 +656,7 @@
         </section>
         <section class="tool">
           <div class="tool-head"><span class="tool-icon" data-icon="calendar" aria-hidden="true"></span><h4>اجلب يومًا محدّدًا</h4></div>
-          <p class="tool-desc">ينقصك يومٌ بعينه؟ اجلبه وحده — ستة طلبات فقط بدل مزامنةٍ كاملة، فلا تُرهق حصّتك ولا تقترب من الحظر.</p>
+          <p class="tool-desc">ينقصك يومٌ بعينه؟ اجلبه وحده — طلباتٌ قليلة بدل مزامنةٍ كاملة، فلا تقترب من الحظر.</p>
           <div class="tool-row">
             <label class="field">اليوم
               <input type="date" id="diagDay" dir="ltr">
@@ -649,15 +665,8 @@
           </div>
         </section>
         <section class="tool">
-          <div class="tool-head"><span class="tool-icon" data-icon="idcard" aria-hidden="true"></span><h4>صاحب المفتاح (UID)</h4></div>
-          <p class="tool-desc">يعرض معرّف حساب Binance الذي يقرأه مفتاح هذا السستم، فتطابقه مع تطبيق Binance ← الصفحة الشخصية وتتأكّد أنه الحساب المقصود.</p>
-          <div class="tool-row">
-            <button class="btn" id="btnWhoAmI" data-icon="idcard">اعرض المعرّف</button>
-          </div>
-        </section>
-        <section class="tool">
           <div class="tool-head"><span class="tool-icon" data-icon="userx" aria-hidden="true"></span><h4>عمليات لا تخصّ هذا الحساب</h4></div>
-          <p class="tool-desc">يعرض المحفوظ هنا ولم تُرجعه المنصة لمفتاح هذا الحساب (تسرّب من الحساب الآخر) لتحذفه بنفسك — لا يُحذف شيءٌ تلقائيًا، لأن المنصة تُغفل أحيانًا بعض الطلبات.</p>
+          <p class="tool-desc">المحفوظ هنا ولم تُرجعه المنصة لمفتاح هذا الحساب (تسرّب من الآخر) — يُعرض لتحذفه بنفسك، ولا يُحذف شيءٌ تلقائيًا.</p>
           <div class="tool-row">
             <label class="field">الفترة
               <span class="input-wrap"><input type="number" id="foreignDays" value="90" min="1" max="400" inputmode="numeric" dir="ltr"><span class="unit">يوم</span></span>
@@ -666,9 +675,16 @@
             <button class="btn ghost" id="btnForeignUndo" data-icon="undo" title="يُعيد كل ما حُذف في آخر عملية حذف من هذه الأداة">استرجاع آخر حذف</button>
           </div>
         </section>
+        <section class="tool">
+          <div class="tool-head"><span class="tool-icon" data-icon="idcard" aria-hidden="true"></span><h4>صاحب المفتاح (UID)</h4></div>
+          <p class="tool-desc">معرّف حساب Binance الذي يقرأه مفتاح هذا السستم، لتطابقه مع تطبيق Binance ← الصفحة الشخصية.</p>
+          <div class="tool-row">
+            <button class="btn" id="btnWhoAmI" data-icon="idcard">اعرض المعرّف</button>
+          </div>
+        </section>
         <section class="tool tool-wide">
           <div class="tool-head"><span class="tool-icon" data-icon="fileup" aria-hidden="true"></span><h4>الاستعادة من ملف تصدير</h4></div>
-          <p class="tool-desc">حُذفت عمليةٌ بالخطأ؟ ارفع ملف التصدير (Excel أو CSV) الذي أخذته من النظام، فتُعرض صفوفه غير الموجودة الآن وتختار ما يُعاد. الإيداع والسحب تُعيدهما المزامنة.</p>
+          <p class="tool-desc">حُذفت عمليةٌ بالخطأ؟ ارفع ملف التصدير (Excel أو CSV) فتُعرض صفوفه غير الموجودة الآن وتختار ما يُعاد. الإيداع والسحب تُعيدهما المزامنة.</p>
           <div class="tool-row">
             <label class="dropzone dz-compact" id="restoreDrop">
               <input type="file" id="restoreFile" accept=".xlsx,.csv" class="sr-only">
