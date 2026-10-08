@@ -171,10 +171,65 @@ function stopLoginBackground() {
   loginVideoOn = false;
 }
 
-/* داخل التطبيق: فيديو (نحو 25 ميغابايت) على الشاشات العريضة وحدها — على الهاتف خلفية النجوم
-   توفيرًا للبيانات — وفوقه تظليلٌ يُبقي الأرقام واضحة؛ وبندٌ في القائمة يوقفه */
+/* داخل التطبيق: فيديو بثٍّ (HLS من Mux) على الشاشات العريضة وحدها — على الهاتف خلفية النجوم
+   توفيرًا للبيانات — وفوقه تظليلٌ يُبقي الأرقام واضحة؛ وبندٌ في القائمة يوقفه.
+   Safari يشغّل HLS بنفسه؛ وغيره يحتاج hls.js، فتُحمَّل عند الحاجة فقط من jsDelivr بنسخةٍ ثابتة
+   ومعها بصمتها (integrity) فلا يُنفَّذ إلا الملف نفسه. والجودة محدودة بـ720p فلا تُهدر البيانات. */
 const APP_VIDEO_OFF_KEY = 'p2pAppVideoOff';
+const HLS_JS = {
+  src: 'https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.light.min.js',
+  integrity: 'sha256-AlEzLACiFqNdfWkZBE1g2oK3i+s71QrGxmKudKL1R0s=',
+};
 let appVideoOn = false;
+let hlsLib = null;   // وعدٌ واحد بتحميل المكتبة
+function loadHlsLib() {
+  if (window.Hls) return Promise.resolve(window.Hls);
+  if (!hlsLib) {
+    hlsLib = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = HLS_JS.src;
+      s.integrity = HLS_JS.integrity;
+      s.crossOrigin = 'anonymous';
+      s.onload = () => (window.Hls ? resolve(window.Hls) : reject(new Error('hls.js')));
+      s.onerror = () => { hlsLib = null; reject(new Error('hls.js')); };
+      document.head.append(s);
+    });
+  }
+  return hlsLib;
+}
+/** يربط البثّ بعنصر الفيديو مرّةً واحدة؛ false إن تعذّر (فتعود النجوم).
+    hls.js أولًا حيث يتوفّر MSE (Chrome يدّعي أحيانًا دعم HLS ثم يفشل)، والتشغيل المباشر لما لا MSE فيه (iPhone) */
+async function attachAppStream(v, onFail) {
+  if (v.dataset.failed) return false;
+  if (v.dataset.attached) return true;
+  v.dataset.attached = '1';
+  const fail = () => { v.dataset.failed = '1'; onFail(); };
+  if (window.MediaSource || window.ManagedMediaSource) {
+    try {
+      const Hls = await loadHlsLib();
+      if (Hls.isSupported()) {
+        const hls = new Hls({ capLevelToPlayerSize: true, maxBufferLength: 20 });
+        hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+          // أعلى جودةٍ لا تتجاوز 720p: خلفيةٌ مغبّشة تحت تظليل لا تحتاج أكثر
+          let cap = -1;
+          data.levels.forEach((l, i) => { if (l.height <= 720 && (cap < 0 || l.height > data.levels[cap].height)) cap = i; });
+          if (cap >= 0) hls.autoLevelCapping = cap;
+        });
+        hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) { hls.destroy(); fail(); } });
+        hls.loadSource(v.dataset.src);
+        hls.attachMedia(v);
+        return true;
+      }
+    } catch {}
+  }
+  if (v.canPlayType('application/vnd.apple.mpegurl')) {
+    v.addEventListener('error', fail, { once: true });
+    v.src = v.dataset.src;
+    return true;
+  }
+  fail();
+  return false;
+}
 const appVideoPossible = () => {
   const v = $('#appVideo');
   return !!v && !v.dataset.failed && bgVideoAllowed() && window.matchMedia('(min-width: 900px)').matches;
@@ -195,14 +250,14 @@ function appBackgroundFallback() {
   startAppGlitter();
   syncAppVideoItem();
 }
-function startAppBackground() {
+async function startAppBackground() {
   stopGlitter();
   const v = $('#appVideo');
-  if (!appVideoPossible() || prefOff(APP_VIDEO_OFF_KEY) || !attachBgVideo(v, appBackgroundFallback)) { appBackgroundFallback(); return; }
+  if (!appVideoPossible() || prefOff(APP_VIDEO_OFF_KEY)) { appBackgroundFallback(); return; }
   $('#app').classList.add('has-video');
   appVideoOn = true;
-  v.play().catch(() => {});
   syncAppVideoItem();
+  if (await attachAppStream(v, appBackgroundFallback) && appVideoOn) v.play().catch(() => {});
 }
 function stopAppBackground() {
   const v = $('#appVideo');
