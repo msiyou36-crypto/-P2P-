@@ -12,6 +12,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["test/dev-server.js"],
       "port": 3147
+    },
+    {
+      "name": "p3p-test",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["test/dev-server.js", "p3p"],
+      "port": 3149
     }
   ]
 }

@@ -1,9 +1,11 @@
 // خادم تطويري للمعاينة: بيانات عيّنة ومنصّة Binance وهمية — بلا مفاتيح حقيقية ولا إنترنت.
-//   node test/dev-server.js   → http://127.0.0.1:3147
+//   node test/dev-server.js       → سستم P2P على http://127.0.0.1:3147
+//   node test/dev-server.js p3p   → سستم P3P (بلونه) على http://127.0.0.1:3149
 //   كلمات السر: مسؤول test1234 · مستخدم user1234 · مستخدم 2 user2abc
-// المزامنة والرصيد والفحص تعمل على المنصّة الوهمية (منفذ 3148) فيمكن تجربة الواجهة كاملة.
+// المزامنة والرصيد والفحص تعمل على المنصّة الوهمية (المنفذ التالي) فيمكن تجربة الواجهة كاملة.
 'use strict';
-process.env.TEST_PORT = process.env.TEST_PORT || '3147';
+const ACCT = process.argv[2] === 'p3p' ? 'p3p' : 'p2p';
+process.env.TEST_PORT = process.env.TEST_PORT || (ACCT === 'p3p' ? '3149' : '3147');
 
 const fs = require('fs');
 const path = require('path');
@@ -31,10 +33,10 @@ const converts = [{ orderId: 'cvt0', fromAsset: 'USDT', toAsset: 'TRX', fromAmou
 
 (async () => {
   await T.startMock({ orders, deposits, withdraws, pays, converts, page: 50, mode: 'C' });
-  const dir = T.freshDataDir('dev');
-  fs.writeFileSync(path.join(dir, 'config__p2p.json'), JSON.stringify({
-    active: 'p2p', auth: {}, syncQuota: 3,
-    accounts: { p2p: { apiKey: 'demo-key', apiSecret: 'demo-secret', baseUrl: T.MOCK_BASE, rangeHours: 720, lastSync: NOW - 3 * H } },
+  const dir = T.freshDataDir('dev-' + ACCT);
+  fs.writeFileSync(path.join(dir, 'config__' + ACCT + '.json'), JSON.stringify({
+    active: ACCT, auth: {}, syncQuota: 3,
+    accounts: { [ACCT]: { apiKey: 'demo-key', apiSecret: 'demo-secret', baseUrl: T.MOCK_BASE, rangeHours: 720, lastSync: NOW - 3 * H } },
   }, null, 1));
   // عيّنة محفوظة مسبقًا (كما لو زامن المستخدم من قبل): نصف الطلبات والحوالات كلها
   const om = {}, tm = {};
@@ -44,11 +46,11 @@ const converts = [{ orderId: 'cvt0', fromAsset: 'USDT', toAsset: 'TRX', fromAmou
   for (const raw of withdraws) { const t = N.normalizeTransfer(raw, 'withdraw'); tm[t.id] = t; }
   for (const raw of pays) { const t = N.normalizePay(raw); tm[t.id] = t; }
   for (const raw of converts) { const t = N.normalizeConvert(raw); tm[t.id] = t; }
-  fs.writeFileSync(path.join(dir, 'orders__p2p.json'), JSON.stringify(om, null, 1));
-  fs.writeFileSync(path.join(dir, 'transfers__p2p.json'), JSON.stringify(tm, null, 1));
+  fs.writeFileSync(path.join(dir, 'orders__' + ACCT + '.json'), JSON.stringify(om, null, 1));
+  fs.writeFileSync(path.join(dir, 'transfers__' + ACCT + '.json'), JSON.stringify(tm, null, 1));
 
   Object.assign(process.env, {
-    DATA_DIR: dir, ACCOUNT: 'p2p', PORT: process.env.TEST_PORT, HOST: '127.0.0.1',
+    DATA_DIR: dir, ACCOUNT: ACCT, PORT: process.env.TEST_PORT, HOST: '127.0.0.1',
     ADMIN_PASSWORD: T.PASSWORDS.admin, USER_PASSWORD: T.PASSWORDS.user, USER2_PASSWORD: T.PASSWORDS.user2,
   });
   console.log('منصّة وهمية على ' + T.MOCK_BASE + ' · بيانات العيّنة في ' + dir);

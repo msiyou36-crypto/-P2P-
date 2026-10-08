@@ -149,10 +149,7 @@
       '</workbook>';
   }
 
-  // جدول النصوص المشتركة (sharedStrings): نُخزّن كل نص مرّة واحدة ونشير إليه برقم.
-  // هذه هي الطريقة القياسية في Excel (نفس ما يفعله عند حفظ الملف).
-  // ملاحظة: هذا وحده لا يحل خطأ «multiple selections» — الحل الفعلي هو «bookViews»
-  // في workbook.xml أعلاه. أُبقيَت هذه الطريقة لأنها الأقرب لملفات Excel الأصلية.
+  // جدول النصوص المشتركة: كل نصٍّ مرّةً واحدة ويُشار إليه برقم (كما يحفظ Excel)
   function makeSST() {
     const list = [];
     const map = new Map();
@@ -215,8 +212,7 @@
       '<sheetFormatPr defaultRowHeight="15"/>' +
       '<cols>' + cols + '</cols>' +
       '<sheetData>' + body + '</sheetData>' +
-      // بلا «جدول» حقيقي وبلا فلتر تلقائي (كلاهما يسبّب خطأ «multiple selections»).
-      // السبب الجذري الحقيقي للخطأ كان غياب «bookViews» في workbook.xml — أُصلح هناك.
+      // بلا «جدول» ولا فلتر تلقائي: كلاهما يسبّب خطأ «multiple selections» عند النسخ
       '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>' +
       '</worksheet>';
   }
@@ -238,12 +234,7 @@
 
   function download(filename, sheetName, columns, rows) {
     const bytes = build(sheetName, columns, rows);
-    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    downloadBlob(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename);   // js/core.js
   }
 
   window.XLSXMini = { build, download };

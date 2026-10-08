@@ -64,8 +64,9 @@ function renderTiles() {
   const multi = state.filters.fiat === 'all' && fiats.length > 1;
   const sellCount = sells.length + payFiatSales.length;
 
-  const dep = state.filteredTx.filter((t) => t.kind === 'deposit' && t.status === 'COMPLETED' && t.coin === 'USDT');
-  const wd = state.filteredTx.filter((t) => t.kind === 'withdraw' && t.status === 'COMPLETED' && t.coin === 'USDT');
+  const isUsdt = (t) => String(t.coin || '').toUpperCase() === 'USDT';
+  const dep = state.filteredTx.filter((t) => t.kind === 'deposit' && t.status === 'COMPLETED' && isUsdt(t));
+  const wd = state.filteredTx.filter((t) => t.kind === 'withdraw' && t.status === 'COMPLETED' && isUsdt(t));
   const depSum = dep.reduce((s, t) => s + t.amount, 0);
   const wdSum = wd.reduce((s, t) => s + t.amount, 0);
   const nOps = state.filtered.length + state.filteredTx.length;
@@ -105,9 +106,11 @@ function roundedTopRect(x, y, w, h, r) {
   return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
 }
 
-/** يجمّع الطلبات المكتملة في سلال زمنية (يوم/أسبوع/شهر حسب المدى) */
+/** يجمّع الطلبات المكتملة في سلال زمنية (يوم/أسبوع/شهر حسب المدى) على اليوم المحاسبي
+ *  (يبدأ الثانية ليلًا) كالجدول والفلاتر. الحجم شاملٌ العمولة والمبلغ بتعديل المستخدم كبطاقات
+ *  الأرقام؛ وsellAmt (المحرَّرة بلا عمولة) مقامُ متوسط السعر كما فيها */
 function makeBuckets(completed) {
-  if (!completed.length) return { unit: 'day', buckets: [] };
+  if (!completed.length) return [];
   let min = Infinity, max = -Infinity;
   for (const o of completed) {
     if (o.createTime < min) min = o.createTime;
@@ -116,28 +119,27 @@ function makeBuckets(completed) {
   const spanDays = (max - min) / 86400000;
   const unit = spanDays <= 92 ? 'day' : spanDays <= 550 ? 'week' : 'month';
   const keyOf = (t) => {
-    const d = new Date(t);
-    if (unit === 'day') return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const day = bizDayStart(t);
+    if (unit === 'day') return day;
+    const d = new Date(day);
     if (unit === 'week') return new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay()).getTime();
     return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
   };
   const next = (t) => {
     const d = new Date(t);
-    if (unit === 'day') return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+    if (unit === 'day') return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, DAY_CLOSE_H).getTime();
     if (unit === 'week') return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7).getTime();
     return new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
   };
   const labelOf = (t) => {
+    if (unit === 'month') return fmtD(t).slice(0, 7);
     const d = new Date(t);
-    if (unit === 'month') return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
     return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
   };
   const titleOf = (t) => {
-    const d = new Date(t);
-    const iso = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-    if (unit === 'day') return iso;
-    if (unit === 'week') return 'أسبوع يبدأ ' + iso;
-    return 'شهر ' + `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+    if (unit === 'day') return fmtD(t);
+    if (unit === 'week') return 'أسبوع يبدأ ' + fmtD(t);
+    return 'شهر ' + fmtD(t).slice(0, 7);
   };
   const map = new Map();
   const start = keyOf(min), end = keyOf(max);
@@ -147,10 +149,10 @@ function makeBuckets(completed) {
   for (const o of completed) {
     const b = map.get(keyOf(o.createTime));
     if (!b) continue;
-    if (o.tradeType === 'SELL') { b.sell += o.amount; b.sellFiat += o.totalPrice; b.sellAmt += o.amount; }
-    else b.buy += o.amount;
+    if (o.tradeType === 'SELL') { b.sell += grossUSDT(o); b.sellFiat += effTotalPrice(o); b.sellAmt += o.amount || 0; }
+    else b.buy += grossUSDT(o);
   }
-  return { unit, buckets: Array.from(map.values()) };
+  return Array.from(map.values());
 }
 
 /* تلميحة الرسوم */
@@ -219,7 +221,7 @@ function renderVolChart() {
   const el = $('#volChart');
   el.textContent = '';
   const completed = state.filtered.filter((o) => o.orderStatus === 'COMPLETED');
-  const { buckets } = makeBuckets(completed);
+  const buckets = makeBuckets(completed);
   // الرقم في رأس البطاقة: حجم الفترة كلها (بيعًا وشراءً)
   const volume = buckets.reduce((s, b) => s + b.sell + b.buy, 0);
   $('#volTotal').textContent = volume ? fmt2(volume) : '—';
@@ -298,7 +300,7 @@ function renderPriceChart() {
     ? state.filters.fiat
     : (dominantFiat(completedAll.filter((o) => o.tradeType === 'SELL')) || dominantFiat(completedAll));
   const completed = completedAll.filter((o) => fiatCode(o) === useFiat);
-  const { buckets } = makeBuckets(completed);
+  const buckets = makeBuckets(completed);
   const fiat = symForCode(useFiat) || 'العملة';
 
   const pts = [];

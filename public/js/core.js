@@ -1,15 +1,18 @@
 /* سجل حوالات P2P — الواجهة (بلا أي مكتبة)
  * الملفات تُحمَّل بالترتيب في index.html وتتشارك النطاق العام:
- *   core.js     الحالة، التنسيق، الثوابت، الاتصال بالخادم، النوافذ والتنبيهات   (هذا الملف)
- *   balance.js  عمود «الباقي من USDT»: السلسلة والمراسي والتثبيت، وبطاقة الرصيد
- *   session.js  الدخول والأدوار، تحميل البيانات، سمة السستم، وضع الصيانة
- *   filters.js  اليوم المحاسبي والفلاتر وبناء الجدول الموحّد
- *   charts.js   بطاقات الأرقام والرسوم البيانية
- *   table.js    صفّ الجدول وخاناته القابلة للتحرير ونوافذ التفاصيل
- *   views.js    شكل عرض العمليات (جدول، يومي، بطاقات، مربعات) والصفحات والفرز
- *   sync.js     المزامنة وقفل الحظر وقراءة البثّ
- *   tools.js    أدوات المسؤول: الفحص، جلب يوم، الاستعادة، الإضافة، الاستيراد/التصدير، الإعدادات
- *   main.js     ربط الأحداث والبداية
+ *   core.js        الحالة، التنسيق، الثوابت، التخزين، الاتصال بالخادم، النوافذ والتنبيهات   (هذا الملف)
+ *   backgrounds.js الخلفيات المتحركة: فيديو الدخول وفيديو التطبيق والنجوم
+ *   balance.js     عمود «الباقي من USDT»: السلسلة والمراسي والتثبيت، وبطاقة الرصيد
+ *   session.js     الدخول والأدوار، تحميل البيانات، سمة السستم، بوّابة الصيانة
+ *   filters.js     اليوم المحاسبي والفلاتر وبناء الجدول الموحّد
+ *   charts.js      بطاقات الأرقام والرسوم البيانية
+ *   table.js       صفّ الجدول وخاناته القابلة للتحرير ونوافذ التفاصيل
+ *   views.js       شكل عرض العمليات (جدول، يومي، بطاقات، مربعات) والصفحات والفرز
+ *   sync.js        المزامنة وقفل الحظر وقراءة البثّ
+ *   diag.js        نافذة «فحص المزامنة»: الفحص، جلب يوم، صاحب المفتاح، الدخيل، الاستعادة من ملف
+ *   records.js     الإضافة اليدوية، والاستيراد (CSV)، والتصدير (CSV وExcel)
+ *   admin.js       منطقة الخطر، الإعدادات، كلمات السر، سجل الدخول، ضبط الصيانة
+ *   main.js        ربط الأحداث والبداية
  */
 'use strict';
 
@@ -47,8 +50,8 @@ const state = {
   balanceError: null,
   settings: { apiKeyMasked: '', hasSecret: false, baseUrl: '', rangeHours: 720, syncQuota: 3, lastSync: null, lastSyncBy: {} },
   syncQuota: { unlimited: true, quota: 0, used: 0, left: null },
-  account: { active: 'p2p', name: 'حوالات P2P', list: [], locked: false },
-  themeAccent: '#f0b90b',
+  account: { active: 'p2p', name: 'حوالات P2P', locked: false },
+  themeAccent: '#fb923c',
   filters: { range: '1', from: null, to: null, type: 'all', status: 'all', fiat: 'all', q: '' },
   sort: { key: '_t', dir: -1 },
   page: 1,
@@ -62,7 +65,7 @@ const PAGE_SIZE = 50;
 
 /* ============================ تنسيق ============================ */
 
-const nf2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 });
+const nf2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 });   // الكميات: حتى ثماني خانات (دقّة المنصة)
 const nf0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const nfp = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });   // سعر الصرف: خانتان
 const fmt2 = (n) => nf2.format(n || 0);
@@ -75,6 +78,7 @@ function fmtDT(ms) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 function fmtDTsec(ms) { return fmtDT(ms) + ':' + pad2(new Date(ms).getSeconds()); }
+const fmtD = (ms) => fmtDT(ms).slice(0, 10);   // التاريخ وحده «YYYY-MM-DD»
 function compactNum(v) {
   if (v >= 1e6) return nf2.format(v / 1e6) + 'M';
   if (v >= 1e4) return nf0.format(v / 1e3) + 'K';
@@ -228,6 +232,7 @@ const ICONS = {
   sliders: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
   key: '<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>',
   ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
   login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>',
   lock: '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -256,7 +261,7 @@ const ICONS = {
   user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
 };
-/** أيقونة كل دور (الشارة أعلى الصفحة، وسجل الدخول، ونافذة كلمات السر) */
+/** أيقونة كل دور (الشارة أعلى الصفحة وسجل الدخول) */
 const ROLE_SVG = { admin: 'crown', user: 'user', user2: 'pencil' };
 function svgIcon(name, cls) {
   const s = document.createElementNS(SVGNS, 'svg');
@@ -291,7 +296,7 @@ function wireDropzone(zone, onFile) {
     const f = input.files && input.files[0];
     const name = zone.querySelector('.dz-file');
     zone.classList.toggle('has-file', !!f);
-    name.hidden = !f;
+    name.classList.toggle('hidden', !f);
     name.textContent = f ? f.name : '';
     if (f && onFile) onFile(f);
   };
@@ -308,7 +313,7 @@ function resetDropzone(zone) {
   zone.querySelector('input[type="file"]').value = '';
   zone.classList.remove('has-file', 'is-over');
   const name = zone.querySelector('.dz-file');
-  name.hidden = true;
+  name.classList.add('hidden');
   name.textContent = '';
 }
 
@@ -354,43 +359,40 @@ function tdText(tr, text, cls) {
   tr.append(td);
   return td;
 }
-function diagLine(cls, text) {
-  const d = document.createElement('div');
-  d.className = cls;
-  d.textContent = text;
-  return d;
+/** يحفظ ملفًّا مولَّدًا في المتصفح باسمه (التصدير)؛ الرابط المؤقّت يُحرَّر بعد أن يبدأ التنزيل */
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
-/** صفّ «مفتاح: قيمة» في نوافذ التفاصيل؛ opts.copy زرّ نسخ */
-function detailRow(key, value, opts = {}) {
-  const row = document.createElement('div');
-  row.className = 'detail-row';
-  const k = document.createElement('span');
-  k.className = 'k';
-  k.textContent = key;
-  const v = document.createElement('span');
-  v.className = 'v';
-  if (value instanceof Node) v.append(value); else v.textContent = value;
-  if (opts.copy) {
-    const btn = document.createElement('button');
-    btn.className = 'copy-btn';
-    btn.textContent = 'نسخ';
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      try { await navigator.clipboard.writeText(opts.copy); btn.textContent = 'تم ✓'; setTimeout(() => (btn.textContent = 'نسخ'), 1200); }
-      catch { toast('تعذّر النسخ', 'err'); }
-    });
-    v.append(btn);
-  }
-  row.append(k, v);
-  return row;
+
+/* ============================ التخزين في المتصفح ============================
+ * قد يُمنع (نافذة خاصة، أو إعدادات الخصوصية) فيرمي خطأً: القراءة تُرجع null والكتابة
+ * تُهمَل بصمت، فلا يتوقف شيءٌ بسببه. الكتابة بقيمة null تمحو المفتاح. */
+function storeGet(area, key) {
+  try { return window[area].getItem(key); } catch { return null; }
 }
+function storeSet(area, key, val) {
+  try { if (val == null) window[area].removeItem(key); else window[area].setItem(key, String(val)); } catch {}
+}
+const lsGet = (key) => storeGet('localStorage', key);
+const lsSet = (key, val) => storeSet('localStorage', key, val);
+const ssGet = (key) => storeGet('sessionStorage', key);   // الجلسة: تُنسى بإغلاق المتصفح
+const ssSet = (key, val) => storeSet('sessionStorage', key, val);
 
 /* ============================ الاتصال بالخادم ============================ */
 
+/** يضيف رمز الجلسة إلى رؤوس الطلب (إن وُجد) ويُرجعها */
+function authHeaders(h = {}) {
+  if (state.auth.token) h['X-Auth-Token'] = state.auth.token;
+  return h;
+}
+
 async function api(path, opts) {
   opts = opts || {};
-  opts.headers = Object.assign({}, opts.headers);
-  if (state.auth.token) opts.headers['X-Auth-Token'] = state.auth.token;
+  opts.headers = authHeaders(Object.assign({}, opts.headers));
   const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({}));
   if (r.status === 401) { handleUnauthorized(); throw new Error(j.error || 'انتهت الجلسة — سجّل الدخول من جديد'); }
@@ -421,8 +423,7 @@ async function readNdjson(res, onEvent) {
 }
 /** يبدأ بثًّا (POST) ويُرجع الردّ بعد التحقق من الجلسة والحالة */
 async function openStream(path, body) {
-  const headers = {};
-  if (state.auth.token) headers['X-Auth-Token'] = state.auth.token;
+  const headers = authHeaders();
   if (body != null) headers['Content-Type'] = 'application/json';
   const res = await fetch(path, { method: 'POST', headers, body: body != null ? JSON.stringify(body) : undefined });
   if (res.status === 401) { handleUnauthorized(); throw new Error('انتهت الجلسة — سجّل الدخول'); }
@@ -459,10 +460,10 @@ function openConfirm(message, onYes) {
   openModal('#mConfirm');
 }
 
+/** تنبيهٌ أسفل الشاشة: علامة صحٍّ للنجاح، ومثلّث تحذيرٍ للخطأ */
 function toast(msg, kind = 'ok') {
-  const t = document.createElement('div');
-  t.className = 'toast ' + kind;
-  t.textContent = msg;
+  const t = mk('div', 'toast ' + kind);
+  t.append(svgIcon(kind === 'err' ? 'alert' : 'check'), mk('span', null, msg));
   $('#toasts').append(t);
   setTimeout(() => t.remove(), kind === 'err' ? 6000 : 3500);
 }

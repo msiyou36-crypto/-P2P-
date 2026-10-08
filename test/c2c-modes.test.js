@@ -24,7 +24,7 @@ async function runMode(mode, page) {
     const o = JSON.parse(fs.readFileSync(path.join(srv.dir, 'orders__p2p.json'), 'utf8'));
     const stored = Object.keys(o).filter((k) => k.startsWith('ORD')).length;
     const h = await mock.hits();
-    // فحص المزامنة القديم يستعمل الجلب نفسه بسقف أربعين طلبًا
+    // أداة «ما تُرجعه المنصة» (/api/diag/p2p) تستعمل الجلب نفسه بسقف أربعين طلبًا
     const d = (await T.api(token)('/api/diag/p2p?days=5')).json;
     const diag = { fromPlatform: d.fromPlatform ? d.fromPlatform.length : -1, warnings: d.warnings || [], calls: (await mock.hits()).c2cCalls - h.c2cCalls };
     return { stored, warn: r.warnings, calls: h.c2cCalls, secs: Math.round((Date.now() - t0) / 1000), diag };

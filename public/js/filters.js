@@ -15,7 +15,7 @@ function bizDayStart(ms) {
 const bizDayFrom = (s) => new Date(s + 'T00:00:00').setHours(DAY_CLOSE_H, 0, 0, 0);
 
 /** «YYYY-MM-DD» لليوم المحاسبي الذي يبدأ عند ms (لحقلَي «من/إلى») */
-const bizDayLabel = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+const bizDayLabel = (ms) => fmtD(ms);
 
 /** يعلّم زرّ الفترة المختار، ويُظهر حقلَي «من/إلى» مع «مخصّص» وحده */
 function showRange(range) {
@@ -53,16 +53,10 @@ function statusMatchOrder(s, filter) {
   if (filter === 'all') return true;
   if (filter === 'COMPLETED') return s === 'COMPLETED';
   if (filter === 'CANCELLED') return isCancelled(s);
-  if (filter === 'other') return s !== 'COMPLETED' && !isCancelled(s);
-  return false;   // PENDING/FAILED خاصة بالحوالات
+  return s !== 'COMPLETED' && !isCancelled(s);   // other — وPENDING/FAILED (للحوالات) تستبعدها applyFilters قبل هذا
 }
 function statusMatchTx(s, filter) {
-  if (filter === 'all') return true;
-  if (filter === 'COMPLETED') return s === 'COMPLETED';
-  if (filter === 'CANCELLED') return s === 'CANCELLED';
-  if (filter === 'PENDING') return s === 'PENDING';
-  if (filter === 'FAILED') return s === 'FAILED';
-  return false;   // other خاص بالطلبات
+  return filter === 'all' || s === filter;   // و«other» للطلبات وحدها تستبعدها applyFilters قبل هذا
 }
 function orderMatchesSearch(o, q) {
   return o.orderNumber.toLowerCase().includes(q)
@@ -70,8 +64,8 @@ function orderMatchesSearch(o, q) {
     || String(o.reference || '').toLowerCase().includes(q)
     || String(o.note || '').toLowerCase().includes(q)
     || String(o.amount).includes(q)
-    || String(o.totalPrice).includes(q)
-    || fmt0(o.totalPrice).replace(/,/g, '').includes(q.replace(/,/g, ''));
+    || String(effTotalPrice(o)).includes(q)
+    || fmt0(effTotalPrice(o)).replace(/,/g, '').includes(q.replace(/,/g, ''));
 }
 function txMatchesSearch(t, q) {
   return [t.txId, t.counterPart, t.address, t.coin, t.network, t.id, t.reference, t.note, t.amount]
@@ -150,7 +144,7 @@ function populateFiatFilter() {
     opt.textContent = fiatName(c);
     sel.append(opt);
   }
-  sel.style.display = codes.length > 1 ? '' : 'none';
+  sel.classList.toggle('hidden', codes.length < 2);
   sel.value = (codes.includes(cur) || cur === 'all') ? cur : 'all';
   if (sel.value !== cur) state.filters.fiat = sel.value;
 }

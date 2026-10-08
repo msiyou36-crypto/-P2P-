@@ -1,21 +1,7 @@
-/* الجدول الموحّد: الفرز، صفّ الجدول، الخانات القابلة للتحرير (إشاري، ملاحظة، سعر، مبلغ،
-   تسمية الشبكة — تستعملها البطاقات أيضًا)، ونوافذ تفاصيل الطلب والحوالة بما فيها مرساة
-   الرصيد والأرشفة. اختيار شكل العرض (جدول/يومي/بطاقات/مربعات) والرسم في js/views.js */
+/* الجدول الموحّد: صفّ الجدول، الخانات القابلة للتحرير (إشاري، ملاحظة، سعر، مبلغ، تسمية
+   الشبكة — تستعملها البطاقات أيضًا)، ونوافذ تفاصيل الطلب والحوالة بما فيها مرساة الرصيد
+   والأرشفة وحذف الطلب. اختيار شكل العرض (جدول/يومي/بطاقات/مربعات) والفرز والرسم في js/views.js */
 'use strict';
-
-function sortLedger() {
-  const { key, dir } = state.sort;
-  state.ledger.sort((a, b) => {
-    let va = a[key], vb = b[key];
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    if (typeof va === 'string') { va = va.toLowerCase(); vb = String(vb).toLowerCase(); }
-    if (va < vb) return -1 * dir;
-    if (va > vb) return 1 * dir;
-    return 0;
-  });
-}
 
 /* ============================ الخانات القابلة للتحرير ============================ */
 
@@ -62,7 +48,7 @@ async function saveAnnotation(kind, entity, field, value, inputEl) {
 
 /** حقل تعديل السعر/المبلغ (في الجدول والبطاقات، لمن يملك التعديل) — يبقى بعد المزامنة */
 function makePriceInput(entity, field, kind) {
-  const overKey = field === 'unitPrice' ? 'unitPriceOverride' : 'totalPriceOverride';
+  const overKey = field + 'Override';
   const cur = field === 'unitPrice' ? effUnitPrice(entity) : effTotalPrice(entity);
   const input = document.createElement('input');
   input.type = 'text';
@@ -74,14 +60,14 @@ function makePriceInput(entity, field, kind) {
   input.setAttribute('aria-label', field === 'unitPrice' ? 'السعر' : 'المبلغ');
   if (entity[overKey] != null) input.classList.add('is-edited');
   stopRowClick(input);
-  input.addEventListener('change', () => savePriceEdit(entity, field, input, kind || 'order'));
+  input.addEventListener('change', () => savePriceEdit(entity, field, input, kind));
   return input;
 }
 /** خانة السعر/المبلغ في الجدول */
 function priceCell(entity, field, display, kind) {
   const td = document.createElement('td');
   td.className = 'num strong editable';
-  const overKey = field === 'unitPrice' ? 'unitPriceOverride' : 'totalPriceOverride';
+  const overKey = field + 'Override';
   const edited = entity[overKey] != null;
   if (!canAnnotate()) {
     td.textContent = edited ? fmt2p(entity[overKey]) : display;
@@ -92,7 +78,7 @@ function priceCell(entity, field, display, kind) {
   return td;
 }
 async function savePriceEdit(entity, field, inputEl, kind) {
-  const overKey = field === 'unitPrice' ? 'unitPriceOverride' : 'totalPriceOverride';
+  const overKey = field + 'Override';
   const raw = String(inputEl.value || '').trim().replace(/,/g, '');
   const body = { id: idOf(entity, kind) };
   if (raw === '') { body[field] = ''; delete entity[overKey]; }   // فارغ = الرجوع لقيمة المنصة
@@ -180,9 +166,10 @@ function ledgerTr(row, n, mixed) {
   const bal = balOf(it, isP2P);
   const tdBal = tdText(tr, bal == null ? '—' : fmt2(bal), 'num col-bal');
   if (it.balAfter != null) tdBal.title = 'رقم مثبَّت — ثُبِّت ساعة اكتمال العملية ولا يتغيّر';
-  if (it.balanceAt != null || it.zeroPoint) {
+  const pin = anchorValue(it);
+  if (pin != null) {
     tdBal.classList.add('is-zeropoint');
-    tdBal.title = `نقطة التثبيت — أنت كتبت أن رصيدك بعد هذه العملية كان ${fmt2(it.balanceAt != null ? it.balanceAt : 0)} USDT، والعمود كلّه محسوب منها`;
+    tdBal.title = `نقطة التثبيت — أنت كتبت أن رصيدك بعد هذه العملية كان ${fmt2(pin)} USDT، والعمود كلّه محسوب منها`;
   }
   tdText(tr, it.counterPart || '—');
   const tdSt = document.createElement('td');
@@ -228,6 +215,31 @@ function setArchiveView(on) {
  * ملخّصٌ كبير أعلاها (النوع والحالة والمبلغ وأرقامه الأساسية)، ثم أقسامٌ بعناوين:
  * المعلومات، ثم ملاحظاتك (الإشاري والملاحظة)، ثم أدوات المسؤول (تثبيت الباقي، الاحتساب
  * بالـUSDT، الأرشفة) — وهذه للمسؤول وحده فلا يرى غيرُه أزرارًا معطّلة. */
+
+/** صفّ «مفتاح: قيمة» في نوافذ التفاصيل؛ opts.copy زرّ نسخ */
+function detailRow(key, value, opts = {}) {
+  const row = document.createElement('div');
+  row.className = 'detail-row';
+  const k = document.createElement('span');
+  k.className = 'k';
+  k.textContent = key;
+  const v = document.createElement('span');
+  v.className = 'v';
+  if (value instanceof Node) v.append(value); else v.textContent = value;
+  if (opts.copy) {
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.textContent = 'نسخ';
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try { await navigator.clipboard.writeText(opts.copy); btn.textContent = 'تم ✓'; setTimeout(() => (btn.textContent = 'نسخ'), 1200); }
+      catch { toast('تعذّر النسخ', 'err'); }
+    });
+    v.append(btn);
+  }
+  row.append(k, v);
+  return row;
+}
 
 /** الملخّص: النوع والحالة، ثم المبلغ كبيرًا، ثم أرقامٌ صغيرة [[العنوان، القيمة]…] (الفارغ يُترك) */
 function detailHero(typeChip, statusChip, color, amount, unit, stats) {
@@ -327,18 +339,16 @@ function numberActionRow(label, hint, current, placeholder, labels, onSet, onCle
 
 /* مرساةٌ بيد المستخدم: يكتب رصيده الحقيقي بعد عمليةٍ يعرفها، فيُحسب العمود كلّه منها.
    لا تحتاج منصةً ولا مفتاحًا — وهي المخرج حين يتعذّر جلب الرصيد. */
-function zeroPointRow(entity, kind) {
-  const cur = entity.balanceAt != null ? entity.balanceAt : (entity.zeroPoint ? 0 : null);
+function pinRow(entity, kind) {
   const send = async (val) => {
     await postJSON(annotateUrl(kind), { id: idOf(entity, kind), balanceAt: val });
     try { await api('/api/balance/unfreeze', { method: 'POST' }); } catch {}   // المرساة أوثق من كل مثبَّت سابق
-    await Promise.all([loadOrders(), loadTransfers()]);
-    renderAll();
+    await reloadLedger();
   };
   return numberActionRow('تثبيت الباقي',
     'رصيدك الحقيقي من USDT بعد هذه العملية (الفوري + التمويل معًا) — يُحسب منه عمود «الباقي» كلّه: ما بعدها بالجمع وما قبلها بالطرح.',
-    cur, 'مثلًا 1250.75 أو 0', ['تثبيت', 'إلغاء التثبيت'],
-    async (v) => { await send(v); closeAllModals(); toast(`ثُبِّت الرصيد على ${fmt2(v)} USDT — أُعيد حساب العمود ✓`); },
+    anchorValue(entity), 'مثلًا 1250.75 أو 0', ['تثبيت', 'إلغاء التثبيت'],
+    async (v) => { await send(v); closeAllModals(); toast(`ثُبِّت الرصيد على ${fmt2(v)} USDT — أُعيد حساب العمود`); },
     async () => { await send(null); closeAllModals(); toast('أُلغي التثبيت — أُعيد حساب العمود'); });
 }
 
@@ -352,7 +362,7 @@ function usdtValueRow(t) {
   return numberActionRow('احتساب بالـUSDT',
     `عملتها ${t.coin || '—'} فلا تدخل «الباقي». اكتب قيمتها بالـUSDT لتُحتسب — واحذر الازدواج إن كنت حوّلت الـUSDT إليها أصلًا.`,
     t.usdtValue != null ? t.usdtValue : null, 'مثلًا 309.38743608', ['احتسب', 'لا تحتسب'],
-    async (v) => { await send(v); closeAllModals(); toast(`احتُسبت بـ ${fmt2(v)} USDT ✓`); },
+    async (v) => { await send(v); closeAllModals(); toast(`احتُسبت بـ ${fmt2(v)} USDT`); },
     async () => { await send(null); closeAllModals(); toast('لم تعد تُحتسب في «الباقي»'); });
 }
 
@@ -367,7 +377,7 @@ function archiveRow(entity, kind) {
       if (on) delete entity.archived; else entity.archived = true;
       closeAllModals();
       renderAll();
-      toast(on ? 'أُرجعت إلى الجدول ✓' : 'أُرسلت إلى الأرشيف — تجدها في القائمة ← الأرشيف');
+      toast(on ? 'أُرجعت إلى الجدول' : 'أُرسلت إلى الأرشيف — تجدها في القائمة ← الأرشيف');
     } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); btn.disabled = false; }
   });
   return toolRow('الأرشيف', on
@@ -383,8 +393,8 @@ function openDetails(o) {
   state.detailsOrder = o;
   const body = $('#detailsBody');
   body.textContent = '';
-  const ti = TYPE_INFO[o.tradeType];
-  const si = statusInfo(o.orderStatus);
+  const ti = typeInfoOf(o, true);
+  const si = statusOf(o, true);
   const fiat = fiatSymOf(o);
   const inFiat = (v) => v + (fiat ? ' ' + fiat : '');
   const fee = effComm(o);
@@ -407,19 +417,28 @@ function openDetails(o) {
   colB.append(detailSection('ملاحظاتك', [annotField(o, 'reference', 'order'), annotField(o, 'note', 'order')], 'd-annots'));
   if (canEdit()) {
     colB.append(detailSection('أدوات المسؤول', [
-      o.orderStatus === 'COMPLETED' && zeroPointRow(o, 'order'),
+      o.orderStatus === 'COMPLETED' && pinRow(o, 'order'),
       archiveRow(o, 'order'),
     ], 'd-tools'));
   }
   openModal('#mDetails');
   body.scrollTop = 0;   // كل عمليةٍ تُفتح من أعلاها لا من حيث توقّف التمرير في سابقتها
 }
+/** زرّ «حذف الطلب» في نافذة التفاصيل (للمسؤول): يسأل ثم يحذف من السجل */
+function deleteDetailsOrder() {
+  const o = state.detailsOrder;
+  if (!o) return;
+  openConfirm(`سيتم حذف الطلب ${o.orderNumber} من السجل. هل أنت متأكد؟`, async () => {
+    try { await api('/api/orders?id=' + encodeURIComponent(o.orderNumber), { method: 'DELETE' }); closeAllModals(); toast('تم حذف الطلب'); await loadOrders(); renderAll(); }
+    catch (e) { toast(e.message, 'err'); }
+  });
+}
 
 function openTransferDetails(t) {
   const body = $('#txDetailsBody');
   body.textContent = '';
-  const ki = TX_KIND[t.kind] || { ar: t.kind, color: 'var(--muted)' };
-  const si = txStatusInfo(t.status);
+  const ki = typeInfoOf(t, false);
+  const si = statusOf(t, false);
   const isPay = isPayKind(t.kind);
   const coin = t.coin || '';
   const conv = isConvertKind(t.kind) && t.fromAsset && t.toAsset;
@@ -450,7 +469,7 @@ function openTransferDetails(t) {
   if (canEdit()) {
     colB.append(detailSection('أدوات المسؤول', [
       (String(coin).toUpperCase() !== 'USDT' || t.usdtValue != null) && usdtValueRow(t),
-      t.status === 'COMPLETED' && zeroPointRow(t, 'transfer'),
+      t.status === 'COMPLETED' && pinRow(t, 'transfer'),
       archiveRow(t, 'transfer'),
     ], 'd-tools'));
   }

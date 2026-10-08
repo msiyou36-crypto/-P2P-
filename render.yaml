@@ -1,14 +1,18 @@
 # مخطّط Render لنشر «سجل حوالات P2P» بضغطة واحدة (Blueprint)
 # في Render: New + → Blueprint → اختر مستودع GitHub → Apply، ثم عبّئ المتغيرات.
+# كل حساب (p2p وp3p) خدمةٌ مستقلة بمتغيّر ACCOUNT وقاعدة Supabase خاصة به: للحساب الثاني
+# أنشئ خدمةً ثانية من المستودع نفسه بمتغيراتها.
 services:
   - type: web
     name: sijil-p2p
     runtime: node
     plan: free
-    region: frankfurt
-    buildCommand: npm install
+    region: frankfurt   # لا تختر الولايات المتحدة: Binance يرفض طلباتها (HTTP 451)
+    buildCommand: npm install   # لا حزم فعلًا؛ Render يطلب أمر بناء
     startCommand: npm start
     envVars:
+      - key: ACCOUNT
+        sync: false      # p2p أو p3p: يقفل هذه الخدمة على حسابٍ واحد
       - key: SUPABASE_URL
         sync: false      # عنوان مشروع Supabase — تعبّئه أنت
       - key: SUPABASE_KEY
@@ -17,3 +21,5 @@ services:
         sync: false      # كلمة سر المسؤول (لأول تشغيل) — تعبّئها أنت
       - key: USER_PASSWORD
         sync: false      # كلمة سر المستخدم — تعبّئها أنت
+      - key: USER2_PASSWORD
+        sync: false      # كلمة سر «مستخدم 2» (اختيارية)

@@ -1,4 +1,5 @@
-/* الدخول والأدوار، تحميل البيانات من الخادم، سمة السستم (لونه وأيقوناته)، ووضع الصيانة */
+/* الدخول والأدوار، تحميل البيانات من الخادم، سمة السستم (لونه وأيقوناته)، وبوّابة وضع
+   الصيانة (ضبطه من js/admin.js). الخلفيات المتحركة (الفيديو والنجوم) في js/backgrounds.js */
 'use strict';
 
 /* ============================ تحميل البيانات ============================ */
@@ -13,6 +14,17 @@ async function loadTransfers() {
   const j = await api('/api/transfers');
   state.transfers = (j.transfers || []).filter((t) => !isInternalKind(t.kind)).sort((a, b) => b.time - a.time);
   state.settings.lastSync = j.lastSync;
+}
+/** يُعيد تحميل الطلبات والحوالات معًا ثم يرسم كل شيء */
+async function reloadLedger() {
+  await Promise.all([loadOrders(), loadTransfers()]);
+  renderAll();
+}
+/** بعد عمليةٍ غيّرت السجل من نافذة (حذف، استعادة، أرشفة): تُغلق النوافذ ويُعاد التحميل والرصيد */
+async function reloadAfterChange() {
+  closeAllModals();
+  await reloadLedger();
+  refreshBalance();
 }
 async function loadSettings() { state.settings = await api('/api/settings'); }
 /* لقطات الرصيد اليومية: { 'YYYY-MM-DD': {bal, at} } → مصفوفة مرتّبة بالوقت */
@@ -31,30 +43,25 @@ async function loadBalSnaps() {
 async function loadSyncQuota() {
   try { state.syncQuota = await api('/api/sync/quota'); }
   catch { state.syncQuota = { unlimited: true, quota: 0, used: 0, left: null }; }
-  const blocked = Number(state.syncQuota.blockedFor) || 0;
-  if (blocked > 0 && syncCooldownUntil() < Date.now() + blocked * 1000) {
-    try { localStorage.setItem(SYNC_COOLDOWN_KEY, String(Date.now() + blocked * 1000)); } catch {}
-  }
-  applySyncCooldown();
+  extendSyncCooldown((Number(state.syncQuota.blockedFor) || 0) * 1000);
 }
 async function loadAccount() {
   const j = await api('/api/account');
   state.account.active = j.active;
   state.account.locked = !!j.locked;
-  state.account.list = j.accounts || [];
-  const cur = state.account.list.find((a) => a.id === j.active);
-  state.account.name = cur ? cur.name : (j.active === 'p3p' ? 'حوالات P3P' : 'حوالات P2P');
+  const cur = (j.accounts || []).find((a) => a.id === j.active);
+  if (cur) state.account.name = cur.name;
   renderAccount();
 }
 const loadAll = () => Promise.all([loadAccount(), loadOrders(), loadTransfers(), loadSettings(), loadSyncQuota(), loadBalSnaps()]);
 
 /* ============================ سمة السستم ============================ */
 
-/* لكل سستم لونه: P3P بالذهبي، وP2P بالبرغندي — فيُعرف الحساب من أول نظرة. السمة تُوضع
+/* لكل سستم لونه: P3P بالبرتقالي، وP2P بالبرغندي — فيُعرف الحساب من أول نظرة. السمة تُوضع
    على الجذر (data-account) فتقرؤها التنسيقات، وتتبعها أيقونة التبويب وبيان التطبيق. */
 const ACCOUNT_THEME = {
   p2p: { accent: '#8e1f3f', ink: '#fbeef2', bar: '#1a1a19' },   // أيقوناته باللاحقة «-p2p»
-  p3p: { accent: '#f0b90b', ink: '#1a1a19', bar: '#1a1a19' },   // الأيقونات الأصلية
+  p3p: { accent: '#fb923c', ink: '#1a1a19', bar: '#1a1a19' },   // الأيقونات الأصلية
 };
 function applyAccountTheme(id) {
   const t = ACCOUNT_THEME[id] || ACCOUNT_THEME.p3p;
@@ -70,15 +77,18 @@ function applyAccountTheme(id) {
     l.href = ACCOUNT_THEME[id] && id !== 'p3p' ? base.replace(/\.(png|ico|webmanifest)$/, '-' + id + '.$1') : base;
   };
   $$('link[rel="icon"], link[rel="apple-touch-icon"], link[rel="manifest"]').forEach(swap);
-  const meta = document.querySelector('meta[name="theme-color"]');
+  const meta = $('meta[name="theme-color"]');
   if (meta) meta.content = t.bar;
+}
+/** اسم السستم في تبويب المتصفح وفي رأس التطبيق وشاشة الدخول */
+function setSystemTitle(name) {
+  const title = 'سجل ' + name;
+  for (const h of $$('#appTitle, #loginScreen h1')) h.textContent = title;
+  document.title = title;
 }
 function renderAccount() {
   applyAccountTheme(state.account.active);
-  const title = 'سجل ' + state.account.name;
-  const h = $('#appTitle');
-  if (h) h.textContent = title;
-  document.title = title;
+  setSystemTitle(state.account.name);
   // حذفُ بيانات الحساب الآخر له معنى في السستم المقفول وحده
   const fz = $('#foreignZone');
   if (fz) fz.classList.toggle('hidden', !state.account.locked);
@@ -88,194 +98,14 @@ function renderAccount() {
 
 function clearSession() {
   state.auth = { role: null, token: null };
-  try { sessionStorage.removeItem('p2p_token'); sessionStorage.removeItem('p2p_role'); } catch {}
+  ssSet('p2p_token', null);
+  ssSet('p2p_role', null);
 }
 function saveSession(j) {
   state.auth = { token: j.token, role: j.role };
-  sessionStorage.setItem('p2p_token', j.token);
-  sessionStorage.setItem('p2p_role', j.role);
+  ssSet('p2p_token', j.token);
+  ssSet('p2p_role', j.role);
 }
-
-/* خلفية النجوم (glitter.js): كاملة في شاشة الدخول، وخفيفة داخل التطبيق */
-let glitterStop = null;
-function stopGlitter() {
-  if (glitterStop) { try { glitterStop(); } catch {} glitterStop = null; }
-}
-function startLoginGlitter() {
-  stopGlitter();
-  if (typeof Glitter === 'undefined') return;
-  try { glitterStop = Glitter.mount($('#loginScreen'), { color2: state.themeAccent || '#f0b90b' }); } catch {}
-}
-function startAppGlitter() {
-  stopGlitter();
-  if (typeof Glitter === 'undefined') return;
-  const el = $('#appGlitter');
-  if (!el) return;
-  try {
-    glitterStop = Glitter.mount(el, { particleCount: 90, brightness: 40, trailAmount: 78, starSize: 9, speed: 2.5, glitterIntensity: 2, maxDpr: 1, color2: state.themeAccent || '#f0b90b' });
-  } catch {}
-}
-
-/* خلفيات الفيديو (الدخول والتطبيق): تُحمَّل عند الحاجة فقط ويحفظها المتصفح بعد أول مرة، ولا
-   تُحمَّل مع «توفير البيانات» أو الاتصال البطيء جدًّا؛ وإن تعذّر تحميلها حلّت محلّها خلفية النجوم.
-   لكلٍّ منهما زرٌّ يوقفه ويشغّله، والاختيار يُحفظ في المتصفح. */
-const bgVideoAllowed = () => {
-  const c = navigator.connection;
-  return !(c && (c.saveData || /2g$/.test(c.effectiveType || '')));
-};
-/** يبدأ تحميل الفيديو مرّةً واحدة؛ false إن سبق أن تعذّر */
-function attachBgVideo(v, onFail) {
-  if (v.dataset.failed) return false;
-  if (!v.getAttribute('src')) {
-    v.addEventListener('error', () => { v.dataset.failed = '1'; onFail(); }, { once: true });
-    v.preload = 'auto';
-    v.src = v.dataset.src;
-  }
-  return true;
-}
-const prefOff = (key) => { try { return localStorage.getItem(key) === '1'; } catch { return false; } };
-const savePref = (key, on) => { try { localStorage.setItem(key, on ? '0' : '1'); } catch {} };
-
-/* شاشة الدخول: فيديو (نحو 7.6 ميغابايت) وزرٌّ صغير في الركن يوقفه */
-const LOGIN_VIDEO_OFF_KEY = 'p2pLoginVideoOff';
-let loginVideoOn = false;   // ما اختاره المستخدم (المتصفح يوقفه وحده حين تُخفى الصفحة)
-function setLoginVideo(on) {
-  const v = $('#loginVideo'), btn = $('#btnLoginVideo');
-  loginVideoOn = on;
-  if (on) v.play().catch(() => {});
-  else v.pause();
-  const label = on ? 'إيقاف الفيديو' : 'تشغيل الفيديو';
-  btn.setAttribute('aria-label', label);
-  btn.title = label;
-  btn.textContent = '';
-  btn.append(svgIcon(on ? 'pause' : 'play'));
-}
-function toggleLoginVideo() {
-  setLoginVideo(!loginVideoOn);
-  savePref(LOGIN_VIDEO_OFF_KEY, loginVideoOn);
-}
-function startLoginBackground() {
-  stopGlitter();
-  stopAppBackground();
-  const v = $('#loginVideo');
-  const screen = $('#loginScreen');
-  const fail = () => { screen.classList.remove('has-video'); $('#btnLoginVideo').classList.add('hidden'); startLoginGlitter(); };
-  if (!v || !bgVideoAllowed() || !attachBgVideo(v, fail)) { fail(); return; }
-  screen.classList.add('has-video');
-  $('#btnLoginVideo').classList.remove('hidden');
-  setLoginVideo(!prefOff(LOGIN_VIDEO_OFF_KEY));
-}
-function stopLoginBackground() {
-  const v = $('#loginVideo');
-  if (v) v.pause();   // لا يعمل الفيديو خلف التطبيق وهو مخفي
-  loginVideoOn = false;
-}
-
-/* داخل التطبيق: فيديو بثٍّ (HLS من Mux) على الشاشات العريضة وحدها — على الهاتف خلفية النجوم
-   توفيرًا للبيانات — وفوقه تظليلٌ يُبقي الأرقام واضحة؛ وبندٌ في القائمة يوقفه.
-   Safari يشغّل HLS بنفسه؛ وغيره يحتاج hls.js، فتُحمَّل عند الحاجة فقط من jsDelivr بنسخةٍ ثابتة
-   ومعها بصمتها (integrity) فلا يُنفَّذ إلا الملف نفسه. والجودة محدودة بـ720p فلا تُهدر البيانات. */
-const APP_VIDEO_OFF_KEY = 'p2pAppVideoOff';
-const HLS_JS = {
-  src: 'https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.light.min.js',
-  integrity: 'sha256-AlEzLACiFqNdfWkZBE1g2oK3i+s71QrGxmKudKL1R0s=',
-};
-let appVideoOn = false;
-let hlsLib = null;   // وعدٌ واحد بتحميل المكتبة
-function loadHlsLib() {
-  if (window.Hls) return Promise.resolve(window.Hls);
-  if (!hlsLib) {
-    hlsLib = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = HLS_JS.src;
-      s.integrity = HLS_JS.integrity;
-      s.crossOrigin = 'anonymous';
-      s.onload = () => (window.Hls ? resolve(window.Hls) : reject(new Error('hls.js')));
-      s.onerror = () => { hlsLib = null; reject(new Error('hls.js')); };
-      document.head.append(s);
-    });
-  }
-  return hlsLib;
-}
-/** يربط البثّ بعنصر الفيديو مرّةً واحدة؛ false إن تعذّر (فتعود النجوم).
-    hls.js أولًا حيث يتوفّر MSE (Chrome يدّعي أحيانًا دعم HLS ثم يفشل)، والتشغيل المباشر لما لا MSE فيه (iPhone) */
-async function attachAppStream(v, onFail) {
-  if (v.dataset.failed) return false;
-  if (v.dataset.attached) return true;
-  v.dataset.attached = '1';
-  const fail = () => { v.dataset.failed = '1'; onFail(); };
-  if (window.MediaSource || window.ManagedMediaSource) {
-    try {
-      const Hls = await loadHlsLib();
-      if (Hls.isSupported()) {
-        const hls = new Hls({ capLevelToPlayerSize: true, maxBufferLength: 20 });
-        hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-          // أعلى جودةٍ لا تتجاوز 720p: خلفيةٌ مغبّشة تحت تظليل لا تحتاج أكثر
-          let cap = -1;
-          data.levels.forEach((l, i) => { if (l.height <= 720 && (cap < 0 || l.height > data.levels[cap].height)) cap = i; });
-          if (cap >= 0) hls.autoLevelCapping = cap;
-        });
-        hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) { hls.destroy(); fail(); } });
-        hls.loadSource(v.dataset.src);
-        hls.attachMedia(v);
-        return true;
-      }
-    } catch {}
-  }
-  if (v.canPlayType('application/vnd.apple.mpegurl')) {
-    v.addEventListener('error', fail, { once: true });
-    v.src = v.dataset.src;
-    return true;
-  }
-  fail();
-  return false;
-}
-const appVideoPossible = () => {
-  const v = $('#appVideo');
-  return !!v && !v.dataset.failed && bgVideoAllowed() && window.matchMedia('(min-width: 900px)').matches;
-};
-/** بند القائمة: يظهر حيث يمكن الفيديو، ونصّه وأيقونته بحسب حاله */
-function syncAppVideoItem() {
-  const b = $('#btnAppVideo');
-  if (!b) return;
-  b.closest('.menu-group').classList.toggle('hidden', !appVideoPossible());
-  b.textContent = '';
-  b.append(svgIcon(appVideoOn ? 'pause' : 'play'), appVideoOn ? 'إيقاف خلفية الفيديو' : 'تشغيل خلفية الفيديو');
-}
-function appBackgroundFallback() {
-  $('#app').classList.remove('has-video');
-  const v = $('#appVideo');
-  if (v) v.pause();
-  appVideoOn = false;
-  startAppGlitter();
-  syncAppVideoItem();
-}
-async function startAppBackground() {
-  stopGlitter();
-  const v = $('#appVideo');
-  if (!appVideoPossible() || prefOff(APP_VIDEO_OFF_KEY)) { appBackgroundFallback(); return; }
-  $('#app').classList.add('has-video');
-  appVideoOn = true;
-  syncAppVideoItem();
-  if (await attachAppStream(v, appBackgroundFallback) && appVideoOn) v.play().catch(() => {});
-}
-function stopAppBackground() {
-  const v = $('#appVideo');
-  if (v) v.pause();
-  appVideoOn = false;
-}
-function toggleAppVideo() {
-  savePref(APP_VIDEO_OFF_KEY, !appVideoOn);
-  if (appVideoOn) appBackgroundFallback(); else startAppBackground();
-}
-
-// عند العودة إلى الصفحة يُستأنف الفيديو الظاهر إن كان شغّالًا (المتصفح يوقفه حين تُخفى)
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
-  const s = $('#loginScreen');
-  if (loginVideoOn && s.classList.contains('has-video') && !s.classList.contains('hidden')) $('#loginVideo').play().catch(() => {});
-  if (appVideoOn && !$('#app').classList.contains('hidden')) $('#appVideo').play().catch(() => {});
-});
 
 function showLogin(configured) {
   $('#app').classList.add('hidden');
@@ -289,7 +119,11 @@ function showLogin(configured) {
   setTimeout(() => { try { inp.focus(); } catch {} }, 50);
 }
 
+/** ردّ 401: انتهت الجلسة فتعود شاشة الدخول. وبلا جلسةٍ أصلًا (كلمة سرٍّ خاطئة عند الدخول،
+    أو ردٌّ متأخر بعد الخروج) لا شيء يُغلق — والخطأ يظهر في مكانه */
 function handleUnauthorized() {
+  if (!state.auth.token) return;
+  stopMaintenanceWatch();
   clearSession();
   showLogin(true);
 }
@@ -329,12 +163,11 @@ async function checkAuth() {
   // السستم المقفول يُعلن حسابه قبل الدخول، فتأخذ شاشةُ الدخول لونَه واسمه من أول لحظة
   if (status.account && status.account.id) {
     applyAccountTheme(status.account.id);
-    const lh = document.querySelector('#loginScreen h1');
-    if (lh) lh.textContent = 'سجل ' + status.account.name;
-    document.title = 'سجل ' + status.account.name;
+    setSystemTitle(status.account.name);
   }
-  const token = sessionStorage.getItem('p2p_token');
-  const role = sessionStorage.getItem('p2p_role');
+  $$('.app-version').forEach((el) => { el.textContent = status.version ? 'الإصدار ' + status.version : ''; });
+  const token = ssGet('p2p_token');
+  const role = ssGet('p2p_role');
   if (token && role) {
     state.auth = { token, role };
     try { await loadAll(); await enterApp(); return; }
@@ -355,6 +188,16 @@ async function doSetup(e) {
 }
 
 let loginRole = 'admin';
+/** زرّ الدور في شاشة الدخول: يُعلَّم وحده، ويُنقل التركيز إلى كلمة السر */
+function pickLoginRole(btn) {
+  $$('#roleSeg button').forEach((b) => {
+    b.classList.toggle('on', b === btn);
+    b.setAttribute('aria-checked', String(b === btn));
+  });
+  loginRole = btn.dataset.role;
+  $('#loginError').textContent = '';
+  try { $('#loginForm').elements.password.focus(); } catch {}
+}
 async function doLogin(e) {
   e.preventDefault();
   const password = $('#loginForm').elements.password.value;
@@ -373,7 +216,7 @@ async function doLogout() {
   location.reload();
 }
 
-/* ============================ وضع الصيانة ============================ */
+/* ============================ بوّابة وضع الصيانة ============================ */
 
 /** true إن كان النظام مقفولًا أمام هذا المستخدم (فيُوقف دخول التطبيق) */
 async function checkMaintenanceGate() {
@@ -390,13 +233,17 @@ function startMaintenanceWatch() {
   _maintTimer = setInterval(async () => {
     let m;
     try { m = await api('/api/maintenance'); } catch { return; }
-    if (m && m.on) { clearInterval(_maintTimer); _maintTimer = null; showMaintenanceScreen(m); }
+    if (m && m.on) { stopMaintenanceWatch(); showMaintenanceScreen(m); }
   }, 60000);
+}
+function stopMaintenanceWatch() {
+  if (_maintTimer) { clearInterval(_maintTimer); _maintTimer = null; }
 }
 function showMaintenanceScreen(m) {
   $('#loginScreen').classList.add('hidden');
   stopLoginBackground();
   stopAppBackground();
+  stopGlitter();
   $('#app').classList.add('hidden');
   $('#maintScreenMsg').textContent = m.message || 'النظام متوقف مؤقتًا للصيانة. حاول لاحقًا.';
   const a = $('#maintScreenLink');
@@ -404,22 +251,4 @@ function showMaintenanceScreen(m) {
   if (/^https?:\/\//i.test(link)) { a.href = link; a.classList.remove('hidden'); }
   else { a.removeAttribute('href'); a.classList.add('hidden'); }
   $('#maintenanceScreen').classList.remove('hidden');
-}
-async function openMaintenance() {
-  try {
-    const m = await api('/api/maintenance');
-    $('#maintOn').checked = !!m.on;
-    $('#maintMsg').value = m.message || '';
-    $('#maintLink').value = m.link || '';
-    $('#maintSystem').textContent = m.system || location.host;   // الإيقاف يخصّ هذا السستم وحده
-  } catch (e) { toast('تعذّر جلب حالة الصيانة: ' + e.message, 'err'); return; }
-  openModal('#mMaintenance');
-}
-async function saveMaintenance() {
-  const on = $('#maintOn').checked;
-  try {
-    await postJSON('/api/maintenance', { on, message: $('#maintMsg').value.trim(), link: $('#maintLink').value.trim() });
-    closeModal('#mMaintenance');
-    toast(on ? 'تم تفعيل وضع الصيانة ⛔ — النظام مقفول أمام المستخدمين' : 'تم إيقاف وضع الصيانة ✓ — النظام يعمل');
-  } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); }
 }

@@ -27,32 +27,16 @@ function menuKeys(e) {
 }
 /** زرّ في القائمة المنسدلة: يغلقها ثم ينفّذ */
 const menuAction = (id, fn) => $(id).addEventListener('click', () => { closeMenu(); fn(); });
-/** زرّ تأكيدٍ ثم تنفيذٍ ثم إعادة تحميل */
-function confirmThen(id, message, fn, done) {
-  $(id).addEventListener('click', () => openConfirm(message, async () => {
-    try { const j = await fn(); closeAllModals(); await done(j); } catch (e) { toast(e.message, 'err'); }
-  }));
-}
 
 function wireEvents() {
   decorateIcons();     // أيقونات الأزرار والقائمة الثابتة في الصفحة (data-icon)
   wireScrollHints();   // النوافذ بلا شريط تمرير: تلاشٍ أسفلها إن كان تحتها المزيد
+  wireBackgrounds();   // زرّا إيقاف الفيديو (شاشة الدخول والقائمة)، واستئنافه عند العودة للصفحة
 
   // --- تسجيل الدخول ---
-  $('#btnLoginVideo').addEventListener('click', toggleLoginVideo);   // إيقاف فيديو الخلفية وتشغيله
   $('#setupForm').addEventListener('submit', doSetup);
   $('#loginForm').addEventListener('submit', doLogin);
-  $$('#roleSeg button').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      $$('#roleSeg button').forEach((b) => {
-        b.classList.toggle('on', b === btn);
-        b.setAttribute('aria-checked', String(b === btn));
-      });
-      loginRole = btn.dataset.role;
-      $('#loginError').textContent = '';
-      try { $('#loginForm').elements.password.focus(); } catch {}
-    });
-  });
+  $$('#roleSeg button').forEach((btn) => btn.addEventListener('click', () => pickLoginRole(btn)));
 
   // --- الفترة: أزرارٌ جاهزة، و«مخصّص» يُظهر من/إلى ---
   $$('#rangeSeg button').forEach((btn) => {
@@ -104,16 +88,22 @@ function wireEvents() {
   $('#pgNext').addEventListener('click', () => { state.page++; renderLedger(); });
   wireViewControls();   // شكل العرض: جدول، يومي، بطاقات، مربعات
 
+  // --- بطاقة الرصيد، وتصدير Excel من رأس الجدول ---
+  $('#btnRefreshBal').addEventListener('click', refreshBalance);
+  $('#btnExportXlsx').addEventListener('click', exportXlsx);
+
+  // --- الشريط العلوي: المزامنة (والنقر عليها يغلق القائمة كأي نقرٍ خارجها) ---
+  $('#btnSync').addEventListener('click', openSyncPicker);
+  applySyncCooldown();
+  $('#btnSyncStart').addEventListener('click', startSync);
+  $('#syncAll').addEventListener('change', (e) => toggleAllSyncKinds(e.target.checked));
+
   // --- القائمة ---
   $('#btnMenu').addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });
   $('#btnMenu').addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); openMenu(); } });
   $('#menuDropdown').addEventListener('click', (e) => e.stopPropagation());
   $('#menuDropdown').addEventListener('keydown', menuKeys);
   document.addEventListener('click', closeMenu);
-  menuAction('#btnSync', openSyncPicker);
-  applySyncCooldown();
-  $('#btnSyncStart').addEventListener('click', startSync);
-  $('#syncAll').addEventListener('change', (e) => toggleAllSyncKinds(e.target.checked));
   menuAction('#btnArchive', () => setArchiveView(true));
   $('#btnArchiveBack').addEventListener('click', () => setArchiveView(false));
   menuAction('#btnDiag', openDiag);
@@ -124,12 +114,9 @@ function wireEvents() {
   menuAction('#btnSettings', openSettings);
   menuAction('#btnChangePass', openChangePass);
   menuAction('#btnLoginLog', openLoginLog);
-  $('#logNewer').addEventListener('click', () => { logPage--; renderLoginLog(); });
-  $('#logOlder').addEventListener('click', () => { logPage++; renderLoginLog(); });
-  menuAction('#btnAppVideo', toggleAppVideo);   // إيقاف خلفية الفيديو داخل التطبيق وتشغيلها
+  $('#logNewer').addEventListener('click', () => stepLoginLog(-1));
+  $('#logOlder').addEventListener('click', () => stepLoginLog(1));
   menuAction('#btnLogout', doLogout);
-  $('#btnExportXlsx').addEventListener('click', exportXlsx);
-  $('#btnRefreshBal').addEventListener('click', refreshBalance);
 
   // --- نافذة الفحص ---
   $('#btnRunDiag').addEventListener('click', runDiag);
@@ -148,37 +135,19 @@ function wireEvents() {
   $('#btnSaveAdd').addEventListener('click', saveAdd);
   $('#addForm').elements.amount.addEventListener('input', autoTotal);
   $('#addForm').elements.unitPrice.addEventListener('input', autoTotal);
-  $('#addForm').elements.totalPrice.addEventListener('input', () => { totalPriceDirty = true; });
+  $('#addForm').elements.totalPrice.addEventListener('input', markTotalEdited);
   $('#addForm').elements.fiat.addEventListener('change', syncAddUnits);
   wireDropzone($('#csvDrop'), handleImportFile);   // نقرٌ أو سحبُ ملف CSV وإفلاته
   $('#btnConfirmImport').addEventListener('click', confirmImport);
 
   // --- الإعدادات وكلمات السر ومنطقة الخطر ---
   wirePwToggles();   // زرّ العين بجانب كل حقل كلمة سر
-  // منطقة الخطر نافذةٌ فوق الإعدادات، و«رجوع» يغلقها فتبقى الإعدادات كما تركتها
-  $('#btnOpenDanger').addEventListener('click', () => openModal('#mDanger'));
-  $('#btnDangerBack').addEventListener('click', () => closeModal('#mDanger'));
   $('#btnSaveSettings').addEventListener('click', saveSettings);
   $('#btnSavePass').addEventListener('click', savePasswords);
-  $('#btnArchiveBefore').addEventListener('click', () => archiveBefore(false));
-  $('#btnUnarchiveBefore').addEventListener('click', () => archiveBefore(true));
-  $('#btnForeignClean').addEventListener('click', cleanForeign);
-  confirmThen('#btnClearAll', 'سيتم حذف جميع الطلبات المخزّنة نهائيًا. هل أنت متأكد؟',
-    () => api('/api/orders/clear', { method: 'POST' }), async () => { toast('تم مسح جميع الطلبات'); await loadOrders(); renderAll(); });
-  confirmThen('#btnClearTransfers', 'سيتم حذف سجل الإيداع والسحب المخزّن نهائيًا. هل أنت متأكد؟',
-    () => api('/api/transfers/clear', { method: 'POST' }), async () => { toast('تم مسح سجل الإيداع والسحب'); await loadTransfers(); renderAll(); });
-  confirmThen('#btnUnfreezeBal', 'سيُلغى تثبيت عمود «الباقي من USDT» وتُحسب كل الأرقام من جديد. استخدمها لو ثُبِّتت أرقام خاطئة. هل أنت متأكد؟',
-    () => api('/api/balance/unfreeze', { method: 'POST' }), async (j) => { await Promise.all([loadOrders(), loadTransfers()]); renderAll(); toast(`أُلغي تثبيت ${fmt0(j.cleared)} رقم — أُعيد الحساب`); });
+  wireDangerZone();
 
   // --- حذف طلب من نافذة التفاصيل ---
-  $('#btnDeleteOrder').addEventListener('click', () => {
-    const o = state.detailsOrder;
-    if (!o) return;
-    openConfirm(`سيتم حذف الطلب ${o.orderNumber} من السجل. هل أنت متأكد؟`, async () => {
-      try { await api('/api/orders?id=' + encodeURIComponent(o.orderNumber), { method: 'DELETE' }); closeAllModals(); toast('تم حذف الطلب'); await loadOrders(); renderAll(); }
-      catch (e) { toast(e.message, 'err'); }
-    });
-  });
+  $('#btnDeleteOrder').addEventListener('click', deleteDetailsOrder);
 
   // --- نافذة التأكيد وإغلاق النوافذ ---
   $('#btnConfirmYes').addEventListener('click', () => {
@@ -191,11 +160,11 @@ function wireEvents() {
   $$('[data-close]').forEach((btn) => btn.addEventListener('click', () => btn.closest('.backdrop').classList.add('hidden')));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeAllModals(); closeMenu(); } });
 
-  // --- إعادة رسم الرسوم عند تغيير الحجم ---
+  // --- تغيير الحجم: تُعاد الرسوم، والفيديو للشاشات العريضة وحدها ---
   let resizeTimer;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { renderVolChart(); renderPriceChart(); }, 150);
+    resizeTimer = setTimeout(() => { renderVolChart(); renderPriceChart(); fitAppBackground(); }, 150);
   });
 }
 

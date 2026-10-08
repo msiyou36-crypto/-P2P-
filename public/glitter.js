@@ -1,5 +1,5 @@
 /*
- * Glitter Wrap — حقل نجوم متحرك (warp tunnel) متلألئ.
+ * Glitter Warp — حقل نجوم متحرك (warp tunnel) متلألئ.
  * منقول من مكوّن Framer/React إلى JavaScript عادي بدون أي مكتبة.
  * الاستخدام: const stop = Glitter.mount(containerEl, options); ... stop();
  */
@@ -26,7 +26,7 @@
   const DEFAULTS = {
     particleCount: 350,
     color1: '#ffffff',
-    color2: '#f0b90b',
+    color2: '#fb923c',
     color3: '#8fb7ff',
     speed: 4,
     density: 100,

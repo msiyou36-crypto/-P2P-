@@ -12,11 +12,12 @@
  * ما اكتمل وأكّدته قراءةُ رصيدٍ يُثبَّت في الخادم (balAfter) فلا يُعاد حسابه أبدًا. */
 'use strict';
 
+const usdtAsset = (assets) => assets.find((a) => String(a.asset).toUpperCase() === 'USDT');
 /** رصيد USDT الحالي (الفوري + التمويل)، أو null إن لم يُجلب بعد */
 function currentUsdtBalance() {
   const assets = (state.balance && state.balance.assets) || null;
   if (!assets) return null;
-  const u = assets.find((a) => String(a.asset).toUpperCase() === 'USDT');
+  const u = usdtAsset(assets);
   if (!u) return null;
   return num(u.free) + num(u.locked) + num(u.freeze) + num(u.withdrawing);
 }
@@ -80,7 +81,7 @@ function computeBalanceMap() {
     if (o.orderStatus === 'COMPLETED' && !o.archived && anchorValue(o) != null) anchorT = anchorT ? Math.min(anchorT, o.createTime) : o.createTime;
   }
   for (const t of state.transfers) {
-    if (t.status === 'COMPLETED' && !t.archived && anchorValue(t) != null && !isInternalKind(t.kind)) anchorT = anchorT ? Math.min(anchorT, t.time) : t.time;
+    if (t.status === 'COMPLETED' && !t.archived && anchorValue(t) != null) anchorT = anchorT ? Math.min(anchorT, t.time) : t.time;
   }
   if (anchorT && anchorT < cutoff) cutoff = anchorT;
   state.balAnchorOld = !!(anchorT && anchorT < Date.now() - CHAIN_WINDOW_MS);
@@ -96,7 +97,6 @@ function computeBalanceMap() {
     // بالـUSDT وحده — إلا عمليةً بعملة أخرى قوّمها المستخدم بالـUSDT يدويًا (usdtValue شاملٌ للرسوم)
     const uv = t.usdtValue;
     if (uv == null && String(t.coin || '').toUpperCase() !== 'USDT') continue;
-    if (isInternalKind(t.kind)) continue;
     const isOut = OUT_KINDS.has(t.kind);
     const v = uv != null ? uv : (isOut ? (t.amount || 0) + (t.fee || 0) : (t.amount || 0));
     evts.push({ k: balKey(t, false), t: t.time, d: isOut ? -v : v, zero: !!t.zeroPoint, at: anchorValue(t), frozen: t.balAfter });
@@ -114,13 +114,23 @@ function computeBalanceMap() {
   state.balBrokeAt = 0;
   state.balBrokeMissing = 0;
   state.balBrokeRows = 0;
-  if (!evts.length) { state.balGap = 0; state.balGapAt = 0; return new Map(); }
+  state.balGap = 0;
+  state.balGapAt = 0;
+  if (!evts.length) return new Map();
   evts.sort((a, b) => a.t - b.t);
   let run = 0;
   for (const e of evts) { run += e.d; e.bal = run; }
   const last = evts.length - 1;
   const map = new Map();
   const r2 = (v) => Math.round(v * 1e8) / 1e8;   // ثماني خانات: دقّة المنصة بلا ضجيج الفاصلة العائمة
+  /** الفرق بين آخر رقمٍ في العمود (بالإزاحة off) والرصيد الحالي: موجب = خرجٌ ناقص، سالب = دخلٌ ناقص.
+      at وقت المرساة — العملية الناقصة وقعت بعده */
+  const setGap = (off, at) => {
+    const gap = r2((evts[last].bal - off) - cur);
+    state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
+    state.balGapOut = gap > 0;
+    state.balGapAt = state.balGap ? at : 0;
+  };
 
   /* أرقامٌ مثبَّتة لا يفسّرها الدفتر (الفرق بين مثبَّتين ≠ مجموع ما بينهما) تُصلَّح
      تلقائيًا (healFrozen). زوجٌ يتخلّله دبّوسٌ يدوي لا يُفحص: القفزة عنده مقصودة. */
@@ -161,16 +171,12 @@ function computeBalanceMap() {
     let settled = snaps.length ? snaps[snaps.length - 1].at - SNAP_SETTLE_MS : 0;
     for (let i = last; i >= 0; i--) if (evts[i].zero) { settled = Math.max(settled, evts[i].t); break; }
     state.balSettledTo = settled;
-    if (cur == null) { state.balGap = 0; state.balGapAt = 0; return map; }
-    const gap = r2((evts[last].bal - a.off) - cur);   // موجب = خرجٌ ناقص، سالب = دخلٌ ناقص
-    state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
-    state.balGapOut = gap > 0;
-    state.balGapAt = state.balGap ? evts[a.i].t : 0;
+    if (cur != null) setGap(a.off, evts[a.i].t);
     return map;
   }
 
   // بلا لقطةٍ ولا دبّوس: لا يبقى إلا رصيد المحفظة نُثبّت عليه، وبدونه «—»
-  if (cur == null) { state.balGap = 0; state.balGapAt = 0; state.balNeedsWallet = true; return new Map(); }
+  if (cur == null) { state.balNeedsWallet = true; return new Map(); }
   state.balFloating = true;
   const off = cur - run;
   // أحدثُ نزولٍ تحت الصفر = نقطة تصفير مؤكَّدة نجعلها الأساس بدل الرصيد الحالي
@@ -178,15 +184,11 @@ function computeBalanceMap() {
   for (let i = last; i >= 0 && zIdx < 0; i--) if (evts[i].bal + off < 0) zIdx = i;
   if (zIdx < 0) {
     for (let i = 0; i <= last; i++) map.set(evts[i].k, r2(evts[i].bal + off));
-    state.balGap = 0; state.balGapAt = 0;
     return map;
   }
   const base = evts[zIdx].bal;
   fillChain(evts, last, map, base, zIdx, r2, state);
-  const gap = r2((evts[last].bal - base) - cur);
-  state.balGap = Math.abs(gap) > 1 ? Math.abs(gap) : 0;
-  state.balGapOut = gap > 0;
-  state.balGapAt = state.balGap ? evts[zIdx].t : 0;
+  setGap(base, evts[zIdx].t);
   return map;
 }
 
@@ -214,8 +216,7 @@ async function healFrozen() {
   _healed = true;
   try {
     const j = await api('/api/balance/unfreeze', { method: 'POST' });
-    await Promise.all([loadOrders(), loadTransfers()]);
-    renderAll();
+    await reloadLedger();
     if (j.cleared) toast(`صُحّح عمود «الباقي من USDT» — أُعيد حساب ${fmt0(j.cleared)} رقم`);
   } catch (e) { console.error('heal: ' + e.message); }
 }
@@ -300,7 +301,7 @@ function openByBalKey(k) {
 /** لماذا قد يكون عمود «الباقي» ناقصًا أو مؤقتًا — تنبيهٌ واحد بالأهمّ أولًا.
  *  loaded: هل جُلب الرصيد (بدونه لا يُقال إلا سببُ فراغ العمود) */
 function balanceNotes(loaded) {
-  const oldPin = { kind: 'info', title: 'نقطة التثبيت (📌) على عملية قديمة جدًّا',
+  const oldPin = { kind: 'info', title: 'نقطة التثبيت (المعلَّمة بدبّوس في عمود «الباقي») على عملية قديمة جدًّا',
     body: 'الحساب يمتدّ منها شهورًا وسجلُّ المنصة البعيد ناقص، فيبقى كثيرٌ من عمود «الباقي» فارغًا. افتح أحدث عملية واكتب رصيدك الحقيقي بعدها في «تثبيت الباقي» — يُحسب العمود منها ويستقيم.' };
   if (!loaded) {
     if (state.balAnchorOld) return [oldPin];
@@ -348,7 +349,7 @@ function renderBalance() {
     subEl.textContent = 'اضغط «تحديث الرصيد» لعرض رصيدك الحالي في الحساب الفوري ومحفظة التمويل معًا.';
   } else {
     const assets = b.assets || [];
-    const usdt = assets.find((a) => String(a.asset).toUpperCase() === 'USDT');
+    const usdt = usdtAsset(assets);
     const free = usdt ? num(usdt.free) : 0;
     const held = usdt ? num(usdt.locked) + num(usdt.freeze) + num(usdt.withdrawing) : 0;
     valEl.textContent = fmt2(free + held);

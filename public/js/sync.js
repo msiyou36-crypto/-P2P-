@@ -4,9 +4,14 @@
 
 const SYNC_COOLDOWN_KEY = 'p2pSyncCooldownUntil';
 let _cooldownTimer = null;
-const syncCooldownUntil = () => Number(localStorage.getItem(SYNC_COOLDOWN_KEY) || 0);
+const syncCooldownUntil = () => Number(lsGet(SYNC_COOLDOWN_KEY) || 0);
 function setSyncCooldown(ms) {
-  localStorage.setItem(SYNC_COOLDOWN_KEY, String(Date.now() + ms));
+  lsSet(SYNC_COOLDOWN_KEY, Date.now() + ms);
+  applySyncCooldown();
+}
+/** يمدّ القفل إلى ms من الآن إن كان الباقي منه أقصر (ولا يقصّره أبدًا) — لحظرٍ يُبلغ به الخادم */
+function extendSyncCooldown(ms) {
+  if (ms > 0 && syncCooldownUntil() < Date.now() + ms) lsSet(SYNC_COOLDOWN_KEY, Date.now() + ms);
   applySyncCooldown();
 }
 /** نصّ زرّ المزامنة وشارته الصغيرة (المتبقّي من الحصّة، أو دقائق الانتظار بعد الحظر) */
@@ -15,7 +20,7 @@ function setSyncButton(text, badge) {
   btn.querySelector('.sync-label').textContent = text;
   const b = btn.querySelector('.sync-badge');
   b.textContent = badge || '';
-  b.hidden = !badge;
+  b.classList.toggle('hidden', !badge);
 }
 /** يضبط زر المزامنة: مقفول أثناء الحظر أو عند نفاد الحصّة، وإلا يعرض المتبقي */
 function applySyncCooldown() {
@@ -65,7 +70,7 @@ const SYNC_KINDS_KEY = 'p2pSyncKinds';
 const kindLabel = (id) => (SYNC_KINDS.find((k) => k.id === id) || { label: id }).label;
 function savedSyncKinds() {
   try {
-    const v = JSON.parse(localStorage.getItem(SYNC_KINDS_KEY) || 'null');
+    const v = JSON.parse(lsGet(SYNC_KINDS_KEY) || 'null');
     const ok = Array.isArray(v) ? v.filter((id) => SYNC_KINDS.some((k) => k.id === id)) : [];
     if (ok.length) return ok;
   } catch {}
@@ -147,7 +152,7 @@ function toggleAllSyncKinds(on) {
 function startSync() {
   const picked = pickedSyncKinds();
   if (!picked.length) return;
-  try { localStorage.setItem(SYNC_KINDS_KEY, JSON.stringify(picked)); } catch {}
+  lsSet(SYNC_KINDS_KEY, JSON.stringify(picked));
   closeModal('#mSync');
   runSync(picked);
 }
@@ -175,12 +180,12 @@ async function runSync(kinds) {
         const newTx = (ev.depAdded || 0) + (ev.wdAdded || 0) + (ev.payAdded || 0) + (ev.cvtAdded || 0) + (ev.sptAdded || 0);
         const ran = ev.kinds || dataKinds;
         const what = ran.length < SYNC_KINDS.length - 1 ? ` (${ran.map(kindLabel).join('، ')})` : '';
-        toast(`اكتملت المزامنة${what} ✓ — ${fmt0(ev.added)} طلب و ${fmt0(newTx)} حوالة (جديدة)`);
+        toast(`اكتملت المزامنة${what} — ${fmt0(ev.added)} طلب و ${fmt0(newTx)} حوالة (جديدة)`);
         return;
       }
       if (ev.msg) $('#syncMsg').textContent = ev.msg;
       if (ev.pct != null) $('#syncPct').style.width = ev.pct + '%';
-      if (ev.msg && ev.msg.startsWith('⚠')) toast(ev.msg, 'err');   // تحذيرات الجلب المبتور تبقى مرئية
+      if (ev.warn && ev.msg) toast(ev.msg, 'err');   // تحذيرات الجلب المبتور تبقى مرئية (تنبيهٌ أحمر بمثلّث)
     });
     if (sawError) throw new Error(sawError);
     await Promise.all([loadOrders(), loadTransfers(), loadSettings()]);

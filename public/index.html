@@ -7,7 +7,7 @@
 <link rel="icon" type="image/x-icon" href="favicon.ico">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f0b90b'/%3E%3Cpath d='M9 20v-8l4 5 3-4 3 4 4-5v8' stroke='%231a1a19' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23fb923c'/%3E%3Cpath d='M9 20v-8l4 5 3-4 3 4 4-5v8' stroke='%231a1a19' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1a1a19">
@@ -17,7 +17,7 @@
 
 <!-- ============ شاشة تسجيل الدخول ============ -->
 <div id="loginScreen" class="login-screen">
-  <!-- الخلفية: فيديو متكرّر يُحمَّل من js/session.js (لا مع «توفير البيانات» أو الاتصال البطيء،
+  <!-- الخلفية: فيديو متكرّر يُحمَّل من js/backgrounds.js (لا مع «توفير البيانات» أو الاتصال البطيء،
        وإن تعذّر حلّت محلّه خلفية النجوم)، وفوقه تظليلٌ خفيف، وزرٌّ يوقفه -->
   <video id="loginVideo" class="login-video" muted loop playsinline preload="none" aria-hidden="true"
     data-src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260622_204221_5339e40b-e73d-4ab0-9c65-79c18c66fd50.mp4"></video>
@@ -62,7 +62,7 @@
           </div>
         </div>
       </div>
-      <button type="submit" class="btn accent login-btn" id="btnSetup" data-icon="check">حفظ والدخول</button>
+      <button type="submit" class="btn accent login-btn" data-icon="check">حفظ والدخول</button>
       <div class="login-error" id="setupError" role="alert"></div>
     </form>
 
@@ -81,18 +81,20 @@
         <label for="loginPass">كلمة السر</label>
         <span class="input-wrap"><span class="iw-ic" data-icon="key" aria-hidden="true"></span><input type="password" id="loginPass" name="password" dir="ltr" required autofocus autocomplete="current-password"><button type="button" class="pw-toggle" aria-label="إظهار كلمة السر" data-icon="eye"></button></span>
       </div>
-      <button type="submit" class="btn accent login-btn" id="btnLogin" data-icon="login">دخول</button>
+      <button type="submit" class="btn accent login-btn" data-icon="login">دخول</button>
       <div class="login-error" id="loginError" role="alert"></div>
     </form>
 
     <div class="login-note"><span data-icon="lock" aria-hidden="true"></span>كلمات السر محفوظة مشفّرة، والدخول يُطلب من جديد عند إغلاق المتصفح.</div>
+    <!-- رقم الإصدار (من package.json عبر /api/auth/status)، وكذلك أسفل القائمة -->
+    <div class="app-version login-version"></div>
   </div>
 </div>
 
 <!-- ============ التطبيق ============ -->
 <div id="app" class="hidden">
 
-<!-- خلفية التطبيق: فيديو بثٍّ متكرّر (HLS من Mux) على الشاشات العريضة (js/session.js) وفوقه تظليل،
+<!-- خلفية التطبيق: فيديو بثٍّ متكرّر (HLS من Mux) على الشاشات العريضة (js/backgrounds.js) وفوقه تظليل،
      وإلا خلفية النجوم. #appGlitter حاوية النجوم، ومع الفيديو يصير هو التظليل -->
 <video id="appVideo" class="app-video" muted loop playsinline preload="none" aria-hidden="true"
   data-src="https://stream.mux.com/kimF2ha9zLrX64H00UgLGPflCzNtl1T0215MlAmeOztv8.m3u8"></video>
@@ -112,7 +114,7 @@
   <div class="actions">
     <span id="roleBadge" class="role-badge"></span>
     <!-- الأيقونات تُضاف من data-icon (decorateIcons في js/core.js) -->
-    <button id="btnSync" class="btn accent sync-btn" data-icon="refresh" title="اختر ما تجلبه من المنصة ثم زامن"><span class="sync-label">مزامنة</span><span class="sync-badge" hidden></span></button>
+    <button id="btnSync" class="btn accent sync-btn" data-icon="refresh" title="اختر ما تجلبه من المنصة ثم زامن"><span class="sync-label">مزامنة</span><span class="sync-badge hidden"></span></button>
     <div class="menu-wrap">
       <button id="btnMenu" class="btn menu-btn" data-icon="menu" data-icon-end="chev" aria-haspopup="menu" aria-expanded="false" aria-controls="menuDropdown"><span>القائمة</span></button>
       <div id="menuDropdown" class="menu-dropdown hidden" role="menu" aria-label="القائمة">
@@ -140,6 +142,7 @@
         <div class="menu-group">
           <button id="btnLogout" class="menu-item danger-item" role="menuitem" data-icon="logout">تسجيل الخروج</button>
         </div>
+        <div class="app-version menu-version"></div>
       </div>
     </div>
   </div>
@@ -156,7 +159,7 @@
 <main>
 
   <!-- بطاقة الرصيد: الحساب الفوري + محفظة التمويل معًا (يملؤها renderBalance في js/balance.js) -->
-  <section class="card wallet-card" id="walletCard" aria-label="الرصيد">
+  <section class="card wallet-card" aria-label="الرصيد">
     <div class="wallet-head">
       <div class="wallet-title">
         <span class="kpi-icon" data-icon="wallet" aria-hidden="true"></span>
@@ -167,7 +170,7 @@
       </div>
       <div class="wallet-actions">
         <span class="sub" id="walletUpdated"></span>
-        <button id="btnRefreshBal" class="btn small icon-btn" data-icon="refresh">تحديث الرصيد</button>
+        <button id="btnRefreshBal" class="btn small" data-icon="refresh">تحديث الرصيد</button>
       </div>
     </div>
     <div class="wallet-value"><span class="num" id="walletUsdt">—</span><span class="unit">USDT</span></div>
@@ -301,7 +304,7 @@
             <th data-sort="_price" class="sortable num">السعر</th>
             <th data-sort="_total" class="sortable num">المبلغ</th>
             <th>العملة/الشبكة</th>
-            <th class="num col-bal" title="الباقي من USDT بعد كل عملية (الحساب الفوري + محفظة التمويل معًا) — مثبّت على رصيدك الحالي، فإن نقصت عملية من السجل يُثبَّت على آخر لحظة بلغ فيها رصيدك صفرًا ويظهر مقدار الناقص في بطاقة الرصيد. يُحسب لآخر ٩٠ يومًا فقط لأن المنصة لا تُرجع مبيعات P2P الأقدم؛ ويظهر «—» لما هو أقدم، وللعمليات الملغاة وغير USDT، أو إذا لم يُجلب الرصيد.">الباقي من USDT</th>
+            <th class="num col-bal" title="الباقي من USDT بعد كل عملية (الفوري + التمويل معًا). يُحسب من نقطة تثبيتٍ تكتبها أنت، أو من آخر رقمٍ مثبَّت، أو من لقطة الرصيد اليومية، وإلا من رصيدك الحالي؛ وما اكتمل يُثبَّت فلا يتغيّر. لآخر ٩٠ يومًا فقط لأن المنصة لا تُرجع مبيعات P2P الأقدم؛ و«—» لما هو أقدم، وللملغاة وغير USDT، وحيث ينقص السجلَّ دخلٌ.">الباقي من USDT</th>
             <th>الطرف الآخر</th>
             <th data-sort="_status" class="sortable">الحالة</th>
             <th class="col-note is-ref">الإشاري</th>
@@ -386,7 +389,7 @@
   </div>
 </div>
 
-<!-- نافذة إضافة يدوية: النوع، ثم المبالغ، ثم التفاصيل، ثم ما هو للمرجع -->
+<!-- نافذة إضافة يدوية: النوع، ثم المبالغ، ثم التفاصيل (ومنها الإشاري والملاحظة) -->
 <div class="backdrop hidden" id="mAdd">
   <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="mAddTitle">
     <div class="modal-head">
@@ -473,11 +476,11 @@
     </div>
     <div class="modal-body">
       <label class="dropzone" id="csvDrop">
-        <input type="file" id="csvFile" accept=".csv,text/csv" class="sr-only">
+        <input type="file" accept=".csv,text/csv" class="sr-only">
         <span class="dz-icon" data-icon="fileup" aria-hidden="true"></span>
         <span class="dz-title">اختر ملف CSV أو اسحبه إلى هنا</span>
         <span class="dz-sub">ملف التصدير من هذا النظام، أو ملف تصدير سجل P2P من المنصة (بالإنجليزية)، أو أي CSV بأعمدة مشابهة</span>
-        <span class="dz-file" hidden></span>
+        <span class="dz-file hidden"></span>
       </label>
       <div id="importPreview" class="import-preview hidden"></div>
     </div>
@@ -488,7 +491,7 @@
   </div>
 </div>
 
-<!-- نافذة الإعدادات: مفتاح Binance، ثم المزامنة، ثم منطقة الخطر مطويّة -->
+<!-- نافذة الإعدادات: مفتاح Binance والمزامنة، وزرٌّ يفتح منطقة الخطر في نافذتها -->
 <div class="backdrop hidden" id="mSettings">
   <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="mSettingsTitle">
     <div class="modal-head">
@@ -650,7 +653,7 @@
     </div>
     <div class="modal-body">
       <div class="log-wrap">
-        <table id="loginLogTable" class="log-table">
+        <table class="log-table">
           <thead><tr><th>الدور</th><th>ما حدث</th><th>التاريخ والوقت</th><th>عنوان IP</th></tr></thead>
           <tbody id="loginLogBody"></tbody>
         </table>
@@ -659,7 +662,7 @@
     </div>
     <div class="modal-foot">
       <button class="btn" data-close>إغلاق</button>
-      <!-- صفحاتٌ بقدر الشاشة بدل التمرير (js/tools.js) -->
+      <!-- صفحاتٌ بقدر الشاشة بدل التمرير (js/admin.js) -->
       <div class="log-pager hidden" id="logPager">
         <button type="button" class="btn small" id="logNewer">الأحدث</button>
         <span class="sub" id="logInfo"></span>
@@ -725,7 +728,7 @@
               <input type="file" id="restoreFile" accept=".xlsx,.csv" class="sr-only">
               <span class="dz-icon" data-icon="file" aria-hidden="true"></span>
               <span class="dz-title">اختر ملف Excel أو CSV، أو اسحبه هنا</span>
-              <span class="dz-file" hidden></span>
+              <span class="dz-file hidden"></span>
             </label>
             <button class="btn" id="btnRestoreFile" data-icon="search">اعرض ما ينقص</button>
           </div>
@@ -748,7 +751,7 @@
       <button class="x" data-close aria-label="إغلاق" data-icon="x"></button>
     </div>
     <div class="modal-body">
-      <form id="maintForm" class="form-grid" autocomplete="off">
+      <form class="form-grid" autocomplete="off">
         <label class="full switch-row">
           <input type="checkbox" name="on" id="maintOn">
           <span class="sw-text"><b>تفعيل وضع الصيانة</b><span>يخصّ هذا السستم وحده: <bdi id="maintSystem" dir="ltr">—</bdi></span></span>
@@ -771,11 +774,11 @@
 <!-- شاشة الصيانة (تظهر للمستخدمين عند إيقاف العمل) -->
 <div id="maintenanceScreen" class="maint-screen hidden">
   <div class="maint-box">
-    <div class="maint-icon">⛔</div>
+    <div class="maint-icon" data-icon="ban" aria-hidden="true"></div>
     <h2>النظام تحت الصيانة</h2>
     <p id="maintScreenMsg" class="maint-msg"></p>
-    <a id="maintScreenLink" class="btn accent maint-link hidden" target="_blank" rel="noopener noreferrer">🔗 فتح الرابط</a>
-    <button id="maintLogout" class="btn ghost">↩ تسجيل الخروج</button>
+    <a id="maintScreenLink" class="btn accent maint-link hidden" target="_blank" rel="noopener noreferrer" data-icon="link">فتح الرابط</a>
+    <button id="maintLogout" class="btn ghost" data-icon="logout">تسجيل الخروج</button>
   </div>
 </div>
 
@@ -800,6 +803,7 @@
 <script src="xlsx.js"></script>
 <!-- ملفات الواجهة بالترتيب (تتشارك النطاق العام؛ الشرح في js/core.js) -->
 <script src="js/core.js"></script>
+<script src="js/backgrounds.js"></script>
 <script src="js/balance.js"></script>
 <script src="js/session.js"></script>
 <script src="js/filters.js"></script>
@@ -807,7 +811,9 @@
 <script src="js/table.js"></script>
 <script src="js/views.js"></script>
 <script src="js/sync.js"></script>
-<script src="js/tools.js"></script>
+<script src="js/diag.js"></script>
+<script src="js/records.js"></script>
+<script src="js/admin.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

@@ -9,14 +9,29 @@
 
 const VIEWS = ['table', 'daily', 'cards', 'tiles'];
 const VIEW_KEY = 'p2pView';
-try { const v = localStorage.getItem(VIEW_KEY); if (VIEWS.includes(v)) state.view = v; } catch {}
+{ const v = lsGet(VIEW_KEY); if (VIEWS.includes(v)) state.view = v; }   // الشكل المحفوظ من آخر زيارة
 
 function setView(v) {
   if (!VIEWS.includes(v) || v === state.view) return;
   state.view = v;
   state.page = 1;
-  try { localStorage.setItem(VIEW_KEY, v); } catch {}
+  lsSet(VIEW_KEY, v);
   renderLedger();
+}
+
+/** يرتّب القائمة بمفتاح الفرز الحالي؛ الفارغ آخرًا دائمًا */
+function sortLedger() {
+  const { key, dir } = state.sort;
+  state.ledger.sort((a, b) => {
+    let va = a[key], vb = b[key];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = String(vb).toLowerCase(); }
+    if (va < vb) return -1 * dir;
+    if (va > vb) return 1 * dir;
+    return 0;
+  });
 }
 
 /** يرسم صفحة العمليات الحالية بالشكل المختار، مع العدد وأزرار الصفحات ومؤشّرات الفرز */
@@ -34,11 +49,11 @@ function renderLedger() {
   const days = view !== 'table' && state.sort.key === '_t' ? dayGroups(state.ledger) : null;
 
   $('#emptyState').classList.toggle('hidden', hasData);
-  $('#ledgerTable').style.display = hasData && tabular ? '' : 'none';
+  $('#ledgerTable').classList.toggle('hidden', !hasData || !tabular);
   const grid = $('#ledgerGrid');
   grid.classList.toggle('hidden', !hasData || tabular);
   grid.classList.toggle('is-tiles', view === 'tiles');
-  $('#pager').style.display = total > PAGE_SIZE ? '' : 'none';
+  $('#pager').classList.toggle('hidden', total <= PAGE_SIZE);
   $('#tableCount').textContent = total ? `${fmt0(total)} عملية` : (hasData ? 'لا نتائج مطابقة للفلاتر' : '');
 
   const mixed = distinctFiats(state.filtered).length > 1;
@@ -121,7 +136,7 @@ function dayGroups(ledger) {
 function dayTitle(d) {
   const today = bizDayStart(Date.now());
   const rel = d === today ? 'اليوم · ' : (d === bizDayStart(today - 1) ? 'أمس · ' : '');
-  return rel + new Date(d).toLocaleDateString('ar', { weekday: 'long' }) + ' ' + fmtDT(d).slice(0, 10);
+  return rel + new Date(d).toLocaleDateString('ar', { weekday: 'long' }) + ' ' + fmtD(d);
 }
 
 /** رأس اليوم: تاريخه وعدد عملياته ومبيعاته ومقبوضاته ومتوسط سعره وباقيه آخر اليوم */
@@ -207,7 +222,7 @@ function opCard(row, n) {
   }
   if (it.counterPart) addRow('الطرف الآخر', it.counterPart);
   const bal = balOf(it, isP2P);
-  const pinned = it.balanceAt != null || it.zeroPoint;
+  const pinned = anchorValue(it) != null;
   const vb = addRow('الباقي من USDT', bal == null ? '—' : fmt2(bal), 'is-bal' + (pinned ? ' is-zeropoint' : ''));
   if (pinned) vb.title = 'نقطة التثبيت — العمود كلّه محسوب منها';
 

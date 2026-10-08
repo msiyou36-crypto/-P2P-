@@ -1,6 +1,6 @@
 {
   "name": "sijil-p2p",
-  "version": "1.0.0",
+  "version": "5.5.0",
   "private": true,
   "description": "سجل حوالات P2P — نظام عرض وتحليل سجل صفقات P2P وحوالات الإيداع/السحب",
   "main": "server.js",

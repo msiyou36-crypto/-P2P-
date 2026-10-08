@@ -89,13 +89,14 @@ function startMock(opts = {}) {
     }
   });
   return new Promise((resolve) => srv.listen(MOCK_PORT, '127.0.0.1', () => resolve({
-    srv,
     hits: async () => (await (await fetch(MOCK_BASE + '/__hits')).json()),
     close: () => new Promise((r) => srv.close(r)),
   })));
 }
 
 /* ---------- الخادم ---------- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 function freshDataDir(name) {
   const dir = path.join(os.tmpdir(), 'p2p-log-tests', name + '-' + process.pid);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -123,13 +124,12 @@ async function startServer(o = {}) {
   }
   if (!up) throw new Error('الخادم لم يبدأ');
   return {
-    dir, proc,
+    dir,
     stop: async () => { proc.kill(); await sleep(400); },
   };
 }
 
 /* ---------- الطلبات ---------- */
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function login(role, password) {
   const r = await fetch(BASE + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role, password: password || PASSWORDS[role] }) });
@@ -138,10 +138,10 @@ async function login(role, password) {
   return j.token;
 }
 
-/** api(token)(path, { method, body, raw }) → { status, json } */
+/** api(token)(path, { method, body, raw, headers }) → { status, json } */
 function api(token) {
   return async (p, opt = {}) => {
-    const headers = {};
+    const headers = Object.assign({}, opt.headers);
     if (token) headers['X-Auth-Token'] = token;
     let body;
     if (opt.raw != null) { body = opt.raw; }
@@ -163,7 +163,7 @@ async function stream(token, p, body) {
   if (!r.ok) { let j = {}; try { j = JSON.parse(text); } catch {} return { status: r.status, lines: [], error: j.error || text }; }
   const lines = text.split('\n').filter(Boolean).map((l) => JSON.parse(l));
   const err = lines.find((l) => l.error);
-  return { status: r.status, lines, done: lines.find((l) => l.done), error: err && err.error, warnings: lines.filter((l) => l.msg && l.msg.startsWith('⚠')).map((l) => l.msg) };
+  return { status: r.status, lines, done: lines.find((l) => l.done), error: err && err.error, warnings: lines.filter((l) => l.warn).map((l) => l.msg) };
 }
 
 /** طلب P2P خام كما تُرجعه المنصة */
@@ -172,4 +172,4 @@ function rawOrder(i, t, extra = {}) {
   return Object.assign({ orderNumber: 'ORD' + String(100000 + i), tradeType: 'SELL', amount: String(amt), totalPrice: String(amt * 8200), unitPrice: '8200', fiat: 'SDG', asset: 'USDT', orderStatus: 'COMPLETED', createTime: t, counterPartNickName: 'Ran***' }, extra);
 }
 
-module.exports = { ROOT, BASE, MOCK_BASE, PASSWORDS, check, finish, startMock, startServer, freshDataDir, login, api, stream, sleep, rawOrder };
+module.exports = { MOCK_BASE, PASSWORDS, check, finish, startMock, startServer, freshDataDir, login, api, stream, rawOrder };

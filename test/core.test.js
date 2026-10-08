@@ -20,17 +20,23 @@ const CONVERTS = [{ orderId: 'cvt1', fromAsset: 'USDT', toAsset: 'TRX', fromAmou
   try {
     /* ---- الدخول والصلاحيات ---- */
     const status = (await T.api()('/api/auth/status')).json;
-    T.check('الحالة: مضبوطٌ من البيئة ويُعلن الحساب المقفول', status.configured && status.hasUser && status.hasUser2 && status.account && status.account.id === 'p2p', status);
+    T.check('الحالة: مضبوطٌ من البيئة ويُعلن الحساب المقفول ورقم الإصدار', status.configured && status.hasUser && status.hasUser2 && status.account && status.account.id === 'p2p' && /^\d+(\.\d+)+$/.test(status.version || ''), status);
     let bad = null;
     try { await T.login('admin', 'wrong'); } catch (e) { bad = e.message; }
     T.check('كلمة سر خاطئة تُرفض', /غير صحيحة/.test(bad || ''), bad);
-    const admin = T.api(await T.login('admin'));
+    const anon = T.api();
+    const from = { 'X-Forwarded-For': '10.9.9.9' };
+    for (let i = 0; i < 10; i++) await anon('/api/auth/login', { body: { role: 'admin', password: 'wrong' }, headers: from });
+    const locked = await anon('/api/auth/login', { body: { role: 'admin', password: T.PASSWORDS.admin }, headers: from });
+    T.check('عشر محاولات خاطئة تُقفل الدخول من ذلك العنوان', locked.status === 429, locked);
+    const admin = T.api(await T.login('admin'));   // …ولا تمسّ غيره
     const user = T.api(await T.login('user'));
     const user2 = T.api(await T.login('user2'));
     T.check('بلا دخول: الطلبات ممنوعة (401)', (await T.api()('/api/orders')).status === 401);
     T.check('مستخدم: يقرأ الطلبات', (await user('/api/orders')).status === 200);
     T.check('مستخدم: لا يضيف طلبًا (403)', (await user('/api/orders', { body: { amount: 1, totalPrice: 1 } })).status === 403);
     T.check('مستخدم: لا يعلّق (403)', (await user('/api/orders/annotate', { body: { id: 'x' } })).status === 403);
+    T.check('طلبٌ ليس JSON يُردّ بـ 400 لا 500', (await user2('/api/orders/annotate', { raw: '{bad' })).status === 400);
 
     /* ---- طلبات: إضافة يدوية، تعليق، استيراد ---- */
     const add = (await admin('/api/orders', { body: { tradeType: 'SELL', amount: 50, unitPrice: 8000, totalPrice: 400000, fiat: 'SDG', counterPart: 'Manual', orderNumber: 'MAN1', createTime: NOW - 10 * H } })).json;
@@ -82,6 +88,9 @@ const CONVERTS = [{ orderId: 'cvt1', fromAsset: 'USDT', toAsset: 'TRX', fromAmou
     T.check('التثبيت: أول قيمة نهائية ولا تُكتب فوقها', f1.frozen === 2 && f2.frozen === 0 && frozen.balAfter === 123.456, { f1, f2, bal: frozen.balAfter });
     const uf = (await admin('/api/balance/unfreeze', { method: 'POST' })).json;
     T.check('إلغاء التثبيت يمسح الكل', uf.cleared === 2, uf);
+    const fp = (await user('/api/balance/freeze', { raw: '{"orders":{"__proto__":5},"transfers":{"constructor":5}}' })).json;
+    const polluted = (await admin('/api/orders')).json.orders.some((o) => o.balAfter === 5);
+    T.check('التثبيت: معرّفات الكائن الأصل (__proto__) لا تُلوّث الصفوف', fp.frozen === 0 && !polluted, fp);
 
     /* ---- الحذف والمقابر: المحذوف لا يعود بعد إعادة التشغيل ---- */
     const del = (await admin('/api/orders?id=ORD100004', { method: 'DELETE' })).json;
@@ -123,16 +132,21 @@ const CONVERTS = [{ orderId: 'cvt1', fromAsset: 'USDT', toAsset: 'TRX', fromAmou
 
     /* ---- الاستعادة من ملف تصدير ---- */
     await admin2('/api/orders?id=MAN1', { method: 'DELETE' });
-    const csv = '﻿التاريخ,النوع,الكمية USDT,السعر,المبلغ,العملة/الشبكة,الطرف الآخر,الحالة,العمولة/الرسوم,الإشاري,الملاحظة,المعرّف\n'
+    const csv = '\uFEFFالتاريخ,النوع,الكمية USDT,السعر,المبلغ,العملة/الشبكة,الطرف الآخر,الحالة,العمولة/الرسوم,الإشاري,الملاحظة,المعرّف\n'
       + '2026-10-05 12:28:35,بيع,260.21,8460,2200950,ج.س,Rania76,مكتمل,0,,,MAN1\n'
       + '2026-10-05 12:30:00,استلام Pay,10,,,USDT,Someone,مكتمل,0,,,paynew\n'
-      + '2026-10-05 12:31:00,إيداع,10,,,TRX,,مكتمل,0,,,ignored\n';
-    const pv = (await admin2('/api/restore/preview', { raw: csv })).json;
-    T.check('معاينة الاستعادة: يعرض الناقص فقط', pv.missingOrders.length === 1 && pv.missingOrders[0].orderNumber === 'MAN1' && pv.missingTransfers.length === 1 && pv.inFile.depwd === 1, pv);
+      + '2026-10-05 12:31:00,إيداع,10,,,TRX,,مكتمل,0,,,ignored\n'
+      + '2026-10-05 12:32:00,بيع فوري,10,,,TRX,,مكتمل,0,,,7781\n';
+    // الملف صُدِّر على جهازٍ بتوقيت UTC+2 (getTimezoneOffset = -120)
+    const pv = (await admin2('/api/restore/preview?tz=-120', { raw: csv })).json;
+    T.check('معاينة الاستعادة: يعرض الناقص فقط (والفوري تعيده المزامنة)', pv.missingOrders.length === 1 && pv.missingOrders[0].orderNumber === 'MAN1' && pv.missingTransfers.length === 1 && pv.inFile.depwd === 2, pv);
+    T.check('الاستعادة تقرأ الوقت بتوقيت من صدّر الملف', pv.missingOrders[0].createTime === Date.UTC(2026, 9, 5, 10, 28, 35), pv.missingOrders[0]);
     const ap = (await admin2('/api/restore/apply', { body: { orders: pv.missingOrders, transfers: pv.missingTransfers } })).json;
+    await admin2('/api/auth/password', { body: { userPassword: '' } });   // المسؤول يحذف «مستخدم»
     await srv.stop();
     srv = await T.startServer({ name: 'core', dir: srv.dir, keepConfig: true });
     const admin3 = T.api(await T.login('admin'));
+    T.check('المستخدم المحذوف لا يعود من متغيّر البيئة بإعادة التشغيل', (await T.api()('/api/auth/status')).json.hasUser === false);
     const restored = (await admin3('/api/orders')).json.orders.find((o) => o.orderNumber === 'MAN1');
     T.check('الاستعادة تُخرج الصفّ من المقبرة ويبقى بعد إعادة التشغيل', ap.restored === 2 && restored && restored.source === 'import', ap);
 
