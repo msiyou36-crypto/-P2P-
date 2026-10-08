@@ -171,8 +171,21 @@
     </div>
   </section>
 
-  <!-- الفلاتر: تحكم في الجدول والأرقام أعلاه — البحث والقوائم في صف، والفترة في صف -->
+  <!-- الفلاتر: تحكم في الجدول والأرقام أعلاه — الفترة أولًا بعرض كامل («مخصّص» وحده يُظهر
+       من/إلى)، ثم البحث والقوائم -->
   <section class="card filters" aria-label="الفلاتر">
+    <div class="seg range-seg" id="rangeSeg" role="group" aria-label="الفترة">
+      <button type="button" data-range="all">الكل</button>
+      <button type="button" data-range="90">90 يومًا</button>
+      <button type="button" data-range="30">30 يومًا</button>
+      <button type="button" data-range="7">7 أيام</button>
+      <button type="button" data-range="1" class="on">اليوم</button>
+      <button type="button" data-range="custom" data-icon="calendar">مخصّص</button>
+    </div>
+    <div class="date-range hidden" id="dateRange" role="group" aria-label="فترة مخصّصة">
+      <label class="date-lbl">من <input type="date" id="xFrom" aria-label="من تاريخ"></label>
+      <label class="date-lbl">إلى <input type="date" id="xTo" aria-label="إلى تاريخ"></label>
+    </div>
     <div class="f-row">
       <label class="search-box">
         <span class="search-ic" data-icon="search" aria-hidden="true"></span>
@@ -199,20 +212,6 @@
       <select id="fFiat" aria-label="العملة المحلية">
         <option value="all">كل العملات</option>
       </select>
-    </div>
-    <div class="f-row">
-      <div class="seg range-seg" id="rangeSeg" role="group" aria-label="الفترة">
-        <button data-range="all">الكل</button>
-        <button data-range="90">90 يومًا</button>
-        <button data-range="30">30 يومًا</button>
-        <button data-range="7">7 أيام</button>
-        <button data-range="1" class="on">اليوم</button>
-      </div>
-      <div class="date-range" role="group" aria-label="فترة مخصّصة">
-        <span class="dr-ic" data-icon="calendar" aria-hidden="true"></span>
-        <label class="date-lbl">من <input type="date" id="xFrom" aria-label="من تاريخ"></label>
-        <label class="date-lbl">إلى <input type="date" id="xTo" aria-label="إلى تاريخ"></label>
-      </div>
     </div>
   </section>
 

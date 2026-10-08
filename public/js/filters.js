@@ -14,6 +14,27 @@ function bizDayStart(ms) {
 /** بداية اليوم المحاسبي المسمّى «YYYY-MM-DD» */
 const bizDayFrom = (s) => new Date(s + 'T00:00:00').setHours(DAY_CLOSE_H, 0, 0, 0);
 
+/** «YYYY-MM-DD» لليوم المحاسبي الذي يبدأ عند ms (لحقلَي «من/إلى») */
+const bizDayLabel = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+
+/** يعلّم زرّ الفترة المختار، ويُظهر حقلَي «من/إلى» مع «مخصّص» وحده */
+function showRange(range) {
+  $$('#rangeSeg button').forEach((b) => {
+    const on = b.dataset.range === range;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  $('#dateRange').classList.toggle('hidden', range !== 'custom');
+}
+/** فترةٌ مخصّصة من/إلى (الفارغ بلا حدّ) */
+function setCustomRange(from, to) {
+  $('#xFrom').value = from || '';
+  $('#xTo').value = to || '';
+  Object.assign(state.filters, { range: 'custom', from: from || null, to: to || null });
+  state.page = 1;
+  showRange('custom');
+}
+
 function rangeBounds() {
   const f = state.filters;
   const startOfToday = bizDayStart(Date.now());

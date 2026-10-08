@@ -138,13 +138,7 @@ async function fetchOneDay() {
   for (const s of (d.skipped || [])) box.append(diagLine('diag-bad', 'تعذّر جلب ' + s));
   if (d.totalAdded > 0) { await Promise.all([loadOrders(), loadTransfers()]); allowHeal(); }
   // نضبط فلتر الجدول على ذلك اليوم فيرى المستخدم النتيجة أمامه فورًا
-  $('#xFrom').value = d.day;
-  $('#xTo').value = d.day;
-  state.filters.range = 'custom';
-  state.filters.from = d.day;
-  state.filters.to = d.day;
-  state.page = 1;
-  $$('#rangeSeg button').forEach((b) => b.classList.remove('on'));
+  setCustomRange(d.day, d.day);
   renderAll();
   const shown = state.ledger.length;
   box.append(diagLine(shown ? 'diag-ok' : 'diag-bad', shown

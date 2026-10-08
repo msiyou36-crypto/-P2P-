@@ -52,33 +52,32 @@ function wireEvents() {
     });
   });
 
-  // --- النطاق الزمني وفلتر من/إلى ---
+  // --- الفترة: أزرارٌ جاهزة، و«مخصّص» يُظهر من/إلى ---
   $$('#rangeSeg button').forEach((btn) => {
     btn.addEventListener('click', () => {
-      $$('#rangeSeg button').forEach((b) => b.classList.remove('on'));
-      btn.classList.add('on');
-      state.filters.range = btn.dataset.range;
+      const r = btn.dataset.range;
+      if (r === 'custom') {
+        // «من/إلى» تبدأ من الفترة المعروضة الآن، فلا يتغيّر الجدول حتى تعدّلهما
+        if (state.filters.range !== 'custom') {
+          const [from] = rangeBounds();
+          setCustomRange(from > 0 ? bizDayLabel(from) : '', from > 0 ? bizDayLabel(bizDayStart(Date.now())) : '');
+          renderAll();
+        }
+        $('#xFrom').focus();
+        return;
+      }
+      state.filters.range = r;
       state.filters.from = null; state.filters.to = null;
       $('#xFrom').value = ''; $('#xTo').value = '';
       state.page = 1;
+      showRange(r);
       renderAll();
     });
   });
-  const onDateChange = () => {
-    const from = $('#xFrom').value, to = $('#xTo').value;
-    if (from || to) {
-      state.filters.range = 'custom';
-      state.filters.from = from; state.filters.to = to;
-      $$('#rangeSeg button').forEach((b) => b.classList.remove('on'));
-    } else {
-      state.filters.range = 'all';
-      $$('#rangeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.range === 'all'));
-    }
-    state.page = 1;
-    renderAll();
-  };
+  const onDateChange = () => { setCustomRange($('#xFrom').value, $('#xTo').value); renderAll(); };
   $('#xFrom').addEventListener('change', onDateChange);
   $('#xTo').addEventListener('change', onDateChange);
+  showRange(state.filters.range);
 
   // --- بقية الفلاتر ---
   $('#fType').addEventListener('change', (e) => { state.filters.type = e.target.value; state.page = 1; renderAll(); });

@@ -189,17 +189,20 @@ main {
 #app > main { position: relative; z-index: 1; }
 
 /* ============ الفلاتر ============
-   صفّان: البحث وقوائم النوع والحالة والعملة، ثم الفترة الجاهزة أو المخصّصة (من/إلى).
-   كل عناصرها بارتفاع 40px (الحقول من قاعدة النماذج أدناه). */
+   الفترة أولًا: أزرارٌ بعرض البطاقة كله، و«مخصّص» وحده يُظهر صفّ «من/إلى» تحتها؛ ثم
+   البحث وقوائم النوع والحالة والعملة. كل عناصرها بارتفاع 40px (الحقول من قاعدة النماذج). */
 .filters { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+.seg.range-seg { display: flex; width: 100%; }
+.seg.range-seg button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; white-space: nowrap; }
+.range-seg .ic { width: 15px; height: 15px; }
+.date-range { display: flex; align-items: center; gap: 10px; }
+.date-lbl { display: inline-flex; align-items: center; gap: 8px; flex: 0 1 230px; min-width: 0; color: var(--muted); font-size: 12.5px; }
+.date-range input { flex: 1; min-width: 0; }
 .f-row { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
 .search-box { position: relative; display: flex; flex: 1 1 280px; min-width: 0; }
 .search-box input { flex: 1; min-width: 0; padding-right: 38px; }
 .search-ic { position: absolute; top: 50%; right: 12px; display: grid; color: var(--muted); transform: translateY(-50%); pointer-events: none; }
 .filters select { flex: 0 1 auto; min-width: 140px; }
-.date-range { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; color: var(--muted); }
-.date-lbl { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
-.date-range input { width: 150px; min-height: 40px; }
 
 /* المقطّع (الفترة وشكل العرض وأدوار الدخول): أزرارٌ متلاصقة، والمختار بلون السستم */
 .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
@@ -222,12 +225,10 @@ main {
 @media (max-width: 640px) {
   .search-box { flex-basis: 100%; }
   .filters select { flex: 1 1 0; min-width: 0; }
-  .range-seg { width: 100%; }
-  .range-seg button { flex: 1; padding: 0 4px; }
-  .date-range { width: 100%; margin: 0; }
-  .date-range .dr-ic { display: none; }
-  .date-range .date-lbl { flex: 1; min-width: 0; }
-  .date-range input { flex: 1; width: auto; min-width: 0; padding: 6px 8px; }
+  .seg.range-seg button { padding: 0 2px; font-size: 12.5px; }
+  .range-seg .ic { display: none; }   /* ستة أزرارٍ في عرض الهاتف: النص يكفي */
+  .date-range .date-lbl { flex: 1; }
+  .date-range input { padding: 6px 8px; }
 }
 
 /* ============ بطاقات الأرقام ============
