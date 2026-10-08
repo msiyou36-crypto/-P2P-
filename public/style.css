@@ -1032,12 +1032,14 @@ td.editable { padding: 4px 6px; }
 /* خلفية الدخول: فيديو يغطي الشاشة (مركزه أفقيًا عند 70%)، وفوقه تظليلٌ يحفظ وضوح الصندوق.
    يبقى ثابتًا وإن تمرّر المحتوى، ولا يُظهر التظليلَ إلا معه (has-video من js/session.js) */
 .login-video { position: fixed; inset: 0; z-index: 0; width: 100%; height: 100%; object-fit: cover; object-position: 70% center; pointer-events: none; }
-.login-veil { position: fixed; inset: 0; z-index: 0; display: none; background: linear-gradient(180deg, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.6)); pointer-events: none; }
+/* التظليل أثقل يسارًا حيث اللوح، وأخفّ يمينًا حيث مشهد الفيديو */
+.login-veil { position: fixed; inset: 0; z-index: 0; display: none; background: linear-gradient(to left, rgba(0, 0, 0, 0.05) 35%, rgba(0, 0, 0, 0.6)); pointer-events: none; }
+@media (max-width: 899px) { .login-veil { background: linear-gradient(180deg, rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.6)); } }
 .login-screen.has-video .login-veil { display: block; }
 .login-screen:not(.has-video) .login-video { display: none; }
 .video-toggle {
   position: fixed;
-  left: 16px;
+  right: 16px;   /* في جهة مشهد الفيديو، بعيدًا عن اللوح */
   bottom: 16px;
   z-index: 2;
   display: grid;
@@ -1058,65 +1060,107 @@ td.editable { padding: 4px 6px; }
 .video-toggle:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .video-toggle .ic { width: 16px; height: 16px; }
 @media (pointer: coarse) { .video-toggle { width: 44px; height: 44px; } }
-/* الصندوق: الشعار والعنوان في الوسط، ثم اختيار الدور، ثم كلمة السر وزرّ الدخول — والحقول
-   من نظام النماذج نفسه (.field و.input-wrap و.pw-toggle) */
+/* اللوح: زجاجٌ شفّاف يُظهر الفيديو خلفه مغبّشًا، على يسار الشاشة العريضة وفي وسط الهاتف.
+   داخله: الشعار والاسم، ثم ترحيبٌ كبير، ثم الدور وكلمة السر وزرّ دخول أبيض، ثم سطر الأمان */
+@media (min-width: 900px) {
+  .login-screen { align-items: flex-end; padding-left: clamp(32px, 8vw, 128px); }   /* flex-end = اليسار في الواجهة العربية */
+}
 .login-box {
   position: relative;
   z-index: 1;
-  width: 100%;
-  max-width: 400px;
-  padding: 28px 26px 26px;
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  background: rgba(26, 26, 25, 0.8);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
-}
-.login-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 22px; text-align: center; }
-.login-brand svg { border-radius: 14px; box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 35%, transparent); }
-.login-brand h1 { font-size: 20px; }
-.login-sub { margin: -4px 0 0; color: var(--muted); font-size: 13px; }
-.login-form { display: flex; flex-direction: column; gap: 16px; }
-.login-title { color: var(--ink); font-size: 16px; font-weight: 700; text-align: center; }
-.login-form .hint { margin: -8px 0 0; text-align: center; }
-.login-form .input-wrap { min-height: 46px; }
-.login-form .input-wrap > input { min-height: 44px; font-size: 15px; }
-.iw-ic { display: grid; flex: none; padding-inline-start: 12px; color: var(--muted); }
-.iw-ic .ic { width: 17px; height: 17px; }
-.login-btn { min-height: 46px; font-size: 15px; }
-.login-btn .ic { width: 18px; height: 18px; }
-.login-btn[data-icon="login"] > .ic { transform: scaleX(-1); }   /* سهم الدخول للواجهة العربية */
-.login-error { color: #ef6b6b; font-size: 13px; text-align: center; }
-.login-error:empty { display: none; }
-.login-note { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 14px; background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); color: var(--ink-2); font-size: 12px; text-align: center; }
-.login-note .ic { width: 14px; height: 14px; }
-
-/* اختيار الدور: ثلاث بطاقات، أيقونة الدور فوق اسمه، والمختار بإطارٍ بلون السستم */
-.role-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.role-pick button {
   display: flex;
   flex-direction: column;
+  gap: 22px;
+  width: 100%;
+  max-width: 420px;
+  padding: 30px 30px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 24px;
+  background: rgba(10, 12, 16, 0.42);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #fff;
+  animation: fadeSlideUp 0.8s ease 0.1s both;
+}
+.login-brand { display: flex; align-items: center; gap: 12px; }
+.login-brand svg { flex: none; border-radius: 12px; box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 40%, transparent); }
+.login-brand h1 { color: #fff; font-size: 18px; font-weight: 700; }
+.login-form { display: flex; flex-direction: column; gap: 16px; }
+.login-head { display: flex; flex-direction: column; gap: 6px; }
+.login-title { margin: 0; color: #fff; font-size: 30px; font-weight: 700; line-height: 1.2; }
+.login-lead { margin: 0; color: rgba(255, 255, 255, 0.62); font-size: 14px; line-height: 1.7; }
+
+/* الحقول داخل اللوح: شفّافة بإطارٍ أبيض خفيف */
+.login-box .field, .login-box .field > label { color: rgba(255, 255, 255, 0.75); }
+.login-box .f-opt { color: rgba(255, 255, 255, 0.5); }
+.login-box .input-wrap { min-height: 48px; border-color: rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.07); }
+.login-box .input-wrap:hover { border-color: rgba(255, 255, 255, 0.3); }
+.login-box .input-wrap:focus-within { border-color: rgba(255, 255, 255, 0.6); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12); }
+.login-box .input-wrap > input { min-height: 46px; color: #fff; font-size: 15px; }
+.login-box .pw-toggle, .iw-ic { color: rgba(255, 255, 255, 0.55); }
+.login-box .pw-toggle:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.iw-ic { display: grid; flex: none; padding-inline-start: 14px; }
+.iw-ic .ic { width: 17px; height: 17px; }
+.login-box .pass-list { gap: 8px; }
+.login-box .pass-row { padding: 10px; border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.04); }
+.login-box .role-ic { background: rgba(255, 255, 255, 0.08); }
+
+/* زرّ الدخول: أبيض بنصٍّ داكن */
+.login-box .login-btn { min-height: 48px; border: 0; border-radius: 12px; background: #fff; color: #111; font-size: 15px; font-weight: 700; transition: transform 0.15s, background 0.15s; }
+.login-box .login-btn:hover { filter: none; background: #f2f2f2; transform: scale(1.02); }
+.login-box .login-btn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.login-btn .ic { width: 18px; height: 18px; }
+.login-btn[data-icon="login"] > .ic { transform: scaleX(-1); }   /* سهم الدخول للواجهة العربية */
+.login-error { color: #ff8f8f; font-size: 13px; text-align: center; }
+.login-error:empty { display: none; }
+.login-note { display: flex; align-items: center; gap: 8px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.55); font-size: 12px; line-height: 1.6; }
+.login-note .ic { width: 14px; height: 14px; flex: none; }
+
+/* اختيار الدور: مقطّعٌ شفّاف بثلاثة أزرار (أيقونة واسم)، والمختار أفتح وأيقونته بلون السستم */
+.role-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 14px; background: rgba(255, 255, 255, 0.05); }
+.role-pick button {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface-2);
-  color: var(--ink-2);
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
   font: inherit;
   font-size: 13.5px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
-.role-pick button:hover { border-color: rgba(255, 255, 255, 0.2); color: var(--ink); }
-.role-pick button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
-.rp-ic { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--surface-3); color: var(--ink-2); transition: background 0.15s, color 0.15s; }
-.rp-ic .ic { width: 20px; height: 20px; }
-.role-pick button.on { border-color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, var(--surface-2)); color: var(--ink); }
-.role-pick button.on .rp-ic { background: color-mix(in srgb, var(--accent) 26%, transparent); color: var(--accent-text); }
-@media (prefers-reduced-motion: reduce) { .role-pick button, .rp-ic { transition: none; } }
+.role-pick button:hover { color: #fff; background: rgba(255, 255, 255, 0.06); }
+.role-pick button:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.role-pick button.on { color: #fff; background: rgba(255, 255, 255, 0.16); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22); }
+.rp-ic { display: grid; }
+.rp-ic .ic { width: 16px; height: 16px; }
+.role-pick button.on .rp-ic { color: var(--accent-text); }
+
+/* دخولٌ متتابع (كصفحات العرض): اللوح ثم أجزاؤه واحدًا بعد الآخر */
+@keyframes fadeSlideUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+.login-form > * { animation: fadeSlideUp 0.7s ease both; }
+.login-form > :nth-child(1) { animation-delay: 0.25s; }
+.login-form > :nth-child(2) { animation-delay: 0.35s; }
+.login-form > :nth-child(3) { animation-delay: 0.45s; }
+.login-form > :nth-child(4) { animation-delay: 0.55s; }
+.login-form > :nth-child(5) { animation-delay: 0.65s; }
+@media (max-width: 420px) {
+  .login-box { padding: 24px 18px 20px; border-radius: 20px; }
+  .login-title { font-size: 26px; }
+  .role-pick button { gap: 5px; font-size: 12.5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-box, .login-form > * { animation: none; }
+  .role-pick button, .login-box .login-btn { transition: none; }
+}
 
 /* ============ أزرار الشريط العلوي: المزامنة والقائمة + شارة الدور ============ */
 .actions { align-items: center; }

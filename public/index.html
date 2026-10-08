@@ -23,20 +23,22 @@
     data-src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260622_204221_5339e40b-e73d-4ab0-9c65-79c18c66fd50.mp4"></video>
   <div class="login-veil" aria-hidden="true"></div>
   <button type="button" class="video-toggle hidden" id="btnLoginVideo" aria-label="إيقاف الفيديو"></button>
+  <!-- لوحٌ زجاجي على يسار الشاشة (الفيديو يملأ يمينها)، وفي وسطها على الهاتف -->
   <div class="login-box">
     <div class="login-brand">
-      <svg width="56" height="56" viewBox="0 0 32 32" aria-hidden="true">
+      <svg width="44" height="44" viewBox="0 0 32 32" aria-hidden="true">
         <rect width="32" height="32" rx="7" fill="var(--accent)"/>
         <path d="M9 20v-8l4 5 3-4 3 4 4-5v8" stroke="var(--accent-ink)" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <h1>سجل حوالات P2P</h1>
-      <p class="login-sub">سجّل دخولك لمتابعة عملياتك</p>
     </div>
 
     <!-- الإعداد الأول: كلمة سرٍّ لكل دور -->
     <form id="setupForm" class="login-form hidden" autocomplete="off">
-      <div class="login-title">الإعداد الأول</div>
-      <p class="hint">عيّن كلمة سرٍّ لكل دور، واترك أي حقلٍ فارغًا لتعطيل ذلك الدور (كلمة المسؤول مطلوبة).</p>
+      <div class="login-head">
+        <h2 class="login-title">الإعداد الأول</h2>
+        <p class="login-lead">عيّن كلمة سرٍّ لكل دور، واترك أي حقلٍ فارغًا لتعطيل ذلك الدور (كلمة المسؤول مطلوبة).</p>
+      </div>
       <div class="pass-list">
         <div class="pass-row">
           <span class="role-ic r-admin" data-icon="crown" aria-hidden="true"></span>
@@ -66,6 +68,10 @@
 
     <!-- الدخول: اختر دورك ثم كلمة سرّه -->
     <form id="loginForm" class="login-form hidden" autocomplete="off">
+      <div class="login-head">
+        <h2 class="login-title">مرحبًا بعودتك</h2>
+        <p class="login-lead">اختر دورك ثم أدخل كلمة السر</p>
+      </div>
       <div class="role-pick" id="roleSeg" role="radiogroup" aria-label="الدور">
         <button type="button" data-role="admin" class="on r-admin" role="radio" aria-checked="true"><span class="rp-ic" data-icon="crown" aria-hidden="true"></span><span>المسؤول</span></button>
         <button type="button" data-role="user" class="r-user" role="radio" aria-checked="false"><span class="rp-ic" data-icon="user" aria-hidden="true"></span><span>المستخدم</span></button>
@@ -78,8 +84,9 @@
       <button type="submit" class="btn accent login-btn" id="btnLogin" data-icon="login">دخول</button>
       <div class="login-error" id="loginError" role="alert"></div>
     </form>
+
+    <div class="login-note"><span data-icon="lock" aria-hidden="true"></span>كلمات السر محفوظة مشفّرة، والدخول يُطلب من جديد عند إغلاق المتصفح.</div>
   </div>
-  <div class="login-note"><span data-icon="lock" aria-hidden="true"></span>كلمات السر محفوظة مشفّرة، والدخول يُطلب من جديد عند إغلاق المتصفح.</div>
 </div>
 
 <!-- ============ التطبيق ============ -->
