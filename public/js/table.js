@@ -298,9 +298,7 @@ function archiveRow(entity, kind) {
   const wrap = document.createElement('div');
   wrap.className = 'zero-toggle';
   const on = !!entity.archived;
-  const btn = document.createElement('button');
-  btn.className = 'btn' + (on ? '' : ' danger');
-  btn.textContent = on ? '↩ إرجاع من الأرشيف' : '🗄 أرشفة (إخفاء من الجدول)';
+  const btn = iconButton('btn' + (on ? '' : ' danger'), on ? 'undo' : 'archive', on ? 'إرجاع من الأرشيف' : 'أرشفة (إخفاء من الجدول)');
   btn.disabled = !canEdit();
   wrap.append(btn);
   btn.addEventListener('click', async () => {
@@ -310,7 +308,7 @@ function archiveRow(entity, kind) {
       if (on) delete entity.archived; else entity.archived = true;
       closeAllModals();
       renderAll();
-      toast(on ? 'أُرجعت إلى الجدول ✓' : 'أُرسلت إلى الأرشيف — تجدها في ☰ القائمة ← 🗄 الأرشيف');
+      toast(on ? 'أُرجعت إلى الجدول ✓' : 'أُرسلت إلى الأرشيف — تجدها في القائمة ← الأرشيف');
     } catch (e) { toast('تعذّر الحفظ: ' + e.message, 'err'); btn.disabled = false; }
   });
   return detailRow('الأرشيف', wrap, {

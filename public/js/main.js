@@ -118,16 +118,10 @@ function wireEvents() {
   menuAction('#btnDiag', openDiag);
   menuAction('#btnMaintenance', openMaintenance);
   menuAction('#btnAdd', openAdd);
-  menuAction('#btnImport', () => {
-    $('#csvFile').value = '';
-    $('#importPreview').classList.add('hidden');
-    $('#btnConfirmImport').classList.add('hidden');
-    state.importRows = null;
-    openModal('#mImport');
-  });
+  menuAction('#btnImport', openImport);
   menuAction('#btnExport', exportCSV);
   menuAction('#btnSettings', openSettings);
-  menuAction('#btnChangePass', () => { $('#passForm').reset(); openModal('#mChangePass'); });
+  menuAction('#btnChangePass', openChangePass);
   menuAction('#btnLoginLog', openLoginLog);
   menuAction('#btnLogout', doLogout);
   $('#btnExportXlsx').addEventListener('click', exportXlsx);
@@ -139,6 +133,7 @@ function wireEvents() {
   $('#btnWhoAmI').addEventListener('click', whoAmI);
   $('#btnForeignScan').addEventListener('click', foreignScan);
   $('#btnForeignUndo').addEventListener('click', undoForeignDelete);
+  wireDropzone($('#restoreDrop'));
   $('#btnRestoreFile').addEventListener('click', restoreFromFile);
 
   // --- الصيانة ---
@@ -150,10 +145,12 @@ function wireEvents() {
   $('#addForm').elements.amount.addEventListener('input', autoTotal);
   $('#addForm').elements.unitPrice.addEventListener('input', autoTotal);
   $('#addForm').elements.totalPrice.addEventListener('input', () => { totalPriceDirty = true; });
-  $('#csvFile').addEventListener('change', (e) => { if (e.target.files && e.target.files[0]) handleImportFile(e.target.files[0]); });
+  $('#addForm').elements.fiat.addEventListener('change', syncAddUnits);
+  wireDropzone($('#csvDrop'), handleImportFile);   // نقرٌ أو سحبُ ملف CSV وإفلاته
   $('#btnConfirmImport').addEventListener('click', confirmImport);
 
-  // --- الإعدادات ومنطقة الخطر ---
+  // --- الإعدادات وكلمات السر ومنطقة الخطر ---
+  wirePwToggles();   // زرّ العين بجانب كل حقل كلمة سر
   $('#btnSaveSettings').addEventListener('click', saveSettings);
   $('#btnSavePass').addEventListener('click', savePasswords);
   $('#btnArchiveBefore').addEventListener('click', () => archiveBefore(false));

@@ -148,7 +148,6 @@ const shortId = (s) => { s = String(s || ''); return s.length > 18 ? s.slice(0, 
 const tinyId = (s) => { s = String(s || ''); return s.length > 10 ? s.slice(0, 4) + '…' + s.slice(-4) : s; };
 
 const ROLE_NAMES = { admin: 'مسؤول', user: 'مستخدم', user2: 'مستخدم 2' };
-const ROLE_ICONS = { admin: '👑', user: '👁️', user2: '✏️' };
 const canEdit = () => state.auth.role === 'admin';
 // «مستخدم 2» يكتب الإشاري والملاحظة والسعر والمبلغ (تصحيحاتُ صفٍّ واحد)؛ ما يمسّ الدفتر كلّه للمسؤول
 const canAnnotate = () => state.auth.role === 'admin' || state.auth.role === 'user2';
@@ -230,7 +229,32 @@ const ICONS = {
   key: '<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>',
   ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>',
+  // النوافذ والأدوات
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8M16 17H8M10 9H8"/>',
+  fileup: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6M15 15l-3-3-3 3"/>',
+  sheet: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2M14 13h2M8 17h2M14 17h2"/>',
+  calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  idcard: '<rect width="20" height="14" x="2" y="5" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16c.6-1.3 1.7-2 3-2s2.4.7 3 2M14 10h5M14 14h3"/>',
+  userx: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 8 5 5M22 8l-5 5"/>',
+  list: '<path d="m3 17 2 2 4-4M3 7l2 2 4-4M13 6h8M13 12h8M13 18h8"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff: '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
+  trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/>',
+  undo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',   // سهم الرجوع نحو اليمين: «الوراء» في الواجهة العربية
+  receipt: '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M8 7h8M8 11h8M8 15h5"/>',
+  swap: '<path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/>',
+  // الأدوار
+  crown: '<path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/><path d="M5 21h14"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
 };
+/** أيقونة كل دور (الشارة أعلى الصفحة، وسجل الدخول، ونافذة كلمات السر) */
+const ROLE_SVG = { admin: 'crown', user: 'user', user2: 'pencil' };
 function svgIcon(name, cls) {
   const s = document.createElementNS(SVGNS, 'svg');
   s.setAttribute('viewBox', '0 0 24 24');
@@ -244,6 +268,63 @@ function decorateIcons(root = document) {
   for (const el of root.querySelectorAll('[data-icon]')) if (!el.querySelector(':scope > .ic')) el.prepend(svgIcon(el.dataset.icon));
   for (const el of root.querySelectorAll('[data-icon-end]')) if (!el.querySelector(':scope > .ic-end')) el.append(svgIcon(el.dataset.iconEnd, 'ic-end'));
 }
+/** زرٌّ بأيقونة ونصٍّ في <span>، فيتغيّر نصّه (btn.lbl.textContent) دون أن تضيع أيقونته */
+function iconButton(cls, icon, text) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = cls;
+  b.lbl = document.createElement('span');
+  b.lbl.textContent = text || '';
+  b.append(svgIcon(icon), b.lbl);
+  return b;
+}
+
+/* ============================ حقول النماذج ============================ */
+
+/** منطقة اختيار ملف: نقرٌ يفتح الاختيار، أو سحبُ ملفٍ وإفلاته عليها؛ واسم الملف يظهر فيها */
+function wireDropzone(zone, onFile) {
+  const input = zone.querySelector('input[type="file"]');
+  const shown = () => {
+    const f = input.files && input.files[0];
+    const name = zone.querySelector('.dz-file');
+    zone.classList.toggle('has-file', !!f);
+    name.hidden = !f;
+    name.textContent = f ? f.name : '';
+    if (f && onFile) onFile(f);
+  };
+  input.addEventListener('change', shown);
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('is-over'); });
+  zone.addEventListener('dragleave', (e) => { if (!zone.contains(e.relatedTarget)) zone.classList.remove('is-over'); });
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('is-over');
+    if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; shown(); }
+  });
+}
+function resetDropzone(zone) {
+  zone.querySelector('input[type="file"]').value = '';
+  zone.classList.remove('has-file', 'is-over');
+  const name = zone.querySelector('.dz-file');
+  name.hidden = true;
+  name.textContent = '';
+}
+
+/** زرّ العين بجانب حقل كلمة السر: يُظهرها ويُخفيها */
+function setPwVisible(btn, show) {
+  const inp = btn.parentElement.querySelector('input');
+  inp.type = show ? 'text' : 'password';
+  btn.setAttribute('aria-pressed', String(show));
+  btn.textContent = '';
+  btn.append(svgIcon(show ? 'eyeoff' : 'eye'));
+}
+function wirePwToggles(root = document) {
+  for (const b of root.querySelectorAll('.pw-toggle')) {
+    b.setAttribute('aria-pressed', 'false');
+    b.addEventListener('click', () => setPwVisible(b, b.getAttribute('aria-pressed') !== 'true'));
+  }
+}
+/** عند فتح النافذة من جديد تعود كلمات السر مخفيّة */
+function hidePasswords(root) { for (const b of root.querySelectorAll('.pw-toggle')) setPwVisible(b, false); }
 
 /* ============================ عناصر صغيرة ============================ */
 

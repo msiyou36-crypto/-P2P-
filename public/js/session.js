@@ -155,7 +155,8 @@ function applyRole() {
     if (bar) bar.classList.add('hidden');
   }
   const badge = $('#roleBadge');
-  badge.textContent = (ROLE_ICONS[role] || '●') + ' ' + (ROLE_NAMES[role] || 'مستخدم');
+  badge.textContent = '';
+  badge.append(svgIcon(ROLE_SVG[role] || 'user'), ROLE_NAMES[role] || 'مستخدم');
   badge.classList.toggle('admin', admin);
   badge.classList.toggle('annot', role === 'user2');
 }

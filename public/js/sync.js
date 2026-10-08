@@ -138,7 +138,7 @@ function updateSyncPicker() {
   $$('#syncKinds .sync-kind').forEach((l) => l.classList.toggle('on', l.querySelector('input').checked));
   const btn = $('#btnSyncStart');
   btn.disabled = !n;
-  btn.textContent = n === SYNC_KINDS.length ? '⟳ زامن الكل' : `⟳ زامن المحدَّد (${fmt0(n)})`;
+  btn.querySelector('.lbl').textContent = n === SYNC_KINDS.length ? 'زامن الكل' : `زامن المحدَّد (${fmt0(n)})`;
 }
 function toggleAllSyncKinds(on) {
   $$('#syncKinds input').forEach((cb) => { cb.checked = on; });

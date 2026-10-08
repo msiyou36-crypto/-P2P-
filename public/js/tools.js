@@ -5,7 +5,15 @@
 
 /* ============================ فحص المزامنة ============================ */
 
-function openDiag() { $('#diagResult').textContent = ''; openModal('#mDiag'); }
+function openDiag() { $('#diagResult').textContent = ''; resetDropzone($('#restoreDrop')); openModal('#mDiag'); }
+
+/** صندوق النتيجة أسفل الأدوات: يُفرَّغ ويُمرَّر إليه، فيرى المسؤول ما يحدث مهما كانت الأداة */
+function diagBox() {
+  const box = $('#diagResult');
+  box.textContent = '';
+  requestAnimationFrame(() => box.scrollIntoView({ block: 'start' }));
+  return box;
+}
 
 /** شريط تقدّم داخل نافذة الفحص؛ يُرجع { msg, fill, remove } */
 function progressRow(box) {
@@ -55,14 +63,13 @@ async function reloadAfterChange() {
 /* ما تُرجعه المنصة فعلًا في آخر N يومًا مقابل المحفوظ */
 async function runDiag() {
   const days = Math.min(Math.max(Number($('#diagDays').value) || 3, 1), 29);
-  const box = $('#diagResult');
+  const box = diagBox();
   const btn = $('#btnRunDiag');
   btn.disabled = true;
-  box.textContent = '';
   box.append(diagLine('hint', 'جارٍ سؤال المنصة… قد يستغرق بضع ثوانٍ.'));
   let d;
   try { d = await api('/api/diag/p2p?days=' + days); }
-  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); noteBanError(e.message); btn.disabled = false; return; }
+  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', e.message)); noteBanError(e.message); btn.disabled = false; return; }
   btn.disabled = false;
   box.textContent = '';
   const total = d.fromPlatform.length;
@@ -79,7 +86,7 @@ async function runDiag() {
       : stale > 0
         ? `المنصة أرجعت ${fmt0(total)} عملية، منها ${fmt0(stale)} وقعت قبل آخر مزامنة ولم تُحفظ — هذه هي المشكلة، والمزامنة القادمة تُصلحها.`
         : fresh > 0
-          ? `المنصة أرجعت ${fmt0(total)} عملية، وكلُّ ما ليس عندك (${fmt0(fresh)}) وقع بعد آخر مزامنة — لا خلل، اضغط «⟳ مزامنة» ليصل.`
+          ? `المنصة أرجعت ${fmt0(total)} عملية، وكلُّ ما ليس عندك (${fmt0(fresh)}) وقع بعد آخر مزامنة — لا خلل، اضغط «مزامنة» ليصل.`
           : `المنصة أرجعت ${fmt0(total)} عملية وكلها محفوظة عندك — فما لا تجده في الجدول لا تُرجعه المنصة أصلًا لهذا المفتاح.`));
   if (total) {
     const t = document.createElement('table');
@@ -100,28 +107,27 @@ async function runDiag() {
   if (d.onlyOurs && d.onlyOurs.length) {
     box.append(diagLine('hint', `محفوظ عندك ولم تُرجعه المنصة (${fmt0(d.onlyOurs.length)}): ` + d.onlyOurs.map((o) => o.tail + ' · ' + fmt2(o.amount)).join(' — ')));
   }
-  for (const w of (d.warnings || [])) box.append(diagLine('diag-bad', '⚠ ' + w));
+  for (const w of (d.warnings || [])) box.append(diagLine('diag-bad', w));
 }
 
 /* جلب يومٍ واحد: علاجٌ موضعي لمن ينقصه يوم، بلا كلفة المزامنة الكاملة */
 async function fetchOneDay() {
   const day = $('#diagDay').value;
-  const box = $('#diagResult');
+  const box = diagBox();
   const btn = $('#btnFetchDay');
-  if (!day) { box.textContent = ''; box.append(diagLine('diag-bad', 'اختر اليوم أولًا')); return; }
+  if (!day) { box.append(diagLine('diag-bad', 'اختر اليوم أولًا')); return; }
   btn.disabled = true;
-  box.textContent = '';
   box.append(diagLine('hint', `جارٍ سؤال المنصة عن ${day}…`));
   let d;
   try { d = await postJSON('/api/sync/day', { day }); }
-  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); noteBanError(e.message); btn.disabled = false; return; }
+  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', e.message)); noteBanError(e.message); btn.disabled = false; return; }
   btn.disabled = false;
   box.textContent = '';
   const NAMES = { p2p: 'طلبات P2P', deposit: 'إيداع', withdraw: 'سحب', pay: 'Binance Pay', convert: 'تحويل Convert' };
   box.append(diagLine(
     d.total === 0 ? 'diag-bad' : (d.totalAdded > 0 ? 'diag-ok' : 'hint'),
     d.total === 0
-      ? `المنصة لم تُرجع أي عملية في ${d.day} — فما ينقصك لا تُرجعه المنصة أصلًا لهذا المفتاح، وسبيلُه «+ إضافة يدوية».`
+      ? `المنصة لم تُرجع أي عملية في ${d.day} — فما ينقصك لا تُرجعه المنصة أصلًا لهذا المفتاح، وسبيلُه «إضافة يدوية» من القائمة.`
       : (d.totalAdded > 0
         ? `وصلت ${fmt0(d.total)} عملية في ${d.day}، منها ${fmt0(d.totalAdded)} جديدة أُضيفت للسجل ✓`
         : `وصلت ${fmt0(d.total)} عملية في ${d.day} وكلها محفوظة عندك — فما لا تجده في الجدول لا تُرجعه المنصة.`)));
@@ -129,7 +135,7 @@ async function fetchOneDay() {
     if (!d.found[k]) continue;
     box.append(diagLine('hint', `${NAMES[k]}: وصل ${fmt0(d.found[k])}${d.added[k] ? ` · جديد ${fmt0(d.added[k])}` : ''}`));
   }
-  for (const s of (d.skipped || [])) box.append(diagLine('diag-bad', '⚠ تعذّر جلب ' + s));
+  for (const s of (d.skipped || [])) box.append(diagLine('diag-bad', 'تعذّر جلب ' + s));
   if (d.totalAdded > 0) { await Promise.all([loadOrders(), loadTransfers()]); allowHeal(); }
   // نضبط فلتر الجدول على ذلك اليوم فيرى المستخدم النتيجة أمامه فورًا
   $('#xFrom').value = d.day;
@@ -149,14 +155,13 @@ async function fetchOneDay() {
 
 /* أيُّ حساب Binance يقرأه مفتاح هذا السستم؟ */
 async function whoAmI() {
-  const box = $('#diagResult');
+  const box = diagBox();
   const btn = $('#btnWhoAmI');
   btn.disabled = true;
-  box.textContent = '';
   box.append(diagLine('hint', 'جارٍ سؤال المنصة عن صاحب المفتاح…'));
   let d;
   try { d = await api('/api/diag/whoami'); }
-  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); noteBanError(e.message); btn.disabled = false; return; }
+  catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', e.message)); noteBanError(e.message); btn.disabled = false; return; }
   btn.disabled = false;
   box.textContent = '';
   box.append(diagLine('diag-ok', `مفتاح هذا السستم («${d.accountName}»، ${d.keyMasked}) يقرأ حساب Binance ذا المعرّف UID: ${d.uid || '—'}`));
@@ -166,10 +171,9 @@ async function whoAmI() {
 /* عملياتٌ محفوظة هنا لا يُرجعها مفتاح هذا الحساب: تُعرض بخانات اختيار والمسؤول يقرّر */
 async function foreignScan() {
   const days = Math.min(Math.max(Number($('#foreignDays').value) || 90, 1), 400);
-  const box = $('#diagResult');
+  const box = diagBox();
   const btn = $('#btnForeignScan');
   btn.disabled = true;
-  box.textContent = '';
   const prog = progressRow(box);
   let rep = null, sawError = null;
   try {
@@ -181,25 +185,25 @@ async function foreignScan() {
     });
     if (sawError) throw new Error(sawError);
   } catch (e) {
-    box.insertBefore(diagLine('diag-bad', '⚠ ' + e.message), prog.row);
+    box.insertBefore(diagLine('diag-bad', e.message), prog.row);
     noteBanError(e.message);
   } finally {
     prog.remove();
     btn.disabled = false;
   }
   if (!rep) return;
-  for (const w of rep.warnings || []) box.append(diagLine('diag-bad', '⚠ ' + w));
+  for (const w of rep.warnings || []) box.append(diagLine('diag-bad', w));
   const n = rep.orders.length + rep.transfers.length;
   const lastO = (rep.lastReturned && rep.lastReturned.order) || 0;
   box.append(diagLine('hint', `المنصة أرجعت لمفتاح «${rep.accountName}» في آخر ${fmt0(rep.days)} يومًا: ${fmt0(rep.fetched.orders)} طلبًا و${fmt0(rep.fetched.transfers)} حوالة.`));
   // أثر الجلب يكشف إن كانت المنصة تُرجع صفحةً مبتورة — وعندها القائمة ليست حكمًا
   if (rep.truncated) box.append(diagLine('diag-bad', rep.windowsIgnored
-    ? '⚠ المنصة تُهمل الفترة المطلوبة وتُرجع أحدث صفحةٍ فقط — الجلب مبتور بطبيعة المنصة، وقائمة الطلبات أدناه ليست موثوقة (كل ما هو أقدم سيظهر «غير مُرجَع»). لا تحذف منها شيئًا.'
-    : '⚠ الجلب مبتور (نفد الرصيد أو لم تكفِ قسمة الفترة) — قائمة الطلبات أدناه ليست موثوقة. لا تحذف منها شيئًا وأرسل «تفاصيل الجلب».'));
+    ? 'المنصة تُهمل الفترة المطلوبة وتُرجع أحدث صفحةٍ فقط — الجلب مبتور بطبيعة المنصة، وقائمة الطلبات أدناه ليست موثوقة (كل ما هو أقدم سيظهر «غير مُرجَع»). لا تحذف منها شيئًا.'
+    : 'الجلب مبتور (نفد الرصيد أو لم تكفِ قسمة الفترة) — قائمة الطلبات أدناه ليست موثوقة. لا تحذف منها شيئًا وأرسل «تفاصيل الجلب».'));
   const calls = rep.calls || [];
   if (calls.length) {
     const det = document.createElement('details');
-    det.className = 'danger-zone';
+    det.className = 'fold';
     const sum = document.createElement('summary'); sum.textContent = 'تفاصيل الجلب (لكل نافذة وصفحة)';
     det.append(sum);
     for (const c of calls) {
@@ -219,10 +223,11 @@ async function foreignScan() {
 
   const ctl = document.createElement('div');
   ctl.className = 'diag-bar';
-  const mkBtn = (text) => { const b = document.createElement('button'); b.className = 'btn small'; b.textContent = text; return b; };
+  const mkBtn = (text) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small'; b.textContent = text; return b; };
   const bSure = mkBtn('المؤكَّد فقط'), bAll = mkBtn('حدّد الكل'), bNone = mkBtn('أزل التحديد'), bAfter = mkBtn('حدّد ما بعد التاريخ');
   const afterInp = document.createElement('input');
-  afterInp.type = 'datetime-local'; afterInp.dir = 'ltr'; afterInp.className = 'num-input';
+  afterInp.type = 'datetime-local'; afterInp.dir = 'ltr';
+  afterInp.setAttribute('aria-label', 'التاريخ الذي يُحدَّد ما بعده');
   ctl.append(bSure, bAll, bNone, afterInp, bAfter);
   box.append(ctl);
   const list = checkList(box);
@@ -234,10 +239,8 @@ async function foreignScan() {
   for (const t of rep.transfers) list.add('transfer', t, `${transferLabel(t)} (${SRC_AR[t.source] || t.source || ''})`, true);
   const boxes = list.boxes;
   boxes.forEach((b) => { b.dataset.sure = b.checked ? '1' : ''; });
-  const act = document.createElement('button');
-  act.className = 'btn danger';
-  act.style.cssText = 'display:block; margin-top:10px;';
-  const refresh = () => { const c = boxes.filter((b) => b.checked).length; act.textContent = `🗑 احذف المحدّدة (${fmt0(c)}) من «${rep.accountName}»`; act.disabled = !c; };
+  const act = iconButton('btn danger diag-act', 'trash');
+  const refresh = () => { const c = boxes.filter((b) => b.checked).length; act.lbl.textContent = `احذف المحدّدة (${fmt0(c)}) من «${rep.accountName}»`; act.disabled = !c; };
   boxes.forEach((b) => b.addEventListener('change', refresh));
   bAll.addEventListener('click', () => { boxes.forEach((b) => { b.checked = true; }); refresh(); });
   bNone.addEventListener('click', () => { boxes.forEach((b) => { b.checked = false; }); refresh(); });
@@ -279,12 +282,11 @@ async function undoForeignDelete() {
 /* الاستعادة من ملف تصدير (Excel/CSV من النظام) */
 async function restoreFromFile() {
   const inp = $('#restoreFile');
-  const box = $('#diagResult');
+  const box = diagBox();
   const btn = $('#btnRestoreFile');
   const file = inp.files && inp.files[0];
-  if (!file) { box.textContent = ''; box.append(diagLine('diag-bad', 'اختر ملف التصدير أولًا (Excel أو CSV)')); return; }
+  if (!file) { box.append(diagLine('diag-bad', 'اختر ملف التصدير أولًا (Excel أو CSV)')); return; }
   btn.disabled = true;
-  box.textContent = '';
   box.append(diagLine('hint', `جارٍ قراءة «${file.name}» ومقارنته بالمحفوظ…`));
   let d;
   try {
@@ -295,7 +297,7 @@ async function restoreFromFile() {
     if (res.status === 401) { handleUnauthorized(); throw new Error('انتهت الجلسة — سجّل الدخول'); }
     if (!res.ok) throw new Error(j.error || 'تعذّرت قراءة الملف');
     d = j;
-  } catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', '⚠ ' + e.message)); btn.disabled = false; return; }
+  } catch (e) { box.textContent = ''; box.append(diagLine('diag-bad', e.message)); btn.disabled = false; return; }
   btn.disabled = false;
   box.textContent = '';
   box.append(diagLine('hint', `في الملف ${fmt0(d.rows)} صفًّا: ${fmt0(d.inFile.orders)} طلبًا و${fmt0(d.inFile.transfers)} حوالة Pay/تحويل و${fmt0(d.inFile.depwd)} إيداعًا/سحبًا (هذه تُعيدها المزامنة من المنصة إن نقصت).`));
@@ -306,10 +308,8 @@ async function restoreFromFile() {
   for (const o of d.missingOrders) list.add('order', o, orderLabel(o, o.createTime), true);
   for (const t of d.missingTransfers) list.add('transfer', t, transferLabel(t), true);
   const boxes = list.boxes;
-  const act = document.createElement('button');
-  act.className = 'btn accent';
-  act.style.cssText = 'display:block; margin-top:10px;';
-  const refresh = () => { const c = boxes.filter((b) => b.checked).length; act.textContent = `↩ أعد المحدّدة (${fmt0(c)}) إلى «${d.accountName}»`; act.disabled = !c; };
+  const act = iconButton('btn accent diag-act', 'undo');
+  const refresh = () => { const c = boxes.filter((b) => b.checked).length; act.lbl.textContent = `أعد المحدّدة (${fmt0(c)}) إلى «${d.accountName}»`; act.disabled = !c; };
   boxes.forEach((b) => b.addEventListener('change', refresh));
   refresh();
   act.addEventListener('click', () => openConfirm(`ستُعاد ${fmt0(boxes.filter((b) => b.checked).length)} عملية إلى «${d.accountName}» من الملف، ويُعاد حساب «الباقي». هل أنت متأكد؟`, async () => {
@@ -366,7 +366,13 @@ function openAdd() {
   form.reset();
   form.elements.dt.value = toLocalDatetimeValue(new Date());
   totalPriceDirty = false;
+  syncAddUnits();
   openModal('#mAdd');
+}
+/** وحدة السعر والمبلغ داخل الحقل تتبع العملة المختارة (ج.س أو ج.م) */
+function syncAddUnits() {
+  const code = $('#addForm').elements.fiat.value;
+  $$('#addForm .fiat-unit').forEach((u) => { u.textContent = symForCode(code); });
 }
 function autoTotal() {
   const form = $('#addForm');
@@ -580,31 +586,43 @@ function parseImportFile(text) {
   }
   return { orders, bad };
 }
+function openImport() {
+  resetDropzone($('#csvDrop'));
+  $('#importPreview').classList.add('hidden');
+  $('#btnConfirmImport').classList.add('hidden');
+  state.importRows = null;
+  openModal('#mImport');
+}
+/** يقرأ الملف المختار ويعرض ملخّصه (أخضر إن وُجدت طلبات، وأصفر بالسبب إن لم تُوجد) */
 function handleImportFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
     const preview = $('#importPreview');
+    const text = document.createElement('div');
+    let ok = false;
     try {
       const { orders, bad } = parseImportFile(String(reader.result));
       state.importRows = orders;
-      preview.textContent = '';
-      const l1 = document.createElement('div');
-      l1.textContent = `✓ تم التعرف على ${fmt0(orders.length)} طلبًا` + (bad ? ` — تم تجاهل ${fmt0(bad)} صفًا (غير صالح أو حوالة)` : '');
-      preview.append(l1);
+      ok = orders.length > 0;
+      const l1 = document.createElement('b');
+      l1.textContent = `تم التعرف على ${fmt0(orders.length)} طلبًا` + (bad ? ` — وتُجوهل ${fmt0(bad)} صفًّا (غير صالح أو حوالة)` : '');
+      text.append(l1);
       if (orders.length) {
         const sells = orders.filter((o) => o.tradeType === 'SELL').length;
-        const l2 = document.createElement('div');
-        l2.textContent = `منها ${fmt0(sells)} بيع و ${fmt0(orders.length - sells)} شراء — سيتم دمجها مع السجل الحالي (بدون تكرار)`;
-        preview.append(l2);
+        const l2 = document.createElement('span');
+        l2.textContent = `منها ${fmt0(sells)} بيع و ${fmt0(orders.length - sells)} شراء — تُدمج مع السجل الحالي بلا تكرار`;
+        text.append(l2);
       }
-      preview.classList.remove('hidden');
-      $('#btnConfirmImport').classList.toggle('hidden', !orders.length);
     } catch (e) {
       state.importRows = null;
-      preview.textContent = '⚠ ' + e.message;
-      preview.classList.remove('hidden');
-      $('#btnConfirmImport').classList.add('hidden');
+      text.textContent = e.message;
     }
+    preview.textContent = '';
+    preview.append(text);
+    preview.classList.remove('hidden');
+    preview.classList.toggle('is-ok', ok);
+    preview.classList.toggle('is-bad', !ok);
+    $('#btnConfirmImport').classList.toggle('hidden', !ok);
   };
   reader.readAsText(file, 'utf-8');
 }
@@ -633,7 +651,12 @@ async function openSettings() {
   form.elements.apiSecret.placeholder = state.settings.hasSecret ? '•••••••• (محفوظ — اتركه فارغًا للإبقاء عليه)' : 'ألصق المفتاح السري هنا';
   form.elements.rangeHours.value = String(state.settings.rangeHours || 720);
   form.elements.syncQuota.value = String(state.settings.syncQuota != null ? state.settings.syncQuota : 3);
-  form.elements.baseUrl.value = state.settings.baseUrl || 'https://api.binance.com';
+  // عنوانٌ محفوظ ليس في القائمة يُضاف إليها فيظهر كما هو بدل خانةٍ فارغة
+  const base = state.settings.baseUrl || 'https://api.binance.com';
+  const sel = form.elements.baseUrl;
+  if (![...sel.options].some((o) => o.value === base)) sel.append(new Option(base.replace(/^https?:\/\//, ''), base));
+  sel.value = base;
+  hidePasswords(form);
   openModal('#mSettings');
 }
 async function saveSettings() {
@@ -666,6 +689,14 @@ async function savePasswords() {
   } catch (e) { toast(e.message, 'err'); }
 }
 
+function openChangePass() {
+  $('#passForm').reset();
+  hidePasswords($('#passForm'));
+  openModal('#mChangePass');
+}
+
+/* سجل الدخول: الدور، وما حدث (دخول، أو ما يُثقل على المنصة: مزامنة وفحص وجلب يوم)، والوقت، والعنوان */
+const LOG_KINDS = { sync: ['refresh', 'مزامنة'], scan: ['search', 'فحص'], day: ['calendar', 'جلب يوم'] };
 async function openLoginLog() {
   const tbody = $('#loginLogBody');
   const empty = $('#loginLogEmpty');
@@ -676,13 +707,18 @@ async function openLoginLog() {
     const j = await api('/api/auth/log');
     const events = j.events || [];
     empty.classList.toggle('hidden', events.length > 0);
-    const KIND_LABELS = { sync: '⟳ مزامنة', scan: '🔎 فحص', day: '📅 جلب يوم' };   // ما يُثقل على المنصة يُقيَّد مع الدخول
     for (const ev of events) {
       const tr = document.createElement('tr');
-      const kind = (ev.kind && KIND_LABELS[ev.kind] ? ' — ' + KIND_LABELS[ev.kind] : '')
-        + (Array.isArray(ev.kinds) ? ' (' + ev.kinds.map(kindLabel).join('، ') + ')' : '');   // مزامنةٌ لبعض الأنواع
-      tdText(tr, (ROLE_ICONS[ev.role] ? ROLE_ICONS[ev.role] + ' ' : '') + (ROLE_NAMES[ev.role] || ev.role || '—') + kind);
-      tdText(tr, ev.time ? fmtDTsec(ev.time) : '—');
+      const role = document.createElement('span');
+      role.className = 'role-pill r-' + (ev.role || 'user');
+      role.append(svgIcon(ROLE_SVG[ev.role] || 'user'), ROLE_NAMES[ev.role] || ev.role || '—');
+      const [icon, label] = LOG_KINDS[ev.kind] || ['login', 'دخول'];
+      const what = document.createElement('span');
+      what.className = 'ev-chip ev-' + (LOG_KINDS[ev.kind] ? ev.kind : 'login');
+      what.append(svgIcon(icon, icon === 'login' ? 'flip' : ''),
+        label + (Array.isArray(ev.kinds) ? ' (' + ev.kinds.map(kindLabel).join('، ') + ')' : ''));   // مزامنةٌ لبعض الأنواع
+      for (const el of [role, what]) { const td = document.createElement('td'); td.append(el); tr.append(td); }
+      tdText(tr, ev.time ? fmtDTsec(ev.time) : '—', 'num');
       tdText(tr, ev.ip || '—', 'mono');
       tbody.append(tr);
     }
