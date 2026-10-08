@@ -92,6 +92,10 @@
 <!-- ============ التطبيق ============ -->
 <div id="app" class="hidden">
 
+<!-- خلفية التطبيق: فيديو متكرّر على الشاشات العريضة (js/session.js) وفوقه تظليل، وإلا خلفية النجوم.
+     #appGlitter حاوية النجوم، ومع الفيديو يصير هو التظليل -->
+<video id="appVideo" class="app-video" muted loop playsinline preload="none" aria-hidden="true"
+  data-src="https://d8j0ntlcm91z4.cloudfront.net/user_3GJaYKPxdnQG0Q9O26lu6DPmcHu/hf_20260805_192612_e00017a8-56b0-4957-935b-9ffd87663994.mp4"></video>
 <div id="appGlitter" class="app-glitter" aria-hidden="true"></div>
 
 <header class="topbar">
@@ -129,6 +133,9 @@
           <button id="btnSettings" class="menu-item admin-only" role="menuitem" data-icon="sliders">الإعدادات</button>
           <button id="btnChangePass" class="menu-item admin-only" role="menuitem" data-icon="key">تغيير كلمات السر</button>
           <button id="btnMaintenance" class="menu-item admin-only warn-item" role="menuitem" data-icon="ban">إيقاف العمل (صيانة)</button>
+        </div>
+        <div class="menu-group hidden" role="group" aria-label="العرض">
+          <button id="btnAppVideo" class="menu-item" role="menuitem" data-icon="pause">إيقاف خلفية الفيديو</button>
         </div>
         <div class="menu-group">
           <button id="btnLogout" class="menu-item danger-item" role="menuitem" data-icon="logout">تسجيل الخروج</button>

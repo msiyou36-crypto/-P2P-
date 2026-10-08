@@ -116,15 +116,29 @@ function startAppGlitter() {
   } catch {}
 }
 
-/* خلفية شاشة الدخول: فيديو متكرّر (نحو 7.6 ميغابايت، يحفظه المتصفح بعد أول مرة). لا يُحمَّل
-   مع «توفير البيانات» أو الاتصال البطيء جدًّا، وإن تعذّر تحميله حلّت محلّه خلفية النجوم.
-   زرٌّ صغير يوقفه ويشغّله، والاختيار يُحفظ في المتصفح. */
-const LOGIN_VIDEO_OFF_KEY = 'p2pLoginVideoOff';
-let loginVideoOn = false;   // ما اختاره المستخدم (المتصفح يوقفه وحده حين تُخفى الصفحة)
-const loginVideoAllowed = () => {
+/* خلفيات الفيديو (الدخول والتطبيق): تُحمَّل عند الحاجة فقط ويحفظها المتصفح بعد أول مرة، ولا
+   تُحمَّل مع «توفير البيانات» أو الاتصال البطيء جدًّا؛ وإن تعذّر تحميلها حلّت محلّها خلفية النجوم.
+   لكلٍّ منهما زرٌّ يوقفه ويشغّله، والاختيار يُحفظ في المتصفح. */
+const bgVideoAllowed = () => {
   const c = navigator.connection;
   return !(c && (c.saveData || /2g$/.test(c.effectiveType || '')));
 };
+/** يبدأ تحميل الفيديو مرّةً واحدة؛ false إن سبق أن تعذّر */
+function attachBgVideo(v, onFail) {
+  if (v.dataset.failed) return false;
+  if (!v.getAttribute('src')) {
+    v.addEventListener('error', () => { v.dataset.failed = '1'; onFail(); }, { once: true });
+    v.preload = 'auto';
+    v.src = v.dataset.src;
+  }
+  return true;
+}
+const prefOff = (key) => { try { return localStorage.getItem(key) === '1'; } catch { return false; } };
+const savePref = (key, on) => { try { localStorage.setItem(key, on ? '0' : '1'); } catch {} };
+
+/* شاشة الدخول: فيديو (نحو 7.6 ميغابايت) وزرٌّ صغير في الركن يوقفه */
+const LOGIN_VIDEO_OFF_KEY = 'p2pLoginVideoOff';
+let loginVideoOn = false;   // ما اختاره المستخدم (المتصفح يوقفه وحده حين تُخفى الصفحة)
 function setLoginVideo(on) {
   const v = $('#loginVideo'), btn = $('#btnLoginVideo');
   loginVideoOn = on;
@@ -138,41 +152,75 @@ function setLoginVideo(on) {
 }
 function toggleLoginVideo() {
   setLoginVideo(!loginVideoOn);
-  try { localStorage.setItem(LOGIN_VIDEO_OFF_KEY, loginVideoOn ? '0' : '1'); } catch {}
+  savePref(LOGIN_VIDEO_OFF_KEY, loginVideoOn);
 }
-// عند العودة إلى الصفحة يُستأنف الفيديو إن كان شغّالًا وشاشة الدخول ظاهرة
-document.addEventListener('visibilitychange', () => {
-  const s = $('#loginScreen');
-  if (document.visibilityState === 'visible' && loginVideoOn && s.classList.contains('has-video') && !s.classList.contains('hidden')) {
-    $('#loginVideo').play().catch(() => {});
-  }
-});
 function startLoginBackground() {
   stopGlitter();
+  stopAppBackground();
   const v = $('#loginVideo');
   const screen = $('#loginScreen');
-  if (!v || v.dataset.failed || !loginVideoAllowed()) { screen.classList.remove('has-video'); startLoginGlitter(); return; }
-  if (!v.getAttribute('src')) {
-    v.addEventListener('error', () => {
-      v.dataset.failed = '1';
-      screen.classList.remove('has-video');
-      $('#btnLoginVideo').classList.add('hidden');
-      startLoginGlitter();
-    }, { once: true });
-    v.preload = 'auto';
-    v.src = v.dataset.src;
-  }
+  const fail = () => { screen.classList.remove('has-video'); $('#btnLoginVideo').classList.add('hidden'); startLoginGlitter(); };
+  if (!v || !bgVideoAllowed() || !attachBgVideo(v, fail)) { fail(); return; }
   screen.classList.add('has-video');
   $('#btnLoginVideo').classList.remove('hidden');
-  let off = false;
-  try { off = localStorage.getItem(LOGIN_VIDEO_OFF_KEY) === '1'; } catch {}
-  setLoginVideo(!off);
+  setLoginVideo(!prefOff(LOGIN_VIDEO_OFF_KEY));
 }
 function stopLoginBackground() {
   const v = $('#loginVideo');
   if (v) v.pause();   // لا يعمل الفيديو خلف التطبيق وهو مخفي
   loginVideoOn = false;
 }
+
+/* داخل التطبيق: فيديو (نحو 25 ميغابايت) على الشاشات العريضة وحدها — على الهاتف خلفية النجوم
+   توفيرًا للبيانات — وفوقه تظليلٌ يُبقي الأرقام واضحة؛ وبندٌ في القائمة يوقفه */
+const APP_VIDEO_OFF_KEY = 'p2pAppVideoOff';
+let appVideoOn = false;
+const appVideoPossible = () => {
+  const v = $('#appVideo');
+  return !!v && !v.dataset.failed && bgVideoAllowed() && window.matchMedia('(min-width: 900px)').matches;
+};
+/** بند القائمة: يظهر حيث يمكن الفيديو، ونصّه وأيقونته بحسب حاله */
+function syncAppVideoItem() {
+  const b = $('#btnAppVideo');
+  if (!b) return;
+  b.closest('.menu-group').classList.toggle('hidden', !appVideoPossible());
+  b.textContent = '';
+  b.append(svgIcon(appVideoOn ? 'pause' : 'play'), appVideoOn ? 'إيقاف خلفية الفيديو' : 'تشغيل خلفية الفيديو');
+}
+function appBackgroundFallback() {
+  $('#app').classList.remove('has-video');
+  const v = $('#appVideo');
+  if (v) v.pause();
+  appVideoOn = false;
+  startAppGlitter();
+  syncAppVideoItem();
+}
+function startAppBackground() {
+  stopGlitter();
+  const v = $('#appVideo');
+  if (!appVideoPossible() || prefOff(APP_VIDEO_OFF_KEY) || !attachBgVideo(v, appBackgroundFallback)) { appBackgroundFallback(); return; }
+  $('#app').classList.add('has-video');
+  appVideoOn = true;
+  v.play().catch(() => {});
+  syncAppVideoItem();
+}
+function stopAppBackground() {
+  const v = $('#appVideo');
+  if (v) v.pause();
+  appVideoOn = false;
+}
+function toggleAppVideo() {
+  savePref(APP_VIDEO_OFF_KEY, !appVideoOn);
+  if (appVideoOn) appBackgroundFallback(); else startAppBackground();
+}
+
+// عند العودة إلى الصفحة يُستأنف الفيديو الظاهر إن كان شغّالًا (المتصفح يوقفه حين تُخفى)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  const s = $('#loginScreen');
+  if (loginVideoOn && s.classList.contains('has-video') && !s.classList.contains('hidden')) $('#loginVideo').play().catch(() => {});
+  if (appVideoOn && !$('#app').classList.contains('hidden')) $('#appVideo').play().catch(() => {});
+});
 
 function showLogin(configured) {
   $('#app').classList.add('hidden');
@@ -197,7 +245,7 @@ async function enterApp() {
   $('#loginScreen').classList.add('hidden');
   stopLoginBackground();
   $('#app').classList.remove('hidden');
-  startAppGlitter();
+  startAppBackground();
   applyRole();
   renderAll();
   renderBalance();
@@ -293,6 +341,7 @@ function startMaintenanceWatch() {
 function showMaintenanceScreen(m) {
   $('#loginScreen').classList.add('hidden');
   stopLoginBackground();
+  stopAppBackground();
   $('#app').classList.add('hidden');
   $('#maintScreenMsg').textContent = m.message || 'النظام متوقف مؤقتًا للصيانة. حاول لاحقًا.';
   const a = $('#maintScreenLink');

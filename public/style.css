@@ -182,8 +182,12 @@ main {
   border-radius: 12px;
 }
 
-/* خلفية التأثير داخل التطبيق (خلف كل المحتوى، لا تعرقل النقر) */
+/* خلفية التطبيق (خلف كل المحتوى، لا تعرقل النقر): نجومٌ، أو فيديو على الشاشات العريضة يصير
+   فوقه #appGlitter تظليلًا يُبقي البطاقات والأرقام واضحة (has-video من js/session.js) */
 .app-glitter { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.app-video { position: fixed; inset: 0; z-index: 0; display: none; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+#app.has-video > .app-video { display: block; }
+#app.has-video > .app-glitter { background: linear-gradient(180deg, rgba(8, 8, 10, 0.5), rgba(8, 8, 10, 0.68)); }
 #app > .topbar { position: sticky; z-index: 20; }
 #app > .syncbar { position: relative; z-index: 2; }
 #app > main { position: relative; z-index: 1; }

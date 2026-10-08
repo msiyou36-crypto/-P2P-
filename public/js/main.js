@@ -126,6 +126,7 @@ function wireEvents() {
   menuAction('#btnLoginLog', openLoginLog);
   $('#logNewer').addEventListener('click', () => { logPage--; renderLoginLog(); });
   $('#logOlder').addEventListener('click', () => { logPage++; renderLoginLog(); });
+  menuAction('#btnAppVideo', toggleAppVideo);   // إيقاف خلفية الفيديو داخل التطبيق وتشغيلها
   menuAction('#btnLogout', doLogout);
   $('#btnExportXlsx').addEventListener('click', exportXlsx);
   $('#btnRefreshBal').addEventListener('click', refreshBalance);
