@@ -446,7 +446,7 @@ th.col-idx { width: 46px; text-align: center; }
    حقلٌ واحد الشكل في النوافذ والفلاتر: عنوانه فوقه، وارتفاعه 40px، وإطارٌ يتلوّن عند
    التركيز. القاعدة بلا وزن (:where)، فتغلبها أي فئةٍ أخصّ؛ وحقول التحرير داخل الجدول
    والبطاقات (num/note/label-input) مستثناة ولها شكلها. */
-:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea) {
+:where(.modal, .filters, .table-head, .login-form) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea) {
   min-height: 40px;
   padding: 8px 12px;
   background-color: var(--surface-2);
@@ -458,18 +458,18 @@ th.col-idx { width: 46px; text-align: center; }
   font-weight: 400;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea):hover {
+:where(.modal, .filters, .table-head, .login-form) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea):hover {
   border-color: rgba(255, 255, 255, 0.2);
 }
-:where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea):focus-visible {
+:where(.modal, .filters, .table-head, .login-form) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select, textarea):focus-visible {
   outline: none;
   border-color: var(--accent-text);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-text) 22%, transparent);
 }
-:where(.modal, .filters, .table-head) ::placeholder { color: var(--muted); opacity: 0.85; }
-:where(.modal, .filters, .table-head) textarea { resize: vertical; line-height: 1.6; }
+:where(.modal, .filters, .table-head, .login-form) ::placeholder { color: var(--muted); opacity: 0.85; }
+:where(.modal, .filters, .table-head, .login-form) textarea { resize: vertical; line-height: 1.6; }
 /* القوائم بسهمٍ موحّد على يسارها بدل سهم المتصفح */
-:where(.modal, .filters, .table-head) select {
+:where(.modal, .filters, .table-head, .login-form) select {
   -webkit-appearance: none;
   appearance: none;
   padding-left: 34px;
@@ -484,7 +484,7 @@ th.col-idx { width: 46px; text-align: center; }
 :where(.modal) input[type="number"]::-webkit-inner-spin-button,
 :where(.modal) input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 @media (pointer: coarse) {
-  :where(.modal, .filters, .table-head) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select) { min-height: 44px; }
+  :where(.modal, .filters, .table-head, .login-form) :where(input:not([type="checkbox"], [type="radio"], [type="file"], .num-input, .note-input, .label-input), select) { min-height: 44px; }
 }
 
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; }
@@ -1021,38 +1021,73 @@ td.editable { padding: 4px 6px; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;   /* إن طال الصندوق عن الشاشة (الإعداد الأول على هاتف) يبدأ من أعلاها ويُمرَّر */
   gap: 14px;
   padding: 20px;
+  overflow-y: auto;
+  scrollbar-width: none;
   z-index: 300;
 }
-.login-box { width: 100%; max-width: 380px; padding: 26px 24px; position: relative; z-index: 1; background: rgba(26, 26, 25, 0.72); backdrop-filter: blur(6px); }
-.login-note { position: relative; z-index: 1; }
-.login-brand { display: flex; align-items: center; gap: 12px; justify-content: center; margin-bottom: 18px; }
-.login-brand svg { border-radius: 9px; }
-.login-brand h1 { font-size: 19px; }
-.login-form { display: flex; flex-direction: column; gap: 14px; }
-.login-title { font-size: 16px; font-weight: 600; text-align: center; }
-.login-form label { display: flex; flex-direction: column; gap: 6px; color: var(--ink-2); font-size: 13px; }
-.login-form input {
-  background: var(--surface-2);
-  color: var(--ink);
+.login-screen::-webkit-scrollbar { display: none; }
+/* الصندوق: الشعار والعنوان في الوسط، ثم اختيار الدور، ثم كلمة السر وزرّ الدخول — والحقول
+   من نظام النماذج نفسه (.field و.input-wrap و.pw-toggle) */
+.login-box {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 400px;
+  padding: 28px 26px 26px;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 11px 12px;
-  font: inherit;
-  font-size: 15px;
+  border-radius: 20px;
+  background: rgba(26, 26, 25, 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
 }
-.login-form input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.login-btn { padding: 11px; font-size: 15px; margin-top: 4px; }
-.role-seg { justify-content: center; gap: 6px; }
-.role-seg button { flex: 1; padding: 12px 10px; font-size: 22px; line-height: 1; border-radius: 10px; filter: grayscale(0.4) opacity(0.7); }
-.role-seg button:hover { filter: none; }
-.role-seg button.on { filter: none; box-shadow: 0 0 0 2px var(--accent) inset, 0 1px 3px rgba(0,0,0,0.4); }
-.role-seg .role-ic { font-size: 22px; }
-.role-caption { text-align: center; color: var(--ink); font-size: 14px; font-weight: 700; margin-top: -6px; }
-.login-error { color: var(--critical); font-size: 13px; text-align: center; min-height: 18px; }
-.login-note { color: var(--muted); font-size: 12px; text-align: center; }
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 22px; text-align: center; }
+.login-brand svg { border-radius: 14px; box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 35%, transparent); }
+.login-brand h1 { font-size: 20px; }
+.login-sub { margin: -4px 0 0; color: var(--muted); font-size: 13px; }
+.login-form { display: flex; flex-direction: column; gap: 16px; }
+.login-title { color: var(--ink); font-size: 16px; font-weight: 700; text-align: center; }
+.login-form .hint { margin: -8px 0 0; text-align: center; }
+.login-form .input-wrap { min-height: 46px; }
+.login-form .input-wrap > input { min-height: 44px; font-size: 15px; }
+.iw-ic { display: grid; flex: none; padding-inline-start: 12px; color: var(--muted); }
+.iw-ic .ic { width: 17px; height: 17px; }
+.login-btn { min-height: 46px; font-size: 15px; }
+.login-btn .ic { width: 18px; height: 18px; }
+.login-btn[data-icon="login"] > .ic { transform: scaleX(-1); }   /* سهم الدخول للواجهة العربية */
+.login-error { color: #ef6b6b; font-size: 13px; text-align: center; }
+.login-error:empty { display: none; }
+.login-note { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; text-align: center; }
+.login-note .ic { width: 14px; height: 14px; }
+
+/* اختيار الدور: ثلاث بطاقات، أيقونة الدور فوق اسمه، والمختار بإطارٍ بلون السستم */
+.role-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.role-pick button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.role-pick button:hover { border-color: rgba(255, 255, 255, 0.2); color: var(--ink); }
+.role-pick button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.rp-ic { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--surface-3); color: var(--ink-2); transition: background 0.15s, color 0.15s; }
+.rp-ic .ic { width: 20px; height: 20px; }
+.role-pick button.on { border-color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, var(--surface-2)); color: var(--ink); }
+.role-pick button.on .rp-ic { background: color-mix(in srgb, var(--accent) 26%, transparent); color: var(--accent-text); }
+@media (prefers-reduced-motion: reduce) { .role-pick button, .rp-ic { transition: none; } }
 
 /* ============ أزرار الشريط العلوي: المزامنة والقائمة + شارة الدور ============ */
 .actions { align-items: center; }

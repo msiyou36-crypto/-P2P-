@@ -43,11 +43,11 @@ function wireEvents() {
   $('#loginForm').addEventListener('submit', doLogin);
   $$('#roleSeg button').forEach((btn) => {
     btn.addEventListener('click', () => {
-      $$('#roleSeg button').forEach((b) => b.classList.remove('on'));
-      btn.classList.add('on');
+      $$('#roleSeg button').forEach((b) => {
+        b.classList.toggle('on', b === btn);
+        b.setAttribute('aria-checked', String(b === btn));
+      });
       loginRole = btn.dataset.role;
-      const cap = $('#roleCaption');
-      if (cap) cap.textContent = ROLE_NAMES[loginRole] || '';
       $('#loginError').textContent = '';
       try { $('#loginForm').elements.password.focus(); } catch {}
     });
