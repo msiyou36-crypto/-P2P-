@@ -1029,6 +1029,35 @@ td.editable { padding: 4px 6px; }
   z-index: 300;
 }
 .login-screen::-webkit-scrollbar { display: none; }
+/* خلفية الدخول: فيديو يغطي الشاشة (مركزه أفقيًا عند 70%)، وفوقه تظليلٌ يحفظ وضوح الصندوق.
+   يبقى ثابتًا وإن تمرّر المحتوى، ولا يُظهر التظليلَ إلا معه (has-video من js/session.js) */
+.login-video { position: fixed; inset: 0; z-index: 0; width: 100%; height: 100%; object-fit: cover; object-position: 70% center; pointer-events: none; }
+.login-veil { position: fixed; inset: 0; z-index: 0; display: none; background: linear-gradient(180deg, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.6)); pointer-events: none; }
+.login-screen.has-video .login-veil { display: block; }
+.login-screen:not(.has-video) .login-video { display: none; }
+.video-toggle {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: background 0.15s;
+}
+.video-toggle:hover { background: rgba(0, 0, 0, 0.7); }
+.video-toggle:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.video-toggle .ic { width: 16px; height: 16px; }
+@media (pointer: coarse) { .video-toggle { width: 44px; height: 44px; } }
 /* الصندوق: الشعار والعنوان في الوسط، ثم اختيار الدور، ثم كلمة السر وزرّ الدخول — والحقول
    من نظام النماذج نفسه (.field و.input-wrap و.pw-toggle) */
 .login-box {
@@ -1060,7 +1089,7 @@ td.editable { padding: 4px 6px; }
 .login-btn[data-icon="login"] > .ic { transform: scaleX(-1); }   /* سهم الدخول للواجهة العربية */
 .login-error { color: #ef6b6b; font-size: 13px; text-align: center; }
 .login-error:empty { display: none; }
-.login-note { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; text-align: center; }
+.login-note { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 14px; background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); color: var(--ink-2); font-size: 12px; text-align: center; }
 .login-note .ic { width: 14px; height: 14px; }
 
 /* اختيار الدور: ثلاث بطاقات، أيقونة الدور فوق اسمه، والمختار بإطارٍ بلون السستم */

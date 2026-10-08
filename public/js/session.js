@@ -116,6 +116,64 @@ function startAppGlitter() {
   } catch {}
 }
 
+/* خلفية شاشة الدخول: فيديو متكرّر (نحو 7.6 ميغابايت، يحفظه المتصفح بعد أول مرة). لا يُحمَّل
+   مع «توفير البيانات» أو الاتصال البطيء جدًّا، وإن تعذّر تحميله حلّت محلّه خلفية النجوم.
+   زرٌّ صغير يوقفه ويشغّله، والاختيار يُحفظ في المتصفح. */
+const LOGIN_VIDEO_OFF_KEY = 'p2pLoginVideoOff';
+let loginVideoOn = false;   // ما اختاره المستخدم (المتصفح يوقفه وحده حين تُخفى الصفحة)
+const loginVideoAllowed = () => {
+  const c = navigator.connection;
+  return !(c && (c.saveData || /2g$/.test(c.effectiveType || '')));
+};
+function setLoginVideo(on) {
+  const v = $('#loginVideo'), btn = $('#btnLoginVideo');
+  loginVideoOn = on;
+  if (on) v.play().catch(() => {});
+  else v.pause();
+  const label = on ? 'إيقاف الفيديو' : 'تشغيل الفيديو';
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+  btn.textContent = '';
+  btn.append(svgIcon(on ? 'pause' : 'play'));
+}
+function toggleLoginVideo() {
+  setLoginVideo(!loginVideoOn);
+  try { localStorage.setItem(LOGIN_VIDEO_OFF_KEY, loginVideoOn ? '0' : '1'); } catch {}
+}
+// عند العودة إلى الصفحة يُستأنف الفيديو إن كان شغّالًا وشاشة الدخول ظاهرة
+document.addEventListener('visibilitychange', () => {
+  const s = $('#loginScreen');
+  if (document.visibilityState === 'visible' && loginVideoOn && s.classList.contains('has-video') && !s.classList.contains('hidden')) {
+    $('#loginVideo').play().catch(() => {});
+  }
+});
+function startLoginBackground() {
+  stopGlitter();
+  const v = $('#loginVideo');
+  const screen = $('#loginScreen');
+  if (!v || v.dataset.failed || !loginVideoAllowed()) { screen.classList.remove('has-video'); startLoginGlitter(); return; }
+  if (!v.getAttribute('src')) {
+    v.addEventListener('error', () => {
+      v.dataset.failed = '1';
+      screen.classList.remove('has-video');
+      $('#btnLoginVideo').classList.add('hidden');
+      startLoginGlitter();
+    }, { once: true });
+    v.preload = 'auto';
+    v.src = v.dataset.src;
+  }
+  screen.classList.add('has-video');
+  $('#btnLoginVideo').classList.remove('hidden');
+  let off = false;
+  try { off = localStorage.getItem(LOGIN_VIDEO_OFF_KEY) === '1'; } catch {}
+  setLoginVideo(!off);
+}
+function stopLoginBackground() {
+  const v = $('#loginVideo');
+  if (v) v.pause();   // لا يعمل الفيديو خلف التطبيق وهو مخفي
+  loginVideoOn = false;
+}
+
 function showLogin(configured) {
   $('#app').classList.add('hidden');
   $('#loginScreen').classList.remove('hidden');
@@ -123,7 +181,7 @@ function showLogin(configured) {
   $('#loginForm').classList.toggle('hidden', !configured);
   $('#loginError').textContent = '';
   $('#setupError').textContent = '';
-  startLoginGlitter();
+  startLoginBackground();
   const inp = configured ? $('#loginForm').elements.password : $('#setupForm').elements.adminPassword;
   setTimeout(() => { try { inp.focus(); } catch {} }, 50);
 }
@@ -137,6 +195,7 @@ async function enterApp() {
   if (await checkMaintenanceGate()) return;   // النظام مقفول أمام المستخدم (صيانة)
   startMaintenanceWatch();
   $('#loginScreen').classList.add('hidden');
+  stopLoginBackground();
   $('#app').classList.remove('hidden');
   startAppGlitter();
   applyRole();
@@ -233,6 +292,7 @@ function startMaintenanceWatch() {
 }
 function showMaintenanceScreen(m) {
   $('#loginScreen').classList.add('hidden');
+  stopLoginBackground();
   $('#app').classList.add('hidden');
   $('#maintScreenMsg').textContent = m.message || 'النظام متوقف مؤقتًا للصيانة. حاول لاحقًا.';
   const a = $('#maintScreenLink');

@@ -17,6 +17,12 @@
 
 <!-- ============ شاشة تسجيل الدخول ============ -->
 <div id="loginScreen" class="login-screen">
+  <!-- الخلفية: فيديو متكرّر يُحمَّل من js/session.js (لا مع «توفير البيانات» أو الاتصال البطيء،
+       وإن تعذّر حلّت محلّه خلفية النجوم)، وفوقه تظليلٌ خفيف، وزرٌّ يوقفه -->
+  <video id="loginVideo" class="login-video" muted loop playsinline preload="none" aria-hidden="true"
+    data-src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260622_204221_5339e40b-e73d-4ab0-9c65-79c18c66fd50.mp4"></video>
+  <div class="login-veil" aria-hidden="true"></div>
+  <button type="button" class="video-toggle hidden" id="btnLoginVideo" aria-label="إيقاف الفيديو"></button>
   <div class="login-box">
     <div class="login-brand">
       <svg width="56" height="56" viewBox="0 0 32 32" aria-hidden="true">

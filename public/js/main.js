@@ -39,6 +39,7 @@ function wireEvents() {
   wireScrollHints();   // النوافذ بلا شريط تمرير: تلاشٍ أسفلها إن كان تحتها المزيد
 
   // --- تسجيل الدخول ---
+  $('#btnLoginVideo').addEventListener('click', toggleLoginVideo);   // إيقاف فيديو الخلفية وتشغيله
   $('#setupForm').addEventListener('submit', doSetup);
   $('#loginForm').addEventListener('submit', doLogin);
   $$('#roleSeg button').forEach((btn) => {
