@@ -109,6 +109,7 @@ render.yaml            وصف خدمة Render · supabase-schema.sql جدول kv
 | `POST /api/restore/preview?tz=` (ملف خام) · `/apply` | admin | الاستعادة من ملف تصدير؛ `tz` فرقُ توقيت جهاز المصدِّر (`getTimezoneOffset`) لأن أوقات الملف بتوقيته |
 | `POST /api/archive/before {before, undo}` | admin | أرشفة كل ما قبل تاريخ / إرجاعه |
 | `GET/DELETE /api/system/foreign` | admin | بيانات الحساب الآخر في قاعدة هذا السستم (المقفول فقط) |
+| `POST /api/system/wipe {confirm: "حذف الكل"}` | admin | تصفير السستم (P3P المقفول فقط): كل مخازن الحساب ومفتاح المنصة؛ تبقى كلمات السر والإعدادات |
 
 البثّ (NDJSON): سطر JSON لكل حدث `{msg, pct}` (والتحذير `{msg, pct: null, warn: true}`)، ثم
 `{done: true, …}` أو `{error}`. فشلُ Pay أو التحويل أو الفوري يُتخطّى بتحذير، إلا حظرَ المنصة فيُوقف
@@ -201,6 +202,7 @@ render.yaml            وصف خدمة Render · supabase-schema.sql جدول kv
 - `ban.test.js`: بوّابة الحظر بعد 429 و418.
 - `sync-kinds.test.js`: المزامنة الانتقائية — كل نوع يسأل نقطته وحدها ويُختم وقته وحده، والمجلوب لاحقًا يقع بتاريخه.
 - `c2c-modes.test.js`: جلب الطلبات في خمسة أنماط للنقطة وبحجمَي صفحة ٥٠ و١٠٠.
+- `wipe.test.js`: تصفير السستم — للمسؤول وحده وفي P3P وحده وبكلمة التأكيد، وما يُحذف وما يبقى بعد إعادة التشغيل.
 
 ## قرارات وقيود تستحق المعرفة
 

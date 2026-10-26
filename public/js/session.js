@@ -92,6 +92,9 @@ function renderAccount() {
   // حذفُ بيانات الحساب الآخر له معنى في السستم المقفول وحده
   const fz = $('#foreignZone');
   if (fz) fz.classList.toggle('hidden', !state.account.locked);
+  // وتصفيرُ السستم كلّه لسستم P3P وحده
+  const wz = $('#wipeZone');
+  if (wz) wz.classList.toggle('hidden', !(state.account.locked && state.account.active === 'p3p'));
 }
 
 /* ============================ المصادقة ============================ */

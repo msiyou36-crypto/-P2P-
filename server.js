@@ -1262,6 +1262,34 @@ route('DELETE', '/api/system/foreign', 'admin', async (req, res) => {
   sendJSON(res, 200, { ok: true, deleted: n, otherName: ACCOUNT_NAMES[f.other] });
 });
 
+/* تصفير السستم (سستم P3P وحده): يُحذف كل ما في مخزن الحساب — الطلبات والحوالات بإشاريها
+ * وملاحظاتها، والمقابر والسلّة، ولقطات الرصيد، وسجل الدخول وعدّاد المزامنة — ومعه مفتاح
+ * المنصة، فلا تُعيد مزامنةٌ شيئًا حتى يُدخَل مفتاحٌ جديد. تبقى كلمات السر وبقية الإعدادات
+ * (مدى الجلب وعدد المزامنات)، فلا يرجع السستم إلى شاشة الإعداد الأولى. */
+const WIPE_ACCOUNT = 'p3p';
+const WIPE_WORD = 'حذف الكل';
+route('POST', '/api/system/wipe', 'admin', async (req, res, c) => {
+  if (LOCKED !== WIPE_ACCOUNT) return deny(res, 403, 'تصفير السستم متاحٌ في سستم P3P وحده');
+  const body = await c.body();
+  if (String(body.confirm || '').trim() !== WIPE_WORD) return deny(res, 400, `للتأكيد اكتب: ${WIPE_WORD}`);
+  await exclusive(res, async () => {
+    const keys = [ordersKey(), transfersKey(), 'gone__' + ordersKey(), 'gone__' + transfersKey(),
+      trashKey(), snapKey(), sysKey('loginlog'), SYNC_USAGE_KEY];
+    let n = 0;
+    try { for (const k of keys) { await store.deleteStore(k); n++; } }
+    catch (e) { return deny(res, 500, `تعذّر التصفير بعد ${n} من ${keys.length}: ` + e.message); }
+    orders = {};
+    transfers = {};
+    loginLog = [];
+    dirty.clear();
+    fresh.clear();
+    Object.assign(AC(), { apiKey: '', apiSecret: '', lastSync: null });
+    delete AC().lastSyncBy;
+    await saveConfig();
+    sendJSON(res, 200, { ok: true });
+  });
+});
+
 /* ---------- الموزّع ---------- */
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');

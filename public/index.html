@@ -596,11 +596,54 @@
           <div class="dz-text"><b>حذف بيانات الحساب الآخر</b><span>نسخةٌ ميتة بقيت في قاعدة هذا السستم بعد الفصل. احذفها فقط بعد أن ترى بياناته تعمل في سستمه — لا رجعة فيه.</span></div>
           <div class="dz-actions"><button class="btn danger" id="btnForeignClean" data-icon="trash">حذف بيانات الحساب الآخر</button></div>
         </div>
+        <div class="dz-row hidden" id="wipeZone">
+          <div class="dz-text"><b>تصفير السستم بالكامل</b><span>يحذف كل العمليات والإيداع والسحب، والأرشيف، وسجل الدخول، ومفتاح Binance. تبقى كلمات السر — لا رجعة فيه.</span></div>
+          <div class="dz-actions"><button class="btn danger" id="btnWipe" data-icon="trash">تصفير السستم</button></div>
+        </div>
       </div>
     </div>
     <div class="modal-foot">
       <button class="btn" id="btnDangerBack" data-icon="undo">رجوع إلى الإعدادات</button>
       <button class="btn" data-close>إغلاق</button>
+    </div>
+  </div>
+</div>
+
+<!-- تصفير السستم (P3P وحده): ما يُحذف وما يبقى، ولا يعمل زرّ الحذف إلا بكتابة «حذف الكل» -->
+<div class="backdrop hidden" id="mWipe">
+  <div class="modal small" role="alertdialog" aria-modal="true" aria-labelledby="mWipeTitle">
+    <div class="modal-head">
+      <span class="mh-icon is-danger" data-icon="alert" aria-hidden="true"></span>
+      <div class="mh-text"><h3 id="mWipeTitle">تصفير السستم بالكامل</h3><p class="mh-sub">لا رجعة فيه — نزّل نسخة Excel قبله</p></div>
+      <button class="x" data-close aria-label="إغلاق" data-icon="x"></button>
+    </div>
+    <div class="modal-body">
+      <div class="wipe-lists">
+        <div class="wipe-list is-gone">
+          <b>يُحذف</b>
+          <ul>
+            <li>كل العمليات والإيداع والسحب، ومعها الإشاري والملاحظات</li>
+            <li>الأرشيف، والمحذوف سابقًا، وأرقام «الباقي» المثبّتة</li>
+            <li>سجل الدخول وعدّاد المزامنات</li>
+            <li>مفتاح Binance ومفتاحه السري</li>
+          </ul>
+        </div>
+        <div class="wipe-list">
+          <b>يبقى</b>
+          <ul>
+            <li>كلمات السر الثلاث</li>
+            <li>مدى الجلب وعدد المزامنات اليومي</li>
+          </ul>
+        </div>
+      </div>
+      <div class="field">
+        <label for="wipeWord">للتأكيد اكتب: <b>حذف الكل</b></label>
+        <input type="text" id="wipeWord" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn danger" id="btnWipeYes" data-icon="trash" disabled>احذف كل شيء</button>
+      <button class="btn" data-close>تراجع</button>
     </div>
   </div>
 </div>

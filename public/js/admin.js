@@ -1,5 +1,5 @@
 /* أدوات المسؤول خارج الفحص: منطقة الخطر (مسحٌ وإعادة حساب وأرشفة بتاريخ وحذف بيانات الحساب
-   الآخر)، والإعدادات، وكلمات السر، وسجل الدخول، وضبط وضع الصيانة (بوّابته في js/session.js) */
+   الآخر وتصفير السستم)، والإعدادات، وكلمات السر، وسجل الدخول، وضبط وضع الصيانة (بوّابته في js/session.js) */
 'use strict';
 
 /* ============================ منطقة الخطر ============================ */
@@ -38,6 +38,28 @@ async function archiveBefore(undo) {
   });
 }
 
+/* تصفير السستم (P3P وحده): زرّ الحذف لا يعمل إلا بعد كتابة «حذف الكل» حرفيًّا */
+const WIPE_WORD = 'حذف الكل';
+function openWipe() {
+  $('#wipeWord').value = '';
+  $('#btnWipeYes').disabled = true;
+  openModal('#mWipe');
+  $('#wipeWord').focus();
+}
+async function wipeSystem() {
+  const btn = $('#btnWipeYes');
+  if ($('#wipeWord').value.trim() !== WIPE_WORD) return;
+  btn.disabled = true;
+  try {
+    await postJSON('/api/system/wipe', { confirm: WIPE_WORD });
+    state.balance = null;
+    setBalSnaps({});
+    await Promise.all([loadSettings(), loadSyncQuota()]);
+    await reloadAfterChange();
+    toast('صُفّر السستم — أدخل مفتاح Binance جديدًا من الإعدادات لتعود المزامنة');
+  } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
+}
+
 /** أزرار منطقة الخطر — نافذةٌ فوق الإعدادات، و«رجوع» يغلقها فتبقى الإعدادات كما تركتها */
 function wireDangerZone() {
   /** زرّ تأكيدٍ ثم تنفيذٍ ثم إعادة تحميل */
@@ -49,6 +71,9 @@ function wireDangerZone() {
   $('#btnArchiveBefore').addEventListener('click', () => archiveBefore(false));
   $('#btnUnarchiveBefore').addEventListener('click', () => archiveBefore(true));
   $('#btnForeignClean').addEventListener('click', cleanForeign);
+  $('#btnWipe').addEventListener('click', openWipe);
+  $('#wipeWord').addEventListener('input', (e) => { $('#btnWipeYes').disabled = e.target.value.trim() !== WIPE_WORD; });
+  $('#btnWipeYes').addEventListener('click', wipeSystem);
   confirmThen('#btnClearAll', 'سيتم حذف جميع الطلبات المخزّنة نهائيًا. هل أنت متأكد؟',
     () => api('/api/orders/clear', { method: 'POST' }), async () => { toast('تم مسح جميع الطلبات'); await loadOrders(); renderAll(); });
   confirmThen('#btnClearTransfers', 'سيتم حذف سجل الإيداع والسحب المخزّن نهائيًا. هل أنت متأكد؟',
