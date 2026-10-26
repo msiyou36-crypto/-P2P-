@@ -38,17 +38,22 @@ async function archiveBefore(undo) {
   });
 }
 
-/* تصفير السستم (P3P وحده): زرّ الحذف لا يعمل إلا بعد كتابة «حذف الكل» حرفيًّا */
+/* تصفير السستم (P3P وحده): زرّ الحذف لا يعمل إلا بعد كتابة «حذف الكل».
+   تُقارَن الحروف وحدها: لوحاتُ المفاتيح تختلف في المسافة (عادية أو غير منكسرة أو فاصلٌ
+   خفيّ) وفي الكاف (ك/ک)، وقد تُدخل تطويلًا أو تشكيلًا أو علامات اتجاه — فكلّها تُهمل */
 const WIPE_WORD = 'حذف الكل';
+const lettersOnly = (s) => String(s).normalize('NFKC').replace(/ک/g, 'ك').replace(/[^ء-غف-ي]/g, '');
+const wipeTyped = () => lettersOnly($('#wipeWord').value) === lettersOnly(WIPE_WORD);
+const syncWipeBtn = () => { $('#btnWipeYes').disabled = !wipeTyped(); };
 function openWipe() {
   $('#wipeWord').value = '';
-  $('#btnWipeYes').disabled = true;
+  syncWipeBtn();
   openModal('#mWipe');
   $('#wipeWord').focus();
 }
 async function wipeSystem() {
   const btn = $('#btnWipeYes');
-  if ($('#wipeWord').value.trim() !== WIPE_WORD) return;
+  if (!wipeTyped()) return;
   btn.disabled = true;
   try {
     await postJSON('/api/system/wipe', { confirm: WIPE_WORD });
@@ -72,7 +77,7 @@ function wireDangerZone() {
   $('#btnUnarchiveBefore').addEventListener('click', () => archiveBefore(true));
   $('#btnForeignClean').addEventListener('click', cleanForeign);
   $('#btnWipe').addEventListener('click', openWipe);
-  $('#wipeWord').addEventListener('input', (e) => { $('#btnWipeYes').disabled = e.target.value.trim() !== WIPE_WORD; });
+  for (const ev of ['input', 'change', 'keyup']) $('#wipeWord').addEventListener(ev, syncWipeBtn);
   $('#btnWipeYes').addEventListener('click', wipeSystem);
   confirmThen('#btnClearAll', 'سيتم حذف جميع الطلبات المخزّنة نهائيًا. هل أنت متأكد؟',
     () => api('/api/orders/clear', { method: 'POST' }), async () => { toast('تم مسح جميع الطلبات'); await loadOrders(); renderAll(); });
